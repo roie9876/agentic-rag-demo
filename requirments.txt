@@ -1,0 +1,26 @@
+###############################################################
+# requirements.txt – Agentic RAG demo (Streamlit + CLI)
+# ------------------------------------------------------------
+# This list follows the official Azure Search agentic-retrieval
+# quickstart (June 2025) plus the extra packages our UI needs.
+# Pinning *azure-search-documents* to **11.6.0b12** because that
+# version introduces the beta features used in the MS tutorial.
+###############################################################
+
+# Core libraries
+streamlit>=1.32.0
+openai>=1.35.0
+python-dotenv>=1.0.1
+
+# Azure Cognitive Search SDK (beta) + dependencies
+azure-search-documents==11.6.0b12
+azure-identity>=1.15.0
+azure-core>=1.30.0
+
+# PDF parsing for the uploader feature in the Streamlit app
+pymupdf>=1.24.0
+
+# Additional runtime / notebook helpers required by the MS Quickstart
+aiohttp>=3.9.0
+requests>=2.32.0
+ipykernel>=6.29.0
