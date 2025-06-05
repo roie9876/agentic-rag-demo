@@ -199,7 +199,7 @@ def _reload_env_and_restart():
 ##############################################################################
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
-TOP_K = int(os.getenv("TOP_K", 5))
+TOP_K_DEFAULT = int(os.getenv("TOP_K", 5))   # fallback for CLI path
 
 
 def env(var: str) -> str:
@@ -235,7 +235,7 @@ def init_openai(model: str = "o3") -> Tuple[AzureOpenAI, dict]:
     chat_params = dict(
         model=env(f"AZURE_OPENAI_DEPLOYMENT{suffix}"),
         temperature=0.2,
-        max_tokens=20000,
+        max_tokens=st.session_state.get("max_tokens", 2048),
     )
     return client, chat_params
 
@@ -343,11 +343,13 @@ def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bo
                             filterable=True,
                             sortable=True,
                             facetable=True),
-                SearchField(name="page_chunk",
-                            type="Edm.String",
-                            filterable=False,
-                            sortable=False,
-                            facetable=False),
+                SearchableField(
+                    name="page_chunk",
+                    type="Edm.String",
+                    analyzer_name="standard.lucene",
+                    filterable=False,
+                    sortable=False,
+                    facetable=False),
                 SearchField(name="page_embedding_text_3_large",
                             type="Collection(Edm.Single)",
                             stored=False,
@@ -466,13 +468,13 @@ def plan_queries(question: str, client: AzureOpenAI, params: dict) -> List[str]:
 def retrieve(queries: List[str], client: SearchClient) -> List[dict]:
     docs: List[dict] = []
     for q in queries:
-        for res in client.search(q, top=TOP_K):
+        for res in client.search(q, top=st.session_state.get('top_k', TOP_K_DEFAULT)):
             docs.append(
                 {
                     "id": len(docs) + 1,
                     "query": q,
                     "score": res["@search.score"],
-                    "content": res.get("content", str(res))[:4000],
+                    "content": res.get("content", str(res))[:1000],
                 }
             )
     return docs
@@ -482,21 +484,29 @@ def build_context(docs: List[dict]) -> str:
     """
     Build a concise context string:
     • Use only the first TOP_K docs
-    • Truncate each chunk to 600 chars (was 2 000)
+    • Truncate each chunk to ctx_size chars (slider)
     """
+    chunk_size = st.session_state.get("ctx_size", 600)
     return "\n\n".join(
-        f"[doc{d['id']}] {d['content'][:600]}…" for d in docs[:TOP_K]
+        f"[doc{d['id']}] {d['content'][:chunk_size]}…" for d in docs[:st.session_state.get('top_k', TOP_K_DEFAULT)]
     )
 
 
-def answer(question: str, ctx: str, client: AzureOpenAI, params: dict) -> str:
+def answer(question: str, ctx: str, client: AzureOpenAI, params: dict) -> tuple[str, int]:
     msgs = [
         {"role": "system", "content": ANSWER_SYSTEM_PROMPT},
         {"role": "system", "content": f"Context:\n\n{ctx}"},
         {"role": "user", "content": question},
     ]
     resp = client.chat.completions.create(messages=msgs, **params)
-    return resp.choices[0].message.content.strip()
+    answer_txt = resp.choices[0].message.content.strip()
+    # `resp.usage` is a `CompletionUsage` object, not a dict
+    tokens_used = getattr(resp, "usage", None)
+    if tokens_used is not None and hasattr(tokens_used, "total_tokens"):
+        tokens_used = tokens_used.total_tokens
+    else:
+        tokens_used = 0
+    return answer_txt, tokens_used
 
 
 ##############################################################################
@@ -517,10 +527,20 @@ def run_streamlit_ui() -> None:
         "indexed_documents": {},
         "history": [],
         "use_agentic": True,
+        "agent_messages": [],
     }.items():
         st.session_state.setdefault(k, default)
 
     st.title("📚 Agentic Retrieval‑Augmented Chat")
+    # --- global RTL helper class ---
+    st.markdown(
+        """
+        <style>
+        .rtl { direction: rtl; text-align: right; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # Sidebar – choose model
     with st.sidebar:
@@ -545,6 +565,23 @@ def run_streamlit_ui() -> None:
                 "*Search service → Networking → Authentication*."
             )
         st.checkbox("🔗 Use Knowledge Agent pipeline", key="use_agentic")
+        st.subheader("🛠️ RAG Parameters")
+        # How many documents to keep in context
+        st.session_state.ctx_size = st.slider("Context chars per chunk",
+                                              min_value=300, max_value=2000,
+                                              value=600, step=50)
+        # How many hits to retrieve per sub‑query
+        st.session_state.top_k = st.slider("TOP‑K per query",
+                                           min_value=1, max_value=20,
+                                           value=5, step=1)
+        # Reranker threshold for Knowledge‑Agent
+        st.session_state.rerank_thr = st.slider("Reranker threshold",
+                                                min_value=0.0, max_value=4.0,
+                                                value=2.0, step=0.1)
+        # Max completion tokens for chat responses
+        st.session_state.max_tokens = st.slider("Max completion tokens",
+                                                min_value=256, max_value=8192,
+                                                value=2048, step=256)
 
         # Reload .env button
         if st.button("🔄 Reload .env & restart"):
@@ -676,41 +713,59 @@ def run_streamlit_ui() -> None:
     # Display history
     for turn in st.session_state.history:
         with st.chat_message(turn["role"]):
-            st.markdown(turn["content"])
+            st.markdown(f'<div class="rtl">{turn["content"]}</div>', unsafe_allow_html=True)
 
     user_query = st.chat_input("Ask your question…")
     if user_query:
         st.session_state.history.append({"role": "user", "content": user_query})
         with st.chat_message("user"):
-            st.markdown(user_query)
+            st.markdown(f'<div class="rtl">{user_query}</div>', unsafe_allow_html=True)
 
         if st.session_state.use_agentic and st.session_state.selected_index:
             with st.spinner("Knowledge‑agent retrieval…"):
                 agent_name = f"{st.session_state.selected_index}-agent"
                 agent_client = init_agent_client(agent_name)
 
+                # ------------------------------------------------------------------
+                # Conversational instructions (persist for the whole session)
                 instr = (
                     "Answer the question based only on the indexed sources. "
                     "Cite ref_id in square brackets. If unknown, answer \"I don't know\"."
                 )
 
+                # 1️⃣  Build / update running message history
+                if not st.session_state.agent_messages:
+                    # first turn – seed with system‑style assistant instruction
+                    st.session_state.agent_messages = [
+                        {"role": "assistant", "content": instr}
+                    ]
+
+                # append current user question
+                st.session_state.agent_messages.append(
+                    {"role": "user", "content": user_query}
+                )
+
+                # convert to SDK objects
+                message_objs = [
+                    KnowledgeAgentMessage(
+                        role=m["role"],
+                        content=[KnowledgeAgentMessageTextContent(text=m["content"])]
+                    )
+                    for m in st.session_state.agent_messages
+                ]
+
                 ka_req = KnowledgeAgentRetrievalRequest(
-                    messages=[
-                        KnowledgeAgentMessage(
-                            role="assistant",
-                            content=[KnowledgeAgentMessageTextContent(text=instr)]
-                        ),
-                        KnowledgeAgentMessage(
-                            role="user",
-                            content=[KnowledgeAgentMessageTextContent(text=user_query)]
-                        ),
-                    ],
+                    messages=message_objs,
                     target_index_params=[
                         KnowledgeAgentIndexParams(
                             index_name=st.session_state.selected_index,
-                            reranker_threshold=3.0,   # stricter → fewer low‑score passages
+                            **(
+                                {"reranker_threshold": float(st.session_state.rerank_thr)}
+                                if st.session_state.rerank_thr > 0
+                                else {}
+                            )
                         )
-                    ],
+                    ]
                 )
                 try:
                     result = agent_client.knowledge_retrieval.retrieve(retrieval_request=ka_req)
@@ -724,34 +779,57 @@ def run_streamlit_ui() -> None:
                     )
                     st.exception(err)
                     return
-                raw_text = result.response[0].content[0].text
+                # ------------------------------------------------------------------
+                # 1) Low‑level response (chunks) -----------------------------------
+                raw_text = result.response[0].content[0].text   # JSON or plain text
 
-                # אם ה-agent החזיר מערך JSON של מקטעים – נפרוס אותם לטקסט קריא
+                # Persist chunks as the assistant's turn for future questions
+                st.session_state.agent_messages.append(
+                    {"role": "assistant", "content": raw_text}
+                )
+
+                # Try to parse the JSON list that the knowledge‑agent usually emits
                 try:
                     parsed = json.loads(raw_text)
                     if isinstance(parsed, list):
-                        answer_text = "\n\n".join(
-                            f"**[doc{item.get('ref_id')}]**  {item.get('content','')}"
+                        ctx_for_llm = "\n\n".join(
+                            f"[doc{item.get('ref_id')}] {item.get('content','')}"
                             for item in parsed
                         )
                     else:
-                        answer_text = raw_text
+                        # agent returned plain text – use as is
+                        ctx_for_llm = parsed
                 except Exception:
-                    answer_text = raw_text
-                # Build minimal docs list from references for the Sources expander
+                    ctx_for_llm = raw_text
+
+                # ------------------------------------------------------------------
+                # 2) Pass the chunks to OpenAI for **final answer generation**
+                answer_text, usage_tok = answer(user_query, ctx_for_llm, oai_client, chat_params)
+
+                # ------------------------------------------------------------------
+                # 3) Build docs list for “Sources” pane from result.references
                 docs = [
                     {"id": i + 1, "url": ref.doc_key, "page_chunk": ""}
                     for i, ref in enumerate(result.references)
                 ]
+
+                # 4) Optional: expose Activity & Results in UI
+                with st.expander("⚙️  Retrieval activity"):
+                    st.json([a.as_dict() for a in result.activity], expanded=False)
+
+                with st.expander("📑  Raw references"):
+                    st.json([r.as_dict() for r in result.references], expanded=False)
         else:
             with st.spinner("Planning, searching, answering…"):
                 sub_q = plan_queries(user_query, oai_client, chat_params)
                 docs = retrieve(sub_q, search_client)
                 ctx = build_context(docs)
-                answer_text = answer(user_query, ctx, oai_client, chat_params)
+                answer_text, usage_tok = answer(user_query, ctx, oai_client, chat_params)
 
         with st.chat_message("assistant"):
-            st.markdown(answer_text)
+            st.markdown(f'<div class="rtl">{answer_text}</div>', unsafe_allow_html=True)
+            if 'usage_tok' in locals():
+                st.caption(f"_Tokens used: {usage_tok}_")
 
         # ---- Sources block -------------------------------------------------
         cited_ids = {int(m.group(1)) for m in re.finditer(r"\[doc(\d+)]", answer_text)}
