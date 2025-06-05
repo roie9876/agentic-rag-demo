@@ -432,7 +432,7 @@ def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bo
 PLANNER_SYSTEM_PROMPT = textwrap.dedent(
     """
     You are a query‑planning assistant. Rewrite or split the **user question**
-    into up to three concise Azure AI Search queries. Return **only** a JSON
+    Return **only** a JSON
     array of strings – no extra text.
     """
 ).strip()
@@ -482,13 +482,18 @@ def retrieve(queries: List[str], client: SearchClient) -> List[dict]:
 
 def build_context(docs: List[dict]) -> str:
     """
-    Build a concise context string:
-    • Use only the first TOP_K docs
-    • Truncate each chunk to ctx_size chars (slider)
+    Build a concise context string by taking the first TOP‑K documents overall
+    (no per‑query grouping) and truncating each passage to 600 characters.
     """
-    chunk_size = st.session_state.get("ctx_size", 600)
+    chunk_size = 600
+    top_k = (
+        st.session_state.get("top_k", TOP_K_DEFAULT)
+        if "top_k" in st.session_state
+        else TOP_K_DEFAULT
+    )
+
     return "\n\n".join(
-        f"[doc{d['id']}] {d['content'][:chunk_size]}…" for d in docs[:st.session_state.get('top_k', TOP_K_DEFAULT)]
+        f"[doc{d['id']}] {d['content'][:chunk_size]}…" for d in docs[:top_k]
     )
 
 
@@ -580,7 +585,7 @@ def run_streamlit_ui() -> None:
                                                 value=2.0, step=0.1)
         # Max completion tokens for chat responses
         st.session_state.max_tokens = st.slider("Max completion tokens",
-                                                min_value=256, max_value=8192,
+                                                min_value=256, max_value=20000,
                                                 value=2048, step=256)
 
         # Reload .env button
@@ -821,7 +826,13 @@ def run_streamlit_ui() -> None:
                     st.json([r.as_dict() for r in result.references], expanded=False)
         else:
             with st.spinner("Planning, searching, answering…"):
-                sub_q = plan_queries(user_query, oai_client, chat_params)
+                # 🔀 Split multi‑line or multi‑sentence questions so each line
+                #     is planned separately, then flatten the resulting lists
+                user_parts = [p.strip() for p in user_query.split("\n") if p.strip()]
+                sub_q = []
+                for part in user_parts:
+                    sub_q.extend(plan_queries(part, oai_client, chat_params))
+
                 docs = retrieve(sub_q, search_client)
                 ctx = build_context(docs)
                 answer_text, usage_tok = answer(user_query, ctx, oai_client, chat_params)
@@ -880,7 +891,11 @@ def main() -> None:
     search_client, _ = init_search_client(env("AZURE_SEARCH_INDEX"))
 
     print("🧠 Planning queries…", file=sys.stderr, flush=True)
-    sub_q = plan_queries(question, oai_client, chat_params)
+    # Split CLI question on newlines / sentences for independent planning
+    user_parts = [p.strip() for p in question.split("\n") if p.strip()]
+    sub_q = []
+    for part in user_parts:
+        sub_q.extend(plan_queries(part, oai_client, chat_params))
 
     print(f"🔍 Retrieving with {len(sub_q)} sub‑queries…", file=sys.stderr)
     docs = retrieve(sub_q, search_client)
