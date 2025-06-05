@@ -234,8 +234,8 @@ def init_openai(model: str = "o3") -> Tuple[AzureOpenAI, dict]:
         )
     chat_params = dict(
         model=env(f"AZURE_OPENAI_DEPLOYMENT{suffix}"),
-        temperature=0.2,
-        max_tokens=st.session_state.get("max_tokens", 2048),
+        temperature=0,
+        max_tokens=st.session_state.get("max_tokens", 20000),
     )
     return client, chat_params
 
@@ -468,7 +468,9 @@ def plan_queries(question: str, client: AzureOpenAI, params: dict) -> List[str]:
 def retrieve(queries: List[str], client: SearchClient) -> List[dict]:
     docs: List[dict] = []
     for q in queries:
-        for res in client.search(q, top=st.session_state.get('top_k', TOP_K_DEFAULT)):
+        hits = list(client.search(q, top=st.session_state.get("top_k", TOP_K_DEFAULT)))
+        logging.warning("🔍 query='%s'  hits=%s", q, len(hits))
+        for res in hits:
             docs.append(
                 {
                     "id": len(docs) + 1,
@@ -577,16 +579,44 @@ def run_streamlit_ui() -> None:
                                               value=600, step=50)
         # How many hits to retrieve per sub‑query
         st.session_state.top_k = st.slider("TOP‑K per query",
-                                           min_value=1, max_value=20,
+                                           min_value=1, max_value=200,
                                            value=5, step=1)
         # Reranker threshold for Knowledge‑Agent
         st.session_state.rerank_thr = st.slider("Reranker threshold",
                                                 min_value=0.0, max_value=4.0,
                                                 value=2.0, step=0.1)
+        # Maximum JSON‑chunk size returned by the Knowledge‑Agent (maxOutputSize)
+        st.session_state.max_output_size = st.slider("Knowledge‑agent maxOutputSize",
+                                                     min_value=1000, max_value=16000,
+                                                     value=5000, step=500)
+
+        # --- Apply new maxOutputSize to existing Knowledge‑Agent -----------------
+        if st.session_state.selected_index:
+            if st.button("💾 Apply maxOutputSize", help="Update the selected index's Knowledge‑Agent"):
+                try:
+                    # Fetch current agent, update the request_limits and push the change
+                    _, _icl = init_search_client()  # index client for service root
+                    agent_name_sel = f"{st.session_state.selected_index}-agent"
+                    agent_obj = _icl.get_agent(agent_name_sel)
+                    agent_obj.request_limits = KnowledgeAgentRequestLimits(
+                        max_output_size=int(st.session_state.max_output_size)
+                    )
+                    _icl.create_or_update_agent(agent_obj)
+                    st.success(f"Knowledge‑Agent **{agent_name_sel}** updated "
+                               f"to maxOutputSize = {st.session_state.max_output_size} B")
+                except Exception as ex:
+                    st.error(f"Failed to update agent limits: {ex}")
+        else:
+            st.caption("👉 Create / select an index to enable agent‑limit update")
+
         # Max completion tokens for chat responses
         st.session_state.max_tokens = st.slider("Max completion tokens",
-                                                min_value=256, max_value=20000,
-                                                value=2048, step=256)
+                                                min_value=256, max_value=32768,
+                                                value=32768, step=256)
+
+        # Live chunk counter placeholder
+        chunks_placeholder = st.empty()
+        chunks_placeholder.caption(f"Chunks sent to LLM: {st.session_state.get('dbg_chunks', 0)}")
 
         # Reload .env button
         if st.button("🔄 Reload .env & restart"):
@@ -764,13 +794,12 @@ def run_streamlit_ui() -> None:
                     target_index_params=[
                         KnowledgeAgentIndexParams(
                             index_name=st.session_state.selected_index,
-                            **(
-                                {"reranker_threshold": float(st.session_state.rerank_thr)}
-                                if st.session_state.rerank_thr > 0
-                                else {}
-                            )
+                            reranker_threshold=float(st.session_state.rerank_thr)
                         )
-                    ]
+                    ],
+                    request_limits=KnowledgeAgentRequestLimits(
+                        max_output_size=int(st.session_state.max_output_size)
+                    ),
                 )
                 try:
                     result = agent_client.knowledge_retrieval.retrieve(retrieval_request=ka_req)
@@ -809,6 +838,9 @@ def run_streamlit_ui() -> None:
 
                 # ------------------------------------------------------------------
                 # 2) Pass the chunks to OpenAI for **final answer generation**
+                num_chunks = len(result.response)
+                st.session_state.dbg_chunks = num_chunks
+                chunks_placeholder.caption(f"Chunks sent to LLM: {num_chunks}")
                 answer_text, usage_tok = answer(user_query, ctx_for_llm, oai_client, chat_params)
 
                 # ------------------------------------------------------------------
@@ -817,6 +849,20 @@ def run_streamlit_ui() -> None:
                     {"id": i + 1, "url": ref.doc_key, "page_chunk": ""}
                     for i, ref in enumerate(result.references)
                 ]
+                # --- low‑level reference diagnostics ---
+                for ref in result.references:
+                    logging.warning(
+                        "KA ref: doc_key=%s  reranker_score=%s",
+                        getattr(ref, "doc_key", None),
+                        getattr(ref, "reranker_score", None),
+                    )
+                logging.warning("KA references returned: %s", len(result.references))
+                # --- diagnostics ---
+                unique_sources = {ref.doc_key for ref in result.references}
+                st.caption(f" Unique sources in answer: {len(unique_sources)}")
+
+                chunk_bytes = len(raw_text.encode("utf-8"))
+                logging.warning("KA output size: %s bytes", chunk_bytes)
 
                 # 4) Optional: expose Activity & Results in UI
                 with st.expander("⚙️  Retrieval activity"):
@@ -834,6 +880,9 @@ def run_streamlit_ui() -> None:
                     sub_q.extend(plan_queries(part, oai_client, chat_params))
 
                 docs = retrieve(sub_q, search_client)
+                num_chunks = len(docs)
+                st.session_state.dbg_chunks = num_chunks
+                chunks_placeholder.caption(f"Chunks sent to LLM: {num_chunks}")
                 ctx = build_context(docs)
                 answer_text, usage_tok = answer(user_query, ctx, oai_client, chat_params)
 
@@ -889,6 +938,9 @@ def main() -> None:
 
     oai_client, chat_params = init_openai(args.model)
     search_client, _ = init_search_client(env("AZURE_SEARCH_INDEX"))
+
+    # Optional: set max_output_size for CLI path
+    MAX_OUTPUT_SIZE = int(os.getenv("MAX_OUTPUT_SIZE", 5000))
 
     print("🧠 Planning queries…", file=sys.stderr, flush=True)
     # Split CLI question on newlines / sentences for independent planning
