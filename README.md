@@ -30,9 +30,6 @@ AZURE_SEARCH_INDEX=my-index
 
 ## 4 · Run
 CLI:
-```bash
-python app.py              # or whatever entry point you use
-```
 
 Streamlit UI:
 ```bash
