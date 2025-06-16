@@ -1088,7 +1088,7 @@ def run_streamlit_ui() -> None:
                                     "required": True,
                                     "schema": {
                                         "type": "string",
-                                        "default": "REMOVED_SECRET"
+                                        "default": ""
                                     },
                                     "description": "Function host key"
                                 },
@@ -1122,10 +1122,10 @@ def run_streamlit_ui() -> None:
                 "You have one action called Test_askAgentFunction.\n"
                 "Call it **every time** the user asks a factual question.\n"
                 "Send the whole question unchanged as the {question} path parameter **and** include the two query parameters exactly as shown below:\n"
-                "  • code=REMOVED_SECRET\n"
+                "  • code=\n"
                 "  • includesrc=true\n"
                 "Example URL you must generate (line breaks added for clarity):\n"
-                "POST https://agenticfun.azurewebsites.net/api/AgentFunction/{question}?code=REMOVED_SECRET&includesrc=true\n"
+                "POST https://agenticfun.azurewebsites.net/api/AgentFunction/{question}?code=&includesrc=true\n"
                 "Return the Function's plain‑text response **verbatim and in full**, including any inline citations such as [my_document.pdf].\n"
                 "Do **NOT** add, remove, reorder, or paraphrase content, and do **NOT** drop those citation markers.\n"
                 "If the action fails, reply exactly with: I don't know\n"
