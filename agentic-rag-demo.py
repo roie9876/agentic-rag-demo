@@ -262,11 +262,15 @@ def pdf_to_documents(pdf_file, oai_client: AzureOpenAI, embed_deployment: str) -
         if not page_text:
             continue
         vector = embed_text(oai_client, embed_deployment, page_text)
+        # Build a public-facing link to the PDF (example: blob storage)
+        pdf_url = os.getenv("PDF_BASE_URL", "") + pdf_file.name
         doc = {
             "id": hashlib.md5(f"{pdf_file.name}_{page_num}".encode()).hexdigest(),
             "page_chunk": page_text,
             "page_embedding_text_3_large": vector,
             "page_number": page_num + 1,
+            "source_file": pdf_file.name,
+            "url": pdf_url,
         }
         docs.append(doc)
     pdf.close()
@@ -360,13 +364,17 @@ def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bo
                             filterable=True,
                             sortable=True,
                             facetable=True),
+                SimpleField(name="source_file", type="Edm.String",
+                            filterable=True, facetable=True),
+                SimpleField(name="url", type="Edm.String",
+                            filterable=False),
             ],
             vector_search=VectorSearch(
                 profiles=[
                     VectorSearchProfile(
                         name="hnsw_text_3_large",
                         algorithm_configuration_name="alg",
-                        vectorizer_name="azure_openai_text_3_large",
+                        vectorizer_name="azure_openai_text_3_large",   # ← fixed
                     )
                 ],
                 algorithms=[
@@ -374,6 +382,7 @@ def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bo
                 ],
                 vectorizers=[
                     AzureOpenAIVectorizer(
+                        # Must match the profile name above
                         vectorizer_name="azure_openai_text_3_large",
                         parameters=AzureOpenAIVectorizerParameters(
                             resource_url=azure_openai_endpoint,
@@ -401,7 +410,7 @@ def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bo
             index_client.delete_index(name)
 
         index_client.create_or_update_index(index_schema)
-        # Create / update knowledge agent bound to this index + GPT‑4.1
+        # Create / update knowledge agent bound to this index + GPT-4.1
         agent = KnowledgeAgent(
             name=f"{name}-agent",
             models=[
@@ -533,17 +542,19 @@ def run_streamlit_ui() -> None:
         "uploaded_files": [],
         "indexed_documents": {},
         "history": [],
-        "use_agentic": True,
         "agent_messages": [],
     }.items():
         st.session_state.setdefault(k, default)
 
     st.title("📚 Agentic Retrieval‑Augmented Chat")
-    # --- global RTL helper class ---
+    # --- global LTR helper ---------------------------------------------------
     st.markdown(
         """
         <style>
-        .rtl { direction: rtl; text-align: right; }
+        /* Force the entire app to LTR */
+        html, body, .stApp { direction: ltr; text-align: left; }
+        /* Keep per-message helper for explicit blocks */
+        .ltr { direction: ltr; text-align: left; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -551,14 +562,11 @@ def run_streamlit_ui() -> None:
 
     # Sidebar – choose model
     with st.sidebar:
-        st.header("⚙️ Model")
-        model_choice = st.selectbox(
-            "Azure OpenAI Deployment",
-            options=["41", "o3", "4o"],   # 4.1 first → becomes default
-            index=0
-        )
+        # Model is fixed to GPT-4.1; dropdown removed
+        st.header("⚙️ Model: GPT-4.1")
+        model_choice = "41"
         # ---------------------------------------------------
-        # Single OpenAI client for this UI run (needed by PDF‑ingest too)
+        # Single OpenAI client for this UI run (needed by PDF-ingest too)
         oai_client, chat_params = init_openai(model_choice)
         # ---------------------------------------------------
         st.caption("Change `.env` to add more deployments")
@@ -571,7 +579,7 @@ def run_streamlit_ui() -> None:
                 "Turn on **Role‑based access control (Azure RBAC)** under "
                 "*Search service → Networking → Authentication*."
             )
-        st.checkbox("🔗 Use Knowledge Agent pipeline", key="use_agentic")
+        # Classic RAG option removed – the app always uses the Knowledge-Agent pipeline
         st.subheader("🛠️ RAG Parameters")
         # How many documents to keep in context
         st.session_state.ctx_size = st.slider("Context chars per chunk",
@@ -713,14 +721,52 @@ def run_streamlit_ui() -> None:
                 st.success(f"Created index '{new_index_name}'")
                 st.session_state.selected_index = new_index_name
                 st.session_state.available_indexes.append(new_index_name)
+                st.rerun()   # refresh UI so sidebar shows maxOutputSize button
+        # --- NEW: delete selected index & its agent ---------------------------------
+    if st.session_state.selected_index:
+        st.warning(f"Selected index: **{st.session_state.selected_index}**")
+        if st.button("🗑️ Delete selected index", type="secondary"):
+            try:
+                _, _icl = init_search_client()  # service-root index client
+                idx_name   = st.session_state.selected_index
+                agent_name = f"{idx_name}-agent"
 
-    # ---------------- PDF uploader -----------------
+                # 1️⃣  Delete the referencing agent (ignore error if absent)
+                try:
+                    _icl.delete_agent(agent_name)
+                except Exception:
+                    pass  # agent might not exist or insufficient rights
+
+                # 2️⃣  Delete the index now that no agent references it
+                if idx_name in [i.name for i in _icl.list_indexes()]:
+                    _icl.delete_index(idx_name)
+
+                # Update UI state
+                st.session_state.available_indexes = [
+                    n for n in st.session_state.available_indexes if n != idx_name
+                ]
+                st.session_state.selected_index = None
+                st.success(f"Deleted index **{idx_name}** and its agent.")
+                st.rerun()   # refresh UI to remove maxOutputSize button
+            except Exception as ex:
+                st.error(f"Failed to delete index: {ex}")
+
+    # ---------------- PDF uploader + SharePoint URL ingest -----------------
     st.subheader("📄 Upload PDFs to index")
     if not st.session_state.selected_index:
         st.info("Select or create an index first.")
     else:
-        uploaded = st.file_uploader("Choose PDF files", type=["pdf"], accept_multiple_files=True)
-        if uploaded:
+        uploaded = st.file_uploader("Choose local PDF files",
+                                    type=["pdf"], accept_multiple_files=True)
+
+        # --- SharePoint URL input ----------------------------------------
+        sharepoint_urls = st.text_area(
+            "Or paste SharePoint/HTTP links (one per line)",
+            placeholder="https://contoso.sharepoint.com/....pdf",
+            height=100,
+        ).strip().splitlines()
+
+        if uploaded or any(sharepoint_urls):
             if st.button("🚀 Ingest PDFs"):
                 with st.spinner("Embedding and uploading..."):
                     _, iclient = init_search_client(st.session_state.selected_index)
@@ -731,10 +777,29 @@ def run_streamlit_ui() -> None:
                     )
                     embed_deploy = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
                     total = 0
+
+                    # Local files
                     for pf in uploaded:
                         docs = pdf_to_documents(pf, oai_client, embed_deploy)
                         sender.upload_documents(documents=docs)
                         total += len(docs)
+
+                    # SharePoint / HTTP files
+                    for url in filter(None, sharepoint_urls):
+                        try:
+                            pdf_bytes, fname = _download_pdf(url)
+                            # Wrap BytesIO to mimic Streamlit's UploadedFile
+                            pdf_bytes.name = fname
+                            fake_file = types.SimpleNamespace(name=fname, getbuffer=pdf_bytes.getbuffer)
+                            docs = pdf_to_documents(fake_file, oai_client, embed_deploy)
+                            # Overwrite 'url' with the original link for every page
+                            for d in docs:
+                                d["url"] = url
+                            sender.upload_documents(documents=docs)
+                            total += len(docs)
+                        except Exception as dl_err:
+                            st.error(f"Failed to ingest {url}: {dl_err}")
+
                     sender.close()
                     st.success(f"Uploaded {total} pages into '{st.session_state.selected_index}'.")
 
@@ -748,15 +813,16 @@ def run_streamlit_ui() -> None:
     # Display history
     for turn in st.session_state.history:
         with st.chat_message(turn["role"]):
-            st.markdown(f'<div class="rtl">{turn["content"]}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="ltr">{turn["content"]}</div>', unsafe_allow_html=True)
 
     user_query = st.chat_input("Ask your question…")
     if user_query:
         st.session_state.history.append({"role": "user", "content": user_query})
         with st.chat_message("user"):
-            st.markdown(f'<div class="rtl">{user_query}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="ltr">{user_query}</div>', unsafe_allow_html=True)
 
-        if st.session_state.use_agentic and st.session_state.selected_index:
+        # Always run the agentic path (requires a selected index)
+        if st.session_state.selected_index:
             with st.spinner("Knowledge‑agent retrieval…"):
                 agent_name = f"{st.session_state.selected_index}-agent"
                 agent_client = init_agent_client(agent_name)
@@ -870,24 +936,21 @@ def run_streamlit_ui() -> None:
 
                 with st.expander("📑  Raw references"):
                     st.json([r.as_dict() for r in result.references], expanded=False)
-        else:
-            with st.spinner("Planning, searching, answering…"):
-                # 🔀 Split multi‑line or multi‑sentence questions so each line
-                #     is planned separately, then flatten the resulting lists
-                user_parts = [p.strip() for p in user_query.split("\n") if p.strip()]
-                sub_q = []
-                for part in user_parts:
-                    sub_q.extend(plan_queries(part, oai_client, chat_params))
 
-                docs = retrieve(sub_q, search_client)
-                num_chunks = len(docs)
-                st.session_state.dbg_chunks = num_chunks
-                chunks_placeholder.caption(f"Chunks sent to LLM: {num_chunks}")
-                ctx = build_context(docs)
-                answer_text, usage_tok = answer(user_query, ctx, oai_client, chat_params)
+                # Enrich docs with original PDF file name
+                for d in docs:
+                    try:
+                        full_doc = search_client.get_document(key=d["url"])
+                        d["source_file"] = full_doc.get("source_file", "")
+                        d["url"]         = full_doc.get("url", d.get("url", ""))
+                    except Exception:
+                        d["source_file"] = ""
+
+        else:
+            st.warning("Select an index to enable retrieval.")
 
         with st.chat_message("assistant"):
-            st.markdown(f'<div class="rtl">{answer_text}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="ltr">{answer_text}</div>', unsafe_allow_html=True)
             if 'usage_tok' in locals():
                 st.caption(f"_Tokens used: {usage_tok}_")
 
@@ -901,11 +964,13 @@ def run_streamlit_ui() -> None:
                         continue
                     page = doc.get("page_number", "")
                     page_str = f"(page {page})" if page else ""
-                    url = doc.get("url") or doc.get("source", "")
+                    url  = doc.get("url") or doc.get("source", "")
+                    name = doc.get("source_file", "")
+                    label = name if name else f"doc{cid}"
                     if url:
-                        st.markdown(f"**doc{cid}** {page_str} — [{url}]({url})")
+                        st.markdown(f"**{label}** {page_str} — [{url}]({url})")
                     else:
-                        st.markdown(f"**doc{cid}** {page_str}")
+                        st.markdown(f"**{label}** {page_str}")
                     st.write(doc.get("page_chunk", doc.get("content", ""))[:500] + "…")
                     st.divider()
 
@@ -913,55 +978,24 @@ def run_streamlit_ui() -> None:
 
         st.session_state.history.append({"role": "assistant", "content": answer_text})
 
+        # Simplified debug section (classic RAG variables no longer exist)
         with st.expander("🔍 Debug info"):
-            st.subheader("Queries")
-            st.write(sub_q if not st.session_state.use_agentic or not st.session_state.selected_index else "N/A (agentic)")
-            st.subheader("Context")
-            st.write(ctx if not st.session_state.use_agentic or not st.session_state.selected_index else "N/A (agentic)")
+            st.caption("Agentic pipeline active – classic RAG code removed.")
 
 
 def main() -> None:
-    # Detect if we were launched via Streamlit
-    if _st_in_runtime():
-        run_streamlit_ui()
-        return
+    # This script must be run with Streamlit.
+    if not _st_in_runtime():
+        print(
+            "🔴  CLI execution is no longer supported.\n"
+            "    Start the app with:\n\n"
+            "      streamlit run agentic-rag-demo.py\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    parser = argparse.ArgumentParser(description="Agentic RAG demo (SDK‑1.x)")
-    parser.add_argument("question", nargs="*", help="Question to ask from CLI")
-    parser.add_argument("--model", choices=["o3", "4o", "41"], default="41",
-                        help="Which deployment suffix to use")
-    args = parser.parse_args()
-
-    question = " ".join(args.question) if args.question else input("❓ Ask a question: ")
-    if not question:
-        sys.exit(0)
-
-    oai_client, chat_params = init_openai(args.model)
-    search_client, _ = init_search_client(env("AZURE_SEARCH_INDEX"))
-
-    # Optional: set max_output_size for CLI path
-    MAX_OUTPUT_SIZE = int(os.getenv("MAX_OUTPUT_SIZE", 5000))
-
-    print("🧠 Planning queries…", file=sys.stderr, flush=True)
-    # Split CLI question on newlines / sentences for independent planning
-    user_parts = [p.strip() for p in question.split("\n") if p.strip()]
-    sub_q = []
-    for part in user_parts:
-        sub_q.extend(plan_queries(part, oai_client, chat_params))
-
-    print(f"🔍 Retrieving with {len(sub_q)} sub‑queries…", file=sys.stderr)
-    docs = retrieve(sub_q, search_client)
-    ctx = build_context(docs)
-
-    print("✍️  Generating answer…", file=sys.stderr)
-    result = answer(question, ctx, oai_client, chat_params)
-    print("\n" + result + "\n")
-
-    if os.getenv("DEBUG_RAG"):
-        print("\n--- SUB‑QUERIES ---")
-        print(json.dumps(sub_q, indent=2))
-        print("\n--- CONTEXT ---")
-        print(ctx)
+    # Streamlit runtime detected → launch UI
+    run_streamlit_ui()
 
 
 if __name__ == "__main__":
