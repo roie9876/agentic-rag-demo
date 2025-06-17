@@ -35,7 +35,7 @@ from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 
 SEARCH_API_KEY = os.getenv("SEARCH_API_KEY")  # ← new optional var
-MAX_OUTPUT_SIZE = int(os.getenv("MAX_OUTPUT_SIZE", "1000"))   # ← new
+MAX_OUTPUT_SIZE = int(os.getenv("MAX_OUTPUT_SIZE", "16000"))   # ← new
 TOP_K_DEFAULT   = int(os.getenv("TOP_K", "50"))        # ← NEW default
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -338,10 +338,9 @@ def answer_question(
             return f"doc{chunk.get('ref_id', '?')}"
         raw_chunks = " ".join(f"[{_label(c)}] {c['content']}" for c in chunks)
 
-        # Quick fix: skip LLM summarisation and return the raw concatenated chunks
-        # (truncated to the configured MAX_OUTPUT_SIZE) so that citation labels
-        # stay unchanged.
-        final_answer = raw_chunks[:MAX_OUTPUT_SIZE]
+        # Summarise the retrieved information with the LLM so we get a
+        # coherent answer even when multiple questions are asked together.
+        final_answer = summarize_with_llm(raw_chunks, user_question)[:MAX_OUTPUT_SIZE]
 
         if include_sources:
             # Collect doc_keys from chunks (retrieve) or references (responses)

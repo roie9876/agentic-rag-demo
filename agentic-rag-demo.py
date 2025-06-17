@@ -17,6 +17,10 @@ import sys
 import textwrap
 import subprocess   # for az cli calls
 import httpx  # HTTP probe for RBAC status
+import zipfile
+import tempfile
+import subprocess
+
 from pathlib import Path
 from typing import List, Tuple
 
@@ -235,23 +239,8 @@ def _grant_search_role(service_name: str, subscription_id: str, resource_group: 
     except Exception as ex:
         return False, str(ex)
 
-# ---------------------------------------------------------------------------
-# Zip local ./function folder for deployment
-# ---------------------------------------------------------------------------
-def _zip_function_folder() -> str:
-    """
-    Create a temp .zip archive of the ./function folder and return its path.
-    """
-    func_dir = Path(__file__).resolve().parent / "function"
-    if not func_dir.exists():
-        raise FileNotFoundError("Local 'function' folder not found.")
-    tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
-    with zipfile.ZipFile(tmp_zip.name, "w", zipfile.ZIP_DEFLATED) as zf:
-        for p in func_dir.rglob("*"):
-            if p.is_file():
-                # keep path relative to "function" folder so host.json at zip root
-                zf.write(p, p.relative_to(func_dir))
-    return tmp_zip.name
+
+
 # ---------------------------------------------------------------------------
 # Helper to grant OpenAI role
 # ---------------------------------------------------------------------------
@@ -749,7 +738,13 @@ def _zip_function_folder(func_dir: Path, zip_path: Path) -> None:
         for p in func_dir.rglob("*"):
             if p.is_file():
                 zf.write(p, p.relative_to(func_dir))
-
+# ────────────────────────── Helper: zip Azure Function folder ──────────────
+def _zip_function_folder(func_dir: Path, zip_path: Path) -> None:
+    """Zip *func_dir* (כולל host.json וכו') כ-relative paths אל *zip_path*."""
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for itm in func_dir.rglob("*"):
+            if itm.is_file():
+                zf.write(itm, itm.relative_to(func_dir))
 # -----------------------------------------------------------------------------
 # Streamlit UI wrapper (run with: streamlit run agentic-rag-demo.py)
 # -----------------------------------------------------------------------------
@@ -1203,6 +1198,9 @@ def run_streamlit_ui() -> None:
         else:
             rg = st.text_input("Resource Group", os.getenv("AZURE_RG", ""))
             app = st.text_input("Function App name", os.getenv("AZURE_FUNCTION_APP", ""))
+        # Normalise variable names (func_name / func_rg) and keep old aliases
+        func_name = app
+        func_rg   = rg
 
         if not all((sub_id, rg, app)):
             st.info("Fill subscription / RG / Function-App and click 🔄 Load settings.")
@@ -1266,7 +1264,7 @@ def run_streamlit_ui() -> None:
             # ── Push edited settings back to the Function App ────────────────
             st.divider()
             if st.button("💾 Push settings to Function"):
-                if not all((sub_id, rg, app)):
+                if not all((sub_id, func_rg, func_name)):
                     st.error("Fill subscription / resource‑group / app name first.")
                 elif st.session_state.func_df.empty:
                     st.error("Nothing to push – load settings first.")
@@ -1287,35 +1285,48 @@ def run_streamlit_ui() -> None:
 
                         # Update in Azure
                         wcli.web_apps.update_application_settings(
-                            rg,
-                            app,
+                            func_rg,
+                            func_name,
                             {"properties": new_props}
                         )
-                        st.success(f"✅ Updated {len(new_props)} settings on **{app}**")
+                        st.success(f"✅ Updated {len(new_props)} settings on **{func_name}**")
                     except Exception as push_err:
                         st.error(f"Failed to update Function settings:\n{push_err}")
 
             # ── Deploy local ./function code to this Function App ─────────────
             st.divider()
-            if st.button("🚀 Deploy local code to Function"):
-                if not all((sub_id, rg, app)):
-                    st.error("Fill subscription / RG / Function‑App first.")
-                else:
-                    try:
-                        zip_path = _zip_function_folder()
-                        with st.spinner("Creating zip and deploying…"):
-                            
-                            cmd = [
-                                "az", "functionapp", "deployment", "source", "config-zip",
-                                "-g", rg, "-n", app,
-                                "--src", zip_path
-                            ]
-                            subprocess.check_call(cmd)
-                        st.success("✅ Deployment succeeded.")
-                    except subprocess.CalledProcessError as cerr:
-                        st.error(f"az CLI deployment failed: {cerr}")
-                    except Exception as zerr:
-                        st.error(f"Failed to deploy: {zerr}")
+            # ── Deploy local ./function code to this Function App ─────────────
+        st.divider()
+        if st.button("🚀 Deploy local code to Function"):
+            if not all((sub_id, func_rg, func_name)):
+                st.error("Fill subscription / RG / Function-App first.")
+            else:
+                try:
+                    st.info("⏳ Zipping and deploying, please wait…")
+
+                    func_dir = Path.cwd() / "function"
+                    if not func_dir.exists():
+                        st.error(f"Local 'function' folder not found: {func_dir}")
+                        st.stop()
+
+                    with tempfile.TemporaryDirectory() as td:
+                        zip_path = Path(td) / "function.zip"
+                        _zip_function_folder(func_dir, zip_path)
+
+                        cmd = [
+                            "az", "functionapp", "deployment", "source", "config-zip",
+                            "-g", func_rg,
+                            "-n", func_name,
+                            "--src", str(zip_path)
+                        ]
+                        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                        st.success("✅ Deployment completed")
+                        if result.stdout:
+                            st.text(result.stdout.strip())
+                except subprocess.CalledProcessError as cerr:
+                    st.error(f"az CLI deployment failed:\n{cerr.stderr}")
+                except Exception as ex:
+                    st.error(f"Failed to deploy: {ex}")
 
     # ─────────────────── Single Tab – AI Foundry Agent ──────────────────
     with tab_ai:
