@@ -760,14 +760,15 @@ def run_streamlit_ui() -> None:
             _reload_env_and_restart()
 
     # ── Tabbed layout ─────────────────────────────────────────────────────
-    tab_create, tab_manage, tab_test = st.tabs(
+    tab_create, tab_manage, tab_test, tab_ai = st.tabs(
         [
             "1️⃣ Create Index",
             "2️⃣ Manage Index",
             "3️⃣ Test Retrieval",
+            "🤖 AI Foundry Agent",
         ]
     )
-    tab_ai = st.tabs(["🤖 AI Foundry Agent"])[0]
+    
 
     # Service‑root client used across tabs
     _, root_index_client = init_search_client()
