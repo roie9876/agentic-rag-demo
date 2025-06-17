@@ -272,6 +272,7 @@ def _reload_env_and_restart():
 ##############################################################################
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
+FUNCTION_KEY = os.getenv("AGENT_FUNC_KEY", "")
 TOP_K_DEFAULT = int(os.getenv("TOP_K", 5))   # fallback for CLI path
 
 
@@ -332,6 +333,7 @@ def pdf_to_documents(pdf_file, oai_client: AzureOpenAI, embed_deployment: str) -
     pdf = fitz.open(tmp_path)
     for page_num in range(len(pdf)):
         page_text = pdf[page_num].get_text().strip()
+        page_text = f"[{pdf_file.name}] " + page_text
         if not page_text:
             continue
         vector = embed_text(oai_client, embed_deployment, page_text)
@@ -524,9 +526,10 @@ PLANNER_SYSTEM_PROMPT = textwrap.dedent(
 
 ANSWER_SYSTEM_PROMPT = textwrap.dedent(
     """
-    You are an AI assistant grounded in internal knowledge from Azure AI Search.
-    • Use **only** the numbered context passages below.  
-    • Quote snippets and cite them like [doc#].  
+    You are an AI assistant grounded in internal knowledge from Azure AI Search.
+    • Use **only** the context passages below.  
+    • When you quote, keep the exact citation label already inside the brackets – do **not** invent new labels.  
+      Example: if the passage includes “[מב 50.02.pdf]” then cite exactly “[מב 50.02.pdf]”.  
     • If you lack information – say so honestly.  
     • Output in Markdown.
     """
@@ -648,6 +651,7 @@ def agentic_retrieval(agent_name: str, index_name: str, messages: list[dict]) ->
 
     req = KnowledgeAgentRetrievalRequest(
         messages=ka_msgs,
+        citation_field_name="source_file",
         # Only include target_index_params if we actually specified one
         target_index_params=target_params,
         request_limits=KnowledgeAgentRequestLimits(max_output_size=6000),
@@ -709,6 +713,7 @@ def run_streamlit_ui() -> None:
         "history": [],
         "agent_messages": [],
         "dbg_chunks": 0,
+        "raw_index_json": "",  # last raw JSON from retrieval
         "orchestrator_targets": {},  # mapping: orchestrator agent → retrieval agent
     }.items():
         st.session_state.setdefault(k, default)
@@ -759,7 +764,7 @@ def run_streamlit_ui() -> None:
         [
             "1️⃣ Create Index",
             "2️⃣ Manage Index",
-            "3️⃣ Test Retrieval"
+            "3️⃣ Test Retrieval",
         ]
     )
     tab_ai = st.tabs(["🤖 AI Foundry Agent"])[0]
@@ -921,107 +926,158 @@ def run_streamlit_ui() -> None:
 
                 ka_req = KnowledgeAgentRetrievalRequest(
                     messages=ka_msgs,
-                    target_index_params=[KnowledgeAgentIndexParams(
-                        index_name=st.session_state.selected_index,
-                        reranker_threshold=float(st.session_state.rerank_thr)
-                    )],
+                    citation_field_name="source_file",
+                    include_doc_key=True,
+                    response_fields=["text", "source_file", "url", "doc_key"],
+                    target_index_params=[
+                        KnowledgeAgentIndexParams(
+                            index_name=st.session_state.selected_index,
+                            reranker_threshold=float(st.session_state.rerank_thr),
+                            citation_field_name="source_file",   # ensure citations use filenames
+                        )
+                    ],
                     request_limits=KnowledgeAgentRequestLimits(
                         max_output_size=int(st.session_state.max_output_size)
                     ),
                 )
                 with st.spinner("Retrieving…"):
-                    result = agent_client.knowledge_retrieval.retrieve(retrieval_request=ka_req)
+                    # ---------- SDK call: retrieve chunks --------------------
+                    result = agent_client.knowledge_retrieval.retrieve(
+                        retrieval_request=ka_req
+                    )
+
+                # The agent returns a single assistant message whose first
+                # content item is a JSON string (list of chunks).
 
                 raw_text = result.response[0].content[0].text
-                st.session_state.agent_messages.append({"role": "assistant", "content": raw_text})
+                st.session_state.raw_index_json = raw_text
+                st.session_state.agent_messages.append(
+                    {"role": "assistant", "content": raw_text}
+                )
 
-                # ── Handle raw_text coming from the Function/Agent ───────────
+                # ────────────────────────────────────────────────────────────
+                # Post‑processing: parse raw_text → build answer + citations
+                # ────────────────────────────────────────────────────────────
                 try:
                     parsed_json = json.loads(raw_text)
                 except Exception:
-                    parsed_json = None
+                    parsed_json = None      # plain text fallback
 
-                answer_text = None          # will hold the final answer we print
-                sources_data = []           # unified list → [{source_file,url,...}, ...]
+                answer_text: str | None = None
+                sources_data: list[dict] = []
+                chunk_count = 0
+                usage_tok = 0
+                ctx_for_llm: str | None = None
 
-                # ------------------------------------------------------------------
-                # 1) Case A – Function returned {"answer": "...", "sources": [...] }
-                # ------------------------------------------------------------------
+                # ---------- Case 1: {"answer": "...", "sources": [...]} ----------
                 if isinstance(parsed_json, dict) and "answer" in parsed_json:
-                    answer_text  = parsed_json.get("answer", "").strip()
+                    answer_text = parsed_json.get("answer", "").strip()
                     sources_data = parsed_json.get("sources", [])
-                    # treat the answer as already‑final → no extra LLM step
                     chunk_count = 1
-                    ctx_for_llm = None
 
-                # ------------------------------------------------------------------
-                # 2) Case B – Function returned a *list* of chunks (old style)
-                # ------------------------------------------------------------------
+                # ---------- Case 2: list‑of‑chunks (classic) ----------------------
                 elif isinstance(parsed_json, list):
+                    # Ensure each chunk has source_file (lookup by doc_key when missing)
+                    for itm in parsed_json:
+                        if "source_file" not in itm and "doc_key" in itm:
+                            try:
+                                doc = search_client.get_document(key=itm["doc_key"])
+                                if doc and "source_file" in doc:
+                                    itm["source_file"] = doc["source_file"]
+                            except Exception:
+                                pass  # ignore lookup errors
+
+                    def _label(itm: dict) -> str:
+                        """
+                        Return the best human‑readable citation label,
+                        priority order:
+                          1) source_file   – injected during ingestion
+                          2) source        – alias field
+                          3) url           – last segment of URL
+                          4) filename embedded inside the content itself,
+                             e.g. text begins with “[my.pdf] …”
+                          5) fallback      – generic doc{ref_id}
+                        """
+                        # 1) explicit filename from metadata
+                        if itm.get("source_file"):
+                            return itm["source_file"]
+
+                        # 2) alias field (also set during ingestion)
+                        if itm.get("source"):
+                            return itm["source"]
+
+                        # 3) last path segment of URL
+                        if itm.get("url"):
+                            from pathlib import Path
+                            return Path(itm["url"]).name or itm["url"]
+
+                        # 4) extract leading “[filename] ...” from the content
+                        txt = itm.get("content", "")
+                        if txt.startswith("[") and "]" in txt[:150]:
+                            return txt[1 : txt.find("]")]
+
+                        # 5) generic fallback
+                        return f"doc{itm.get('ref_id', '?')}"
+
                     ctx_for_llm = "\n\n".join(
-                        f"[doc{item.get('ref_id','?')}] {item.get('content','')}"
-                        for item in parsed_json
+                        f"[{_label(itm)}] {itm.get('content','')}" for itm in parsed_json
                     )
                     chunk_count = len(parsed_json)
 
-                # ------------------------------------------------------------------
-                # 3) Case C – plain text (fallback)
-                # ------------------------------------------------------------------
-                else:
-                    ctx_for_llm  = raw_text
-                    chunk_count  = 1
+                    # Summarise via OpenAI (answer function defined earlier)
+                    answer_text, usage_tok = answer(user_query, ctx_for_llm, oai_client, chat_params)
 
-                # For sidebar diagnostic
+                    # Build sources list (unique labels)
+                    seen = set()
+                    for itm in parsed_json:
+                        src = itm.get("source_file") or _label(itm)
+                        if src not in seen:
+                            sources_data.append(
+                                {"source_file": src, "url": itm.get("url", "")}
+                            )
+                            seen.add(src)
+
+                # ---------- Case 3: raw plain text -------------------------------
+                else:
+                    answer_text = raw_text.strip()
+                    chunk_count = 1
+
+                # Update sidebar diagnostic
                 st.session_state.dbg_chunks = chunk_count
 
-                # ------------------------------------------------------------------
-                # When we still need to summarise with the LLM (cases B & C)
-                # ------------------------------------------------------------------
-                if answer_text is None:
-                    answer_text, usage_tok = answer(user_query, ctx_for_llm, oai_client, chat_params)
-                else:
-                    # We already have the final text (case A)
-                    usage_tok = 0
-                # ------------------------------------------------------------------
-
+                # ---------- Render assistant answer ------------------------------
                 with st.chat_message("assistant"):
-                    st.markdown(answer_text, unsafe_allow_html=True)
-                    st.caption(f"_Tokens used: {usage_tok}_")
+                    st.markdown(answer_text or "*[לא התקבלה תשובה]*", unsafe_allow_html=True)
 
-                # ── Show concise list of sources / citations ─────────────────────
-                if not sources_data and isinstance(parsed_json, list):
-                    # legacy list → build minimal list from chunks
-                    for item in parsed_json:
-                        src_name = (
-                            item.get("source_file")
-                            or item.get("source")
-                            or item.get("url")
-                            or f"doc{item.get('ref_id', '?')}"
-                        )
-                        sources_data.append(
-                            {"source_file": src_name, "url": item.get("url", "")}
-                        )
+                    if sources_data:
+                        st.markdown("#### 🗂️ Sources")
+                        for src in sources_data:
+                            name = src.get("source_file") or src.get("url") or "unknown"
+                            url  = src.get("url")
+                            if url:
+                                st.markdown(f"- [{name}]({url})")
+                            else:
+                                st.markdown(f"- {name}")
 
-                if sources_data:
-                    st.markdown("#### 🗂️ Sources")
-                    for src in sources_data:
-                        name = src.get("source_file") or "unknown source"
-                        url  = src.get("url", "")
-                        if url:
-                            st.markdown(f"- [{name}]({url})")
-                        else:
-                            st.markdown(f"- {name}")
-
-                # --- Optional: show raw chunks -----------------------------------
+                # ---------- Optional: raw chunks for debugging --------------------
                 if isinstance(parsed_json, list) and parsed_json:
-                    with st.expander("📚 מקורות (chunks)", expanded=False):
-                        for item in parsed_json:
-                            ref = item.get("ref_id", item.get("id", '?'))
-                            txt = item.get("content", "")
-                            st.markdown(f"**📄 מקור {ref}:**")
-                            st.write(txt)
+                    with st.expander("📚 Chunks", expanded=False):
+                        for itm in parsed_json:
+                            ref = itm.get("ref_id", itm.get("id", '?'))
+                            st.markdown(f"**📄 מקור {ref}:**")
+                            st.write(itm.get("content", ""))
                             st.markdown("---")
 
+                # ── Raw payload for debugging ───────────────────────────
+                if st.session_state.raw_index_json:
+                    with st.expander("📃 מידע גולמי מהאינדקס", expanded=False):
+                        try:
+                            st.json(json.loads(st.session_state.raw_index_json))
+                        except Exception:
+                            st.code(st.session_state.raw_index_json)
+
+
+    # ─────────────────── Single Tab – AI Foundry Agent ──────────────────
 
     # ─────────────────── Single Tab – AI Foundry Agent ──────────────────
     with tab_ai:
@@ -1088,9 +1144,9 @@ def run_streamlit_ui() -> None:
                                     "required": True,
                                     "schema": {
                                         "type": "string",
-                                        "default": ""
+                                        "default": FUNCTION_KEY
                                     },
-                                    "description": "Function host key"
+                                    "description": "Function host key (taken from env‑var AGENT_FUNC_KEY)"
                                 },
                                 {
                                     "name": "includesrc",
@@ -1122,10 +1178,10 @@ def run_streamlit_ui() -> None:
                 "You have one action called Test_askAgentFunction.\n"
                 "Call it **every time** the user asks a factual question.\n"
                 "Send the whole question unchanged as the {question} path parameter **and** include the two query parameters exactly as shown below:\n"
-                "  • code=\n"
+                f"  • code={FUNCTION_KEY}\n"
                 "  • includesrc=true\n"
                 "Example URL you must generate (line breaks added for clarity):\n"
-                "POST https://agenticfun.azurewebsites.net/api/AgentFunction/{question}?code=&includesrc=true\n"
+                f"POST https://agenticfun.azurewebsites.net/api/AgentFunction/{{question}}?code={FUNCTION_KEY}&includesrc=true\n"
                 "Return the Function's plain‑text response **verbatim and in full**, including any inline citations such as [my_document.pdf].\n"
                 "Do **NOT** add, remove, reorder, or paraphrase content, and do **NOT** drop those citation markers.\n"
                 "If the action fails, reply exactly with: I don't know\n"
