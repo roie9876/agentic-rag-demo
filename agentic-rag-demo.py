@@ -20,7 +20,27 @@ import httpx  # HTTP probe for RBAC status
 from pathlib import Path
 from typing import List, Tuple
 
+# ---------------------------------------------------------------------------
+# Streamlit Data‑Editor helper (works on both old & new versions)
+# ---------------------------------------------------------------------------
 import streamlit as st
+
+def _st_data_editor(*args, **kwargs):
+    """
+    Wrapper that tries st.data_editor (Streamlit ≥ 1.29) and falls back to
+    st.experimental_data_editor for older releases.
+    """
+    if hasattr(st, "data_editor"):
+        return st.data_editor(*args, **kwargs)
+    elif hasattr(st, "experimental_data_editor"):
+        return st.experimental_data_editor(*args, **kwargs)
+    else:
+        st.error(
+            "⚠️ Your Streamlit version is too old for data‑editor. "
+            "Upgrade with:\n\n"
+            "    pip install --upgrade streamlit"
+        )
+        st.stop()
 # Reliable check whether code runs under `streamlit run …`
 try:
     from streamlit.runtime import exists as _st_in_runtime
@@ -760,12 +780,13 @@ def run_streamlit_ui() -> None:
             _reload_env_and_restart()
 
     # ── Tabbed layout ─────────────────────────────────────────────────────
-    tab_create, tab_manage, tab_test, tab_ai = st.tabs(
+    tab_create, tab_manage, tab_test, tab_ai, tab_cfg = st.tabs(
         [
             "1️⃣ Create Index",
             "2️⃣ Manage Index",
             "3️⃣ Test Retrieval",
             "🤖 AI Foundry Agent",
+            "⚙️ Function Config"
         ]
     )
     
@@ -1079,8 +1100,6 @@ def run_streamlit_ui() -> None:
 
 
     # ─────────────────── Single Tab – AI Foundry Agent ──────────────────
-
-    # ─────────────────── Single Tab – AI Foundry Agent ──────────────────
     with tab_ai:
         st.header("🤖 Create AI Foundry Agent")
 
@@ -1223,7 +1242,134 @@ def run_streamlit_ui() -> None:
                 st.error("Failed to create agent via SDK:")
                 st.exception(err)
 
+    # ─────────────────── Tab 5 – Function Config ──────────────────────────
+    with tab_cfg:
+        st.header("⚙️ Configure Azure Function (Key Vault‑safe)")
 
+        # ── Load .env once for this tab ────────────────────────────────
+        from dotenv import dotenv_values
+        env_file_path = Path(__file__).resolve().parent / ".env"
+        env_vars = dotenv_values(env_file_path) if env_file_path.exists() else {}
+
+        # Default INDEX_NAME / AGENT_NAME from .env (editable)
+        idx_default = env_vars.get("INDEX_NAME", "")
+        agent_default = env_vars.get("AGENT_NAME", idx_default + "-agent" if idx_default else "")
+
+        st.markdown("##### Runtime parameters")
+        idx_input = st.text_input("INDEX_NAME", idx_default)
+        agn_input = st.text_input("AGENT_NAME", agent_default)
+
+        # Apply user overrides back into env_vars so they propagate
+        if idx_input:
+            env_vars["INDEX_NAME"] = idx_input
+        if agn_input:
+            env_vars["AGENT_NAME"] = agn_input
+
+        # Try to pre‑fill subscription from az cli
+        from subprocess import check_output, CalledProcessError
+        try:
+            az_acc = json.loads(check_output(["az", "account", "show", "-o", "json"], text=True))
+            cli_sub = az_acc.get("id", "")
+        except (CalledProcessError, FileNotFoundError, json.JSONDecodeError):
+            cli_sub = ""
+        sub_id = st.text_input("Subscription ID", cli_sub)
+
+        # List Function Apps in this subscription (needs DefaultAzureCredential)
+        func_choices = []
+        func_map = {}          # "app (rg)" → (name, rg)
+        if sub_id:
+            from azure.identity import DefaultAzureCredential
+            from azure.mgmt.web import WebSiteManagementClient
+            try:
+                _wcli_tmp = WebSiteManagementClient(DefaultAzureCredential(), sub_id)
+                for site in _wcli_tmp.web_apps.list():
+                    # Filter only Function Apps (kind contains "functionapp")
+                    if site.kind and "functionapp" in site.kind:
+                        label = f"{site.name}  ({site.resource_group})"
+                        func_choices.append(label)
+                        func_map[label] = (site.name, site.resource_group)
+            except Exception as _exc:
+                st.warning("⚠️ Could not list Function Apps automatically; fill manually.")
+
+        func_sel_lbl = st.selectbox(
+            "Choose Function App",
+            ["-- manual input --"] + func_choices,
+            index=0
+        )
+
+        if func_sel_lbl != "-- manual input --":
+            app, rg = func_map[func_sel_lbl]
+        else:
+            rg = st.text_input("Resource Group", os.getenv("AZURE_RG", ""))
+            app = st.text_input("Function App name", os.getenv("AZURE_FUNCTION_APP", ""))
+
+        if not all((sub_id, rg, app)):
+            st.info("Fill subscription / RG / Function-App and click 🔄 Load settings.")
+        else:
+            from azure.identity import DefaultAzureCredential
+            from azure.mgmt.web import WebSiteManagementClient
+            import pandas as pd, re
+
+            wcli = WebSiteManagementClient(DefaultAzureCredential(), sub_id)
+
+            def _mask(v: str) -> str:
+                if v.startswith("@Microsoft.KeyVault(") or re.search(r"(key|secret|token|pass)", v, re.I):
+                    return "••••••"
+                return v
+
+            if "func_raw" not in st.session_state:
+                st.session_state.func_raw = {}
+            if "func_df" not in st.session_state:
+                st.session_state.func_df  = pd.DataFrame(columns=["key", "value"])
+
+            if st.button("🔄 Load settings"):
+                try:
+                    cfg = wcli.web_apps.list_application_settings(rg, app)
+                    raw = cfg.properties or {}
+                    st.session_state.func_raw = raw
+
+                    # ── Merge precedence: Function settings ← mapped .env vars ──
+                    ENV_TO_FUNC = {
+                        "AZURE_OPENAI_ENDPOINT":    "OPENAI_ENDPOINT",
+                        "AZURE_OPENAI_KEY":         "OPENAI_KEY",
+                        "AZURE_OPENAI_API_VERSION": "AZURE_OPENAI_API_VERSION",
+                        "AZURE_OPENAI_DEPLOYMENT":  "OPENAI_DEPLOYMENT",
+                    }
+                    param_vals = raw.copy()
+                    for env_k, env_v in env_vars.items():
+                        fn_key = ENV_TO_FUNC.get(env_k, env_k)
+                        param_vals[fn_key] = env_v
+
+                    REQUIRED_KEYS = [
+                        "AGENT_FUNC_KEY", "AGENT_NAME", "API_VERSION",
+                        "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                        "AZURE_OPENAI_API_VERSION", "AzureWebJobsStorage", "debug",
+                        "DEPLOYMENT_STORAGE_CONNECTION_STRING", "includesrc",
+                        "INDEX_NAME", "MAX_OUTPUT_SIZE",
+                        "OPENAI_DEPLOYMENT", "OPENAI_ENDPOINT", "OPENAI_KEY",
+                        "RERANKER_THRESHOLD", "SEARCH_API_KEY",
+                        "SERVICE_NAME", "TOP_K",
+                    ]
+                    for k in REQUIRED_KEYS:
+                        param_vals.setdefault(k, "")
+
+                    rows = [{"key": k, "value": _mask(str(param_vals[k]))} for k in REQUIRED_KEYS]
+                    st.session_state.func_df = pd.DataFrame(rows)
+
+                    st.success(f"Loaded & merged {len(st.session_state.func_df)} setting(s).")
+                except Exception as err:
+                    st.error(f"Failed to load: {err}")
+
+        
+        # ── Show editable table on every render once loaded ───────────────
+        if st.session_state.get("func_df") is not None and not st.session_state.func_df.empty:
+            st.markdown("#### Function App Settings")
+            st.session_state.func_df = _st_data_editor(
+                st.session_state.func_df,
+                num_rows="dynamic",
+                use_container_width=True,
+                key="func_editor",
+            )
 def main() -> None:
     # This script must be run with Streamlit.
     if not _st_in_runtime():

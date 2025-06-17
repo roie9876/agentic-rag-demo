@@ -1,6 +1,7 @@
 streamlit>=1.32.0
 openai>=1.35.0
 python-dotenv>=1.0.1
+pip install azure-mgmt-web
 
 # Azure Cognitive Search SDK (beta) + dependencies
 azure-search-documents==11.6.0b12
