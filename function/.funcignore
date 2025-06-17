@@ -1,0 +1,6 @@
+# Ignore virtual environments and local config
+.venv/
+local.settings.json
+__pycache__/
+*.pyc
+agentic_response.json
