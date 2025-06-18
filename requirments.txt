@@ -1,15 +1,15 @@
 streamlit>=1.32.0
 openai>=1.35.0
 python-dotenv>=1.0.1
-pip install azure-mgmt-web
-
+azure-mgmt-web
+azure-mgmt-storage
 # Azure Cognitive Search SDK (beta) + dependencies
 azure-search-documents==11.6.0b12
 azure-identity>=1.15.0
 azure-core>=1.30.0
-azure-ai-agents==1.1.0b3
-azure-ai-projects==1.1.0b3
-azure-search-documents==11.6.0b12
+azure-ai-agents==1.0.1
+azure-ai-projects
+
 streamlit>=1.33
 
 # PDF parsing for the uploader feature in the Streamlit app

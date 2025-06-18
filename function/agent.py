@@ -234,8 +234,7 @@ def answer_question(
     # Top‑level setting for which field the agent should use as citation label
     
     # Ensure /retrieve returns doc_key so we can look up source_file later
-    #if not use_responses:
-        #body["includeDocKey"] = True
+
     # When we use the /responses route we can request extra metadata so we can
     # map citations back to the original filename or URL.
     if use_responses:
@@ -388,10 +387,33 @@ def answer_question(
                             {
                                 "doc_key": c.get("doc_key"),
                                 "source_file": src_name,
-                                "url": c.get("url", ""),
+                                "url": (
+                                    c["url"]
+                                    if c.get("url", "").startswith(("http://", "https://"))
+                                    else ""
+                                ),
                             }
                         )
                         seen.add(src_name)
+
+            # ---- Best‑effort URL enrichment (if still missing) -----------------
+            for entry in sources:
+                if entry.get("url", "").startswith(("http://", "https://")):
+                    continue  # already have a full URL
+                try:
+                    # Re‑use previously created SearchClient if available
+                    if 'sclient' not in locals() or sclient is None:
+                        sclient = _search_client(idx)
+                    safe_src = entry["source_file"].replace("'", "''")  # escape single quotes
+                    filt = f"source_file eq '{safe_src}'"
+                    hits = sclient.search(search_text="*", filter=filt, top=1)
+                    for h in hits:
+                        if "url" in h and h["url"]:
+                            entry["url"] = h["url"]
+                            break
+                except Exception:
+                    # Leave url empty on any failure
+                    pass
 
             # ←── return JSON object instead of plain text
             return {"answer": final_answer, "sources": sources}

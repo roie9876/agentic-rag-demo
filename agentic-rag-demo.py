@@ -20,6 +20,7 @@ import httpx  # HTTP probe for RBAC status
 import zipfile
 import tempfile
 import subprocess
+import time  # Added to support sleep in polling after ingestion
 
 from pathlib import Path
 from typing import List, Tuple
@@ -336,7 +337,7 @@ def init_openai(model: str = "o3") -> Tuple[AzureOpenAI, dict]:
     chat_params = dict(
         model=env(f"AZURE_OPENAI_DEPLOYMENT{suffix}"),
         temperature=0,
-        max_tokens=st.session_state.get("max_tokens", 20000),
+        max_tokens=st.session_state.get("max_tokens", 80000),
     )
     return client, chat_params
 
@@ -383,7 +384,7 @@ def pdf_to_documents(pdf_file, oai_client: AzureOpenAI, embed_deployment: str) -
 def init_search_client(index_name: str | None = None) -> Tuple[SearchClient, SearchIndexClient]:
     """
     Return (search_client, index_client).
-
+    Only API Key authentication is supported for agentic retrieval (see Azure docs).
     `index_name` – if provided, SearchClient will target that index,
     otherwise a dummy client pointing at the service root is returned.
     """
@@ -416,11 +417,9 @@ def init_search_client(index_name: str | None = None) -> Tuple[SearchClient, Sea
 def init_agent_client(agent_name: str) -> KnowledgeAgentRetrievalClient:
     """
     Create KnowledgeAgentRetrievalClient.
-    • If we have an Admin Key → use it.
-    • Otherwise rely on DefaultAzureCredential (AAD token).
-      (The SDK itself will request the token with the proper scope.)
+    Only API Key authentication is supported for agentic retrieval (see Azure docs).
     """
-    cred = _search_credential()   # Either AzureKeyCredential or DefaultAzureCredential
+    cred = _search_credential()   # Always AzureKeyCredential
     return KnowledgeAgentRetrievalClient(
         endpoint=env("AZURE_SEARCH_ENDPOINT"),
         agent_name=agent_name,
@@ -430,104 +429,79 @@ def init_agent_client(agent_name: str) -> KnowledgeAgentRetrievalClient:
 
 def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bool:
     """
-    Create (or recreate) an index identical to the quick‑start example:
-    https://learn.microsoft.com/azure/search/search-get-started-agentic-retrieval?pivots=python
+    Create (or recreate) an index + knowledge-agent עם מפתח-API ל-Azure OpenAI.
     """
     try:
-        # --- configurable bits pulled from environment ----------------------
-        azure_openai_endpoint   = env("AZURE_OPENAI_ENDPOINT_41")  # or without suffix
-        embedding_deployment    = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
-        embedding_model         = os.getenv("AZURE_OPENAI_EMBEDDING_MODEL",      "text-embedding-3-large")
-        VECTOR_DIM              = 3072
-        # --------------------------------------------------------------------
+        # ----------- הגדרות בסיסיות -----------------
+        azure_openai_endpoint = env("AZURE_OPENAI_ENDPOINT_41")
+        embedding_deployment  = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
+        embedding_model       = os.getenv("AZURE_OPENAI_EMBEDDING_MODEL",      "text-embedding-3-large")
+        VECTOR_DIM            = 3072
+        # Resolve OpenAI key – prefer suffix _41, fall back to generic
+        openai_api_key = os.getenv("AZURE_OPENAI_KEY_41") or os.getenv("AZURE_OPENAI_KEY") or ""
+
+        # ----------- Vectorizer עם api_key -----------
+        vec_params = AzureOpenAIVectorizerParameters(
+            resource_url    = azure_openai_endpoint,
+            deployment_name = embedding_deployment,
+            model_name      = embedding_model,
+            api_key         = openai_api_key,
+        )
 
         index_schema = SearchIndex(
-            name=name,
-            fields=[
-                SearchField(name="id",
-                            type="Edm.String",
-                            key=True,
-                            filterable=True,
-                            sortable=True,
-                            facetable=True),
-                SearchableField(
-                    name="page_chunk",
-                    type="Edm.String",
-                    analyzer_name="standard.lucene",
-                    filterable=False,
-                    sortable=False,
-                    facetable=False),
-                SearchField(name="page_embedding_text_3_large",
-                            type="Collection(Edm.Single)",
-                            stored=False,
-                            vector_search_dimensions=VECTOR_DIM,
-                            vector_search_profile_name="hnsw_text_3_large"),
-                SearchField(name="page_number",
-                            type="Edm.Int32",
-                            filterable=True,
-                            sortable=True,
-                            facetable=True),
-                SimpleField(name="source_file", type="Edm.String",
-                            filterable=True, facetable=True),
-                SimpleField(name="source", type="Edm.String",
-                            filterable=True, facetable=True),
-                SimpleField(name="url", type="Edm.String",
-                            filterable=False),
+            name   = name,
+            fields = [
+                SearchField(name="id", type="Edm.String", key=True, filterable=True, sortable=True, facetable=True),
+                SearchableField(name="page_chunk", type="Edm.String", analyzer_name="standard.lucene"),
+                SearchField(
+                    name="page_embedding_text_3_large",
+                    type="Collection(Edm.Single)",
+                    stored=False,
+                    vector_search_dimensions=VECTOR_DIM,
+                    vector_search_profile_name="hnsw_text_3_large",
+                ),
+                SimpleField(name="page_number",  type="Edm.Int32",  filterable=True, sortable=True, facetable=True),
+                SimpleField(name="source_file",  type="Edm.String", filterable=True, facetable=True),
+                SimpleField(name="source",       type="Edm.String", filterable=True, facetable=True),
+                SimpleField(name="url",          type="Edm.String"),
             ],
-            vector_search=VectorSearch(
-                profiles=[
-                    VectorSearchProfile(
-                        name="hnsw_text_3_large",
-                        algorithm_configuration_name="alg",
-                        vectorizer_name="azure_openai_text_3_large",   # ← fixed
-                    )
-                ],
-                algorithms=[
-                    HnswAlgorithmConfiguration(name="alg")
-                ],
-                vectorizers=[
-                    AzureOpenAIVectorizer(
-                        # Must match the profile name above
-                        vectorizer_name="azure_openai_text_3_large",
-                        parameters=AzureOpenAIVectorizerParameters(
-                            resource_url=azure_openai_endpoint,
-                            deployment_name=embedding_deployment,
-                            model_name=embedding_model,
-                        ),
-                    )
-                ],
+            vector_search = VectorSearch(
+                profiles   = [ VectorSearchProfile(name="hnsw_text_3_large", algorithm_configuration_name="alg",
+                                                   vectorizer_name="azure_openai_text_3_large") ],
+                algorithms = [ HnswAlgorithmConfiguration(name="alg") ],
+                vectorizers= [ AzureOpenAIVectorizer(vectorizer_name="azure_openai_text_3_large",
+                                                     parameters=vec_params) ],           # ← משתמשים ב-vec_params
             ),
-            semantic_search=SemanticSearch(
+            semantic_search = SemanticSearch(
                 default_configuration_name="semantic_config",
-                configurations=[
-                    SemanticConfiguration(
-                        name="semantic_config",
-                        prioritized_fields=SemanticPrioritizedFields(
-                            content_fields=[SemanticField(field_name="page_chunk")]
-                        ),
-                    )
-                ],
+                configurations=[ SemanticConfiguration(
+                    name="semantic_config",
+                    prioritized_fields=SemanticPrioritizedFields(
+                        content_fields=[ SemanticField(field_name="page_chunk") ]
+                    ),
+                )],
             ),
         )
 
-        # Delete existing index with same name (quick iteration)
+        # מוחקים אינדקס קודם כדי לעדכן במקום
         if name in [idx.name for idx in index_client.list_indexes()]:
             index_client.delete_index(name)
-
         index_client.create_or_update_index(index_schema)
-        # Create / update knowledge agent bound to this index + GPT-4.1
+
+        # ----------- Knowledge-Agent עם api_key -------
         agent = KnowledgeAgent(
-            name=f"{name}-agent",
-            models=[
+            name = f"{name}-agent",
+            models = [
                 KnowledgeAgentAzureOpenAIModel(
-                    azure_open_ai_parameters=AzureOpenAIVectorizerParameters(
-                        resource_url=azure_openai_endpoint,
-                        deployment_name=env("AZURE_OPENAI_DEPLOYMENT_41"),
-                        model_name="gpt-4.1",
+                    azure_open_ai_parameters = AzureOpenAIVectorizerParameters(
+                        resource_url    = azure_openai_endpoint,
+                        deployment_name = env("AZURE_OPENAI_DEPLOYMENT_41"),
+                        model_name      = "gpt-4.1",
+                        api_key         = openai_api_key,
                     )
                 )
             ],
-            target_indexes=[
+            target_indexes = [
                 KnowledgeAgentTargetIndex(index_name=name, default_reranker_threshold=2.5)
             ],
         )
@@ -718,6 +692,7 @@ def agentic_retrieval(agent_name: str, index_name: str, messages: list[dict]) ->
                 "source_file": getattr(c, "source_file", None),
                 "page_number": getattr(c, "page_number", None),
                 "score": getattr(c, "score", None),
+                "doc_key": getattr(c, "doc_key", None),
             }
             # prune empty keys
             chunks.append({k: v for k, v in chunk.items() if v is not None})
@@ -883,15 +858,7 @@ def run_streamlit_ui() -> None:
                     failed_ids: list[str] = []
 
                     def _on_error(action) -> None:
-                        """
-                        Callback for SearchIndexingBufferedSender — called once per failed
-                        indexing action. *action* is the document that failed.
-
-                        We record its ID (if present) so the UI can report how many pages
-                        were skipped.
-                        """
                         try:
-                            # `action` is usually the original document (dict) we provided
                             failed_ids.append(action.get("id", "?"))
                         except Exception as exc:
                             logging.error("⚠️  on_error callback failed to record ID: %s", exc)
@@ -901,7 +868,6 @@ def run_streamlit_ui() -> None:
                         endpoint=env("AZURE_SEARCH_ENDPOINT"),
                         index_name=st.session_state.selected_index,
                         credential=_search_credential(),
-                        # Flush every 100 docs or every 5 s – whichever comes first
                         batch_size=100,
                         auto_flush_interval=5,
                         on_error=_on_error,
@@ -914,31 +880,156 @@ def run_streamlit_ui() -> None:
                         sender.upload_documents(documents=docs)
                         total_pages += len(docs)
 
-                    # Ensure everything is sent
                     sender.close()
 
-                    ###############################################
-                    # Optional: wait until the documents are searchable
-                    ###############################################
                     try:
                         search_client, _ = init_search_client(st.session_state.selected_index)
-                        # Basic probe – wait until at least one document shows up
-                        import time
-                        for _ in range(30):                  # up to ~30 s
+                        for _ in range(30):
                             if search_client.get_document_count() > 0:
                                 break
                             time.sleep(1)
                     except Exception as probe_err:
                         logging.warning("Search probe failed: %s", probe_err)
 
-                    ###############################################
-                    # Report outcome
-                    ###############################################
                     success_pages = total_pages - len(failed_ids)
                     if failed_ids:
                         st.error(f"❌ {len(failed_ids)} pages failed to index – see logs for details.")
                     if success_pages:
                         st.success(f"✅ Indexed {success_pages} pages into **{st.session_state.selected_index}**.")
+
+            # --- SharePoint Ingestion Button and Logic ---
+            st.markdown("---")
+            st.subheader("📁 Ingest files from SharePoint Folder (any type)")
+            st.caption("You can ingest any file type from SharePoint. Select extensions below or leave blank for all.")
+
+            # --- SharePoint config UI ---
+            def _get_env_or_default(key, default=None):
+                v = os.getenv(key)
+                return v if v is not None and v != "" else default
+
+            if "sp_site_domain" not in st.session_state:
+                st.session_state.sp_site_domain = _get_env_or_default("SHAREPOINT_SITE_DOMAIN", "")
+            if "sp_site_name" not in st.session_state:
+                st.session_state.sp_site_name = _get_env_or_default("SHAREPOINT_SITE_NAME", "")
+            if "sp_drive_name" not in st.session_state:
+                st.session_state.sp_drive_name = _get_env_or_default("SHAREPOINT_DRIVE_NAME", "")
+            if "sp_folder_path" not in st.session_state:
+                st.session_state.sp_folder_path = _get_env_or_default("SHAREPOINT_SITE_FOLDER", "/")
+
+            st.text("Current SharePoint settings:")
+            st.session_state.sp_site_domain = st.text_input(
+                "SharePoint Site Domain (e.g. mngenvmcap623661.sharepoint.com)",
+                value=st.session_state.sp_site_domain or "",
+                key="sp_site_domain_input"
+            )
+            st.session_state.sp_site_name = st.text_input(
+                "SharePoint Site Name (blank or 'root' for root site)",
+                value=st.session_state.sp_site_name or "",
+                key="sp_site_name_input"
+            )
+            st.session_state.sp_drive_name = st.text_input(
+                "SharePoint Drive Name (e.g. Documents)",
+                value=st.session_state.sp_drive_name or "",
+                key="sp_drive_name_input"
+            )
+            st.session_state.sp_folder_path = st.text_input(
+                "SharePoint Folder Path (e.g. /ASKMANHAR)",
+                value=st.session_state.sp_folder_path or "/",
+                key="sp_folder_path_input"
+            )
+
+            file_type_input = st.text_input(
+                "File types to ingest (comma-separated, e.g. pdf,docx,xlsx,txt). Leave blank for all:",
+                value="pdf"
+            )
+            file_types = [ft.strip() for ft in file_type_input.split(",") if ft.strip()] if file_type_input else None
+            if st.button("🔗 Ingest from SharePoint"):
+                with st.spinner("Fetching and ingesting files from SharePoint…"):
+                    try:
+                        from connectors.sharepoint.sharepoint_data_reader import SharePointDataReader
+                        import io
+                        sharepoint_reader = SharePointDataReader()
+                        # Use user-specified values, fallback to env if blank
+                        site_domain = st.session_state.sp_site_domain or _get_env_or_default("SHAREPOINT_SITE_DOMAIN", "")
+                        site_name = st.session_state.sp_site_name or _get_env_or_default("SHAREPOINT_SITE_NAME", "")
+                        folder_path = st.session_state.sp_folder_path or _get_env_or_default("SHAREPOINT_SITE_FOLDER", "/")
+                        drive_name = st.session_state.sp_drive_name or _get_env_or_default("SHAREPOINT_DRIVE_NAME", "")
+                        sp_files = sharepoint_reader.retrieve_sharepoint_files_content(
+                            site_domain=site_domain,
+                            site_name=site_name,
+                            folder_path=folder_path,
+                            file_formats=file_types,
+                            drive_name=drive_name
+                        )
+                        if not sp_files:
+                            st.warning("No files found in the SharePoint folder.")
+                        else:
+                            total_files = len(sp_files)
+                            st.info(f"Found {total_files} file(s) in the SharePoint folder.")
+                            progress_bar = st.progress(0, text="Starting ingestion...")
+                            failed_ids = []
+                            sender = SearchIndexingBufferedSender(
+                                endpoint=env("AZURE_SEARCH_ENDPOINT"),
+                                index_name=st.session_state.selected_index,
+                                credential=_search_credential(),
+                                batch_size=100,
+                                auto_flush_interval=5,
+                                on_error=lambda action: failed_ids.append(action.get("id", "?")),
+                            )
+                            embed_deploy = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
+                            total_pages = 0
+                            for idx, file in enumerate(sp_files):
+                                file_bytes = file.get("content")
+                                fname = file.get("name")
+                                file_url = file.get("source") or file.get("webUrl")
+                                st.info(f"Processing file {idx+1}/{total_files}: {fname}")
+                                if not file_bytes or not fname:
+                                    progress_bar.progress((idx + 1) / total_files, text=f"Skipped file {idx+1}/{total_files}")
+                                    continue
+                                ext = os.path.splitext(fname)[-1].lower()
+                                docs = []
+                                if ext == ".pdf":
+                                    pdf_file = io.BytesIO(file_bytes)
+                                    pdf_file.name = fname
+                                    docs = pdf_to_documents(pdf_file, oai_client, embed_deploy)
+                                    # Patch each doc's url to SharePoint webUrl
+                                    for d in docs:
+                                        d["url"] = file_url
+                                else:
+                                    # For non-PDF, index as a single doc with content as bytes or text
+                                    try:
+                                        text_content = file_bytes.decode("utf-8", errors="ignore")
+                                    except Exception:
+                                        text_content = "[Binary file, preview not available]"
+                                    doc = {
+                                        "id": hashlib.md5(fname.encode()).hexdigest(),
+                                        "page_chunk": f"[{fname}] {text_content[:2000]}",
+                                        "page_embedding_text_3_large": [],
+                                        "page_number": 1,
+                                        "source_file": fname,
+                                        "source": fname,
+                                        "url": file_url,
+                                    }
+                                    docs = [doc]
+                                sender.upload_documents(documents=docs)
+                                total_pages += len(docs)
+                                progress_bar.progress((idx + 1) / total_files, text=f"Processed {idx+1}/{total_files} files")
+                            sender.close()
+                            try:
+                                search_client, _ = init_search_client(st.session_state.selected_index)
+                                for _ in range(30):
+                                    if search_client.get_document_count() > 0:
+                                        break
+                                    time.sleep(1)
+                            except Exception as probe_err:
+                                logging.warning("Search probe failed: %s", probe_err)
+                            success_pages = total_pages - len(failed_ids)
+                            if failed_ids:
+                                st.error(f"❌ {len(failed_ids)} pages failed to index – see logs for details.")
+                            if success_pages:
+                                st.success(f"✅ Indexed {success_pages} pages from SharePoint into **{st.session_state.selected_index}**.")
+                    except Exception as ex:
+                        st.error(f"SharePoint ingestion failed: {ex}")
 
     # ─────────────────── Tab 3 – Test Retrieval ──────────────────────────
     with tab_test:
@@ -977,7 +1068,7 @@ def run_streamlit_ui() -> None:
                     messages=ka_msgs,
                     citation_field_name="source_file",
                     include_doc_key=True,
-                    response_fields=["text", "source_file", "url", "doc_key"],
+                    response_fields=["id", "text", "source_file", "url", "doc_key"],
                     target_index_params=[
                         KnowledgeAgentIndexParams(
                             index_name=st.session_state.selected_index,
@@ -989,11 +1080,30 @@ def run_streamlit_ui() -> None:
                         max_output_size=int(st.session_state.max_output_size)
                     ),
                 )
+
+                # ── Debug info ─────────────────────────────
+                st.markdown("---")
+                st.markdown("#### 🐞 Debug Info")
+                st.write({
+                    "AZURE_SEARCH_ENDPOINT": os.getenv("AZURE_SEARCH_ENDPOINT"),
+                    "AZURE_SEARCH_KEY": os.getenv("AZURE_SEARCH_KEY"),
+                    "Selected Index": st.session_state.selected_index,
+                    "Auth Mode": "API Key" if os.getenv("AZURE_SEARCH_KEY") else "RBAC",
+                    "Request Payload": ka_req.dict() if hasattr(ka_req, 'dict') else str(ka_req)
+                })
+                st.markdown("---")
+
                 with st.spinner("Retrieving…"):
-                    # ---------- SDK call: retrieve chunks --------------------
-                    result = agent_client.knowledge_retrieval.retrieve(
-                        retrieval_request=ka_req
-                    )
+                    try:
+                        # ---------- SDK call: retrieve chunks --------------------
+                        result = agent_client.knowledge_retrieval.retrieve(
+                            retrieval_request=ka_req
+                        )
+                    except Exception as ex:
+                        import traceback
+                        st.error(f"Retrieval failed: {ex}")
+                        st.code(traceback.format_exc())
+                        st.stop()
 
                 # The agent returns a single assistant message whose first
                 # content item is a JSON string (list of chunks).
@@ -1028,11 +1138,17 @@ def run_streamlit_ui() -> None:
                 elif isinstance(parsed_json, list):
                     # Ensure each chunk has source_file (lookup by doc_key when missing)
                     for itm in parsed_json:
-                        if "source_file" not in itm and "doc_key" in itm:
+                        # Hydrate missing metadata from the indexed document (via doc_key)
+                        if "doc_key" in itm:
                             try:
                                 doc = search_client.get_document(key=itm["doc_key"])
-                                if doc and "source_file" in doc:
-                                    itm["source_file"] = doc["source_file"]
+                                if doc:
+                                    # Source filename
+                                    if "source_file" not in itm and "source_file" in doc:
+                                        itm["source_file"] = doc["source_file"]
+                                    # Public URL to original file
+                                    if (not itm.get("url")) and "url" in doc:
+                                        itm["url"] = doc["url"]
                             except Exception:
                                 pass  # ignore lookup errors
 
@@ -1076,15 +1192,35 @@ def run_streamlit_ui() -> None:
                     # Summarise via OpenAI (answer function defined earlier)
                     answer_text, usage_tok = answer(user_query, ctx_for_llm, oai_client, chat_params)
 
-                    # Build sources list (unique labels)
-                    seen = set()
+                    # Build sources list – keep one entry per source_file but make sure to
+                    # capture the first non‑empty URL we encounter.
+                    tmp_sources: dict[str, dict] = {}
                     for itm in parsed_json:
-                        src = itm.get("source_file") or _label(itm)
-                        if src not in seen:
-                            sources_data.append(
-                                {"source_file": src, "url": itm.get("url", "")}
-                            )
-                            seen.add(src)
+                        src_name = itm.get("source_file") or _label(itm)
+                        src_url  = itm.get("url", "")
+                        if src_name not in tmp_sources:
+                            tmp_sources[src_name] = {"source_file": src_name, "url": src_url}
+                        # If we saw this source before but URL was empty, update when we
+                        # finally encounter a non‑empty URL.
+                        elif (not tmp_sources[src_name]["url"]) and src_url:
+                            tmp_sources[src_name]["url"] = src_url
+
+                    sources_data = list(tmp_sources.values())
+                    # ---- Best‑effort URL enrichment (if still missing) ----
+                    for entry in sources_data:
+                        if entry.get("url"):
+                            continue  # already have one
+                        try:
+                            # Try to fetch first doc whose source_file matches exactly
+                            safe_src = entry["source_file"].replace("'", "''")  # escape single quotes for OData
+                            filt = f"source_file eq '{safe_src}'"
+                            hits = search_client.search(search_text="*", filter=filt, top=1)
+                            for h in hits:
+                                if "url" in h and h["url"]:
+                                    entry["url"] = h["url"]
+                                    break
+                        except Exception:
+                            pass  # silent failure; leave url empty
 
                 # ---------- Case 3: raw plain text -------------------------------
                 else:
@@ -1104,7 +1240,8 @@ def run_streamlit_ui() -> None:
                             name = src.get("source_file") or src.get("url") or "unknown"
                             url  = src.get("url")
                             if url:
-                                st.markdown(f"- [{name}]({url})")
+                                # clickable name **and** raw URL so the user always sees the link target
+                                st.markdown(f"- [{name}]({url}) – <{url}>")
                             else:
                                 st.markdown(f"- {name}")
 
@@ -1124,7 +1261,6 @@ def run_streamlit_ui() -> None:
                             st.json(json.loads(st.session_state.raw_index_json))
                         except Exception:
                             st.code(st.session_state.raw_index_json)
-
 
     # ─────────────────── Tab 5 – Function Config ──────────────────────────
     with tab_cfg:
@@ -1450,7 +1586,7 @@ def run_streamlit_ui() -> None:
                 "### How to respond\n"
                 "1. Parse the JSON the Function returns.\n"
                 "2. Reply with the **exact value of \"answer\"** – do NOT change it.\n"
-                "3. After that, print a short “Sources:” list. For each object in \"sources\" show its **source_file** (fallback to url if empty; if both missing, show the placeholder doc#).\n"
+                "3. After that, print a short “Sources:” list. For each object in \"sources\" show its **source_file**, and – if \"url\" is present and not empty – append “ – <url>”. If source_file is empty, show the url instead; if both are missing, use the placeholder doc#.\n"
                 "   Example:\n"
                 "   Sources:\n"
                 "   • המב 50.02.pdf\n"
@@ -1481,20 +1617,6 @@ def run_streamlit_ui() -> None:
             except Exception as err:
                 st.error("Failed to create agent via SDK:")
                 st.exception(err)
-def main() -> None:
-    # This script must be run with Streamlit.
-    if not _st_in_runtime():
-        print(
-            "🔴  CLI execution is no longer supported.\n"
-            "    Start the app with:\n\n"
-            "      streamlit run agentic-rag-demo.py\n",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    # Streamlit runtime detected → launch UI
-    run_streamlit_ui()
-
-
+# Add this guard to call run_streamlit_ui() when the script is run
 if __name__ == "__main__":
-    main()
+    run_streamlit_ui()
