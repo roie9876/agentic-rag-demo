@@ -239,14 +239,68 @@ class SharepointFilesIndexer:
                 return  # skip the chunking path
             # ---------- end direct index path ----------
 
-            # Chunk and index document
-            # ... (existing chunking and indexing code would go here, now guarded by if not self.direct_index)
-            # (The original code did not include this chunking code in the snippet, so no changes needed here)
-            # Assuming chunking code looks something like this (added per instructions):
-            # for chunk in chunks:
-            #     chunk["metadata_storage_path"] = document_url
-            #     chunk["url"] = document_url
-            #     await self.search_client.index_document(self.index_name, chunk)
+            # ---------- chunk & embed path (non‑direct_index) ----------
+            # For PDF we already had a dedicated chunker in ChunkerFactory;
+            # now we let the factory decide per file extension.
+            try:
+                ext = os.path.splitext(file_name)[-1].lower()
+                chunker = ChunkerFactory.create(ext)           # returns a BaseChunker
+            except Exception as e:
+                logging.warning(
+                    f"[sharepoint_files_indexer] No chunker for '{file_name}' (ext={ext}). "
+                    f"Skipping file. Error: {e}"
+                )
+                return
+
+            try:
+                chunks = chunker.chunk_document(
+                    content=document_bytes,
+                    file_name=file_name,
+                    url=document_url,
+                )
+            except Exception as e:
+                logging.error(
+                    f"[sharepoint_files_indexer] Chunking failed for '{file_name}': {e}"
+                )
+                return
+
+            if not chunks:
+                logging.warning(
+                    f"[sharepoint_files_indexer] No chunks produced for '{file_name}'."
+                )
+                return
+
+            # enrich each chunk with uniform metadata expected by the index schema
+            for i, ch in enumerate(chunks):
+                ch.update(
+                    {
+                        "parent_id": sharepoint_id,
+                        "metadata_storage_path": document_url,
+                        "metadata_storage_name": file_name,
+                        "metadata_storage_last_modified": last_modified_datetime,
+                        "metadata_security_id": read_access_entity,
+                        "source": "sharepoint",
+                        "url": document_url,
+                    }
+                )
+                # guarantee minimal required fields
+                ch.setdefault("id", f"{sharepoint_id}_{i}")
+                ch.setdefault("page_number", i + 1)
+                ch.setdefault("source_file", file_name)
+                ch.setdefault("page_embedding_text_3_large", [])
+
+            # upload in bulk
+            try:
+                await self.search_client.upload_documents(
+                    index_name=self.index_name, documents=chunks
+                )
+                logging.info(
+                    f"[sharepoint_files_indexer] Indexed {len(chunks)} chunks for '{file_name}'."
+                )
+            except Exception as e:
+                logging.error(
+                    f"[sharepoint_files_indexer] Failed to upload chunks for '{file_name}': {e}"
+                )
 
     async def run(self) -> None:
         """Main method to run the SharePoint files indexing process."""

@@ -192,7 +192,7 @@ if sys.platform == "darwin":
     register(MacViewer)
 
 
-class UnixViewer(abc.ABC, Viewer):
+class UnixViewer(Viewer):
     format = "PNG"
     options = {"compress_level": 1, "save_all": True}
 

@@ -68,7 +68,9 @@ if hasattr(Image.core, "drawwmf"):
 
 
 def _accept(prefix: bytes) -> bool:
-    return prefix.startswith((b"\xd7\xcd\xc6\x9a\x00\x00", b"\x01\x00\x00\x00"))
+    return (
+        prefix[:6] == b"\xd7\xcd\xc6\x9a\x00\x00" or prefix[:4] == b"\x01\x00\x00\x00"
+    )
 
 
 ##
@@ -80,18 +82,19 @@ class WmfStubImageFile(ImageFile.StubImageFile):
     format_description = "Windows Metafile"
 
     def _open(self) -> None:
+        self._inch = None
+
         # check placable header
         s = self.fp.read(80)
 
-        if s.startswith(b"\xd7\xcd\xc6\x9a\x00\x00"):
+        if s[:6] == b"\xd7\xcd\xc6\x9a\x00\x00":
             # placeable windows metafile
 
             # get units per inch
-            inch = word(s, 14)
-            if inch == 0:
+            self._inch = word(s, 14)
+            if self._inch == 0:
                 msg = "Invalid inch"
                 raise ValueError(msg)
-            self._inch: tuple[float, float] = inch, inch
 
             # get bounding box
             x0 = short(s, 6)
@@ -102,8 +105,8 @@ class WmfStubImageFile(ImageFile.StubImageFile):
             # normalize size to 72 dots per inch
             self.info["dpi"] = 72
             size = (
-                (x1 - x0) * self.info["dpi"] // inch,
-                (y1 - y0) * self.info["dpi"] // inch,
+                (x1 - x0) * self.info["dpi"] // self._inch,
+                (y1 - y0) * self.info["dpi"] // self._inch,
             )
 
             self.info["wmf_bbox"] = x0, y0, x1, y1
@@ -113,7 +116,7 @@ class WmfStubImageFile(ImageFile.StubImageFile):
                 msg = "Unsupported WMF file format"
                 raise SyntaxError(msg)
 
-        elif s.startswith(b"\x01\x00\x00\x00") and s[40:44] == b" EMF":
+        elif s[:4] == b"\x01\x00\x00\x00" and s[40:44] == b" EMF":
             # enhanced metafile
 
             # get bounding box
@@ -137,7 +140,6 @@ class WmfStubImageFile(ImageFile.StubImageFile):
                 self.info["dpi"] = xdpi
             else:
                 self.info["dpi"] = xdpi, ydpi
-            self._inch = xdpi, ydpi
 
         else:
             msg = "Unsupported file format"
@@ -153,17 +155,13 @@ class WmfStubImageFile(ImageFile.StubImageFile):
     def _load(self) -> ImageFile.StubHandler | None:
         return _handler
 
-    def load(
-        self, dpi: float | tuple[float, float] | None = None
-    ) -> Image.core.PixelAccess | None:
-        if dpi is not None:
+    def load(self, dpi: int | None = None) -> Image.core.PixelAccess | None:
+        if dpi is not None and self._inch is not None:
             self.info["dpi"] = dpi
             x0, y0, x1, y1 = self.info["wmf_bbox"]
-            if not isinstance(dpi, tuple):
-                dpi = dpi, dpi
             self._size = (
-                int((x1 - x0) * dpi[0] / self._inch[0]),
-                int((y1 - y0) * dpi[1] / self._inch[1]),
+                (x1 - x0) * self.info["dpi"] // self._inch,
+                (y1 - y0) * self.info["dpi"] // self._inch,
             )
         return super().load()
 

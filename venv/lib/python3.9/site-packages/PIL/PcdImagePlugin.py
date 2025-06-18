@@ -34,7 +34,7 @@ class PcdImageFile(ImageFile.ImageFile):
         self.fp.seek(2048)
         s = self.fp.read(2048)
 
-        if not s.startswith(b"PCD_"):
+        if s[:4] != b"PCD_":
             msg = "not a PCD file"
             raise SyntaxError(msg)
 

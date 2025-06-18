@@ -21,7 +21,7 @@ _VP8_MODES_BY_IDENTIFIER = {
 
 
 def _accept(prefix: bytes) -> bool | str:
-    is_riff_file_format = prefix.startswith(b"RIFF")
+    is_riff_file_format = prefix[:4] == b"RIFF"
     is_webp_file = prefix[8:12] == b"WEBP"
     is_valid_vp8_mode = prefix[12:16] in _VP8_MODES_BY_IDENTIFIER
 
@@ -46,7 +46,8 @@ class WebPImageFile(ImageFile.ImageFile):
         self._decoder = _webp.WebPAnimDecoder(self.fp.read())
 
         # Get info from decoder
-        self._size, loop_count, bgcolor, frame_count, mode = self._decoder.get_info()
+        width, height, loop_count, bgcolor, frame_count, mode = self._decoder.get_info()
+        self._size = width, height
         self.info["loop"] = loop_count
         bg_a, bg_r, bg_g, bg_b = (
             (bgcolor >> 24) & 0xFF,
@@ -222,7 +223,8 @@ def _save_all(im: Image.Image, fp: IO[bytes], filename: str | bytes) -> None:
 
     # Setup the WebP animation encoder
     enc = _webp.WebPAnimEncoder(
-        im.size,
+        im.size[0],
+        im.size[1],
         background,
         loop,
         minimize_size,
@@ -238,7 +240,7 @@ def _save_all(im: Image.Image, fp: IO[bytes], filename: str | bytes) -> None:
     cur_idx = im.tell()
     try:
         for ims in [im] + append_images:
-            # Get number of frames in this image
+            # Get # of frames in this image
             nfr = getattr(ims, "n_frames", 1)
 
             for idx in range(nfr):

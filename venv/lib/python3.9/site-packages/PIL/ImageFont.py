@@ -34,13 +34,12 @@ import warnings
 from enum import IntEnum
 from io import BytesIO
 from types import ModuleType
-from typing import IO, Any, BinaryIO, TypedDict, cast
+from typing import IO, TYPE_CHECKING, Any, BinaryIO, TypedDict, cast
 
 from . import Image, features
 from ._typing import StrOrBytesPath
 from ._util import DeferredError, is_path
 
-TYPE_CHECKING = False
 if TYPE_CHECKING:
     from . import ImageFile
     from ._imaging import ImagingFont
@@ -645,10 +644,10 @@ class FreeTypeFont:
             features,
             language,
             stroke_width,
-            kwargs.get("stroke_filled", False),
             anchor,
             ink,
-            start,
+            start[0],
+            start[1],
         )
 
     def font_variant(
