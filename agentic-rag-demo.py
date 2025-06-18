@@ -846,10 +846,18 @@ def run_streamlit_ui() -> None:
 
         st.divider()
         st.subheader("📄 Upload PDFs into Selected Index")
+        st.markdown(
+            "פורמטים נתמכים בהעלאה ישירה: **PDF, DOCX, PPTX, XLSX/CSV, TXT, MD, JSON**  \n"
+            "_קבצים אחרים יידחו אוטומטית או יועלו כ‑binary ללא חיפוש סמנטי._"
+        )
         if not st.session_state.selected_index:
             st.info("Select an index first.")
         else:
-            uploaded = st.file_uploader("Choose PDF files", type=["pdf"], accept_multiple_files=True)
+            uploaded = st.file_uploader(
+                "בחר קבצים (PDF, DOCX, PPTX, XLSX/CSV, TXT, MD, JSON, RTX, XML)",
+                type=["pdf", "docx", "pptx", "xlsx", "csv", "txt", "md", "json", "rtx", "xml"],
+                accept_multiple_files=True
+            )
             if uploaded and st.button("🚀 Ingest"):
                 with st.spinner("Embedding and uploading…"):
                     ###############################################
@@ -876,7 +884,40 @@ def run_streamlit_ui() -> None:
                     embed_deploy = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
                     total_pages = 0
                     for pf in uploaded:
-                        docs = pdf_to_documents(pf, oai_client, embed_deploy)
+                        ext = os.path.splitext(pf.name)[-1].lower()
+                        docs = []
+
+                        if ext == ".pdf":
+                            # --- PDF path -------------------------------------------------
+                            docs = pdf_to_documents(pf, oai_client, embed_deploy)
+
+                        else:
+                            # --- Textual / other path ------------------------------------
+                            try:
+                                raw_bytes = pf.getbuffer()
+                                # try utf‑8 first; fallback latin‑1
+                                try:
+                                    txt = raw_bytes.decode("utf-8")
+                                except UnicodeDecodeError:
+                                    txt = raw_bytes.decode("latin1", errors="ignore")
+                            except Exception as deco_err:
+                                logging.error("Failed to read %s: %s", pf.name, deco_err)
+                                txt = "[Binary file, preview not available]"
+
+                            # simple single‑chunk document; no embedding for now
+                            doc = {
+                                "id": hashlib.md5(pf.name.encode()).hexdigest(),
+                                "page_chunk": f"[{pf.name}] {txt[:2000]}",
+                                "page_embedding_text_3_large": [],
+                                "page_number": 1,
+                                "source_file": pf.name,
+                                "source": pf.name,
+                                "url": "",   # no public URL for local upload
+                            }
+                            docs = [doc]
+
+                        if not docs:
+                            continue
                         sender.upload_documents(documents=docs)
                         total_pages += len(docs)
 
@@ -900,7 +941,10 @@ def run_streamlit_ui() -> None:
             # --- SharePoint Ingestion Button and Logic ---
             st.markdown("---")
             st.subheader("📁 Ingest files from SharePoint Folder (any type)")
-            st.caption("You can ingest any file type from SharePoint. Select extensions below or leave blank for all.")
+            st.caption(
+                "פורמטים מומלצים: **PDF, DOCX, PPTX, XLSX/CSV, TXT, MD, JSON**.  "
+                "תוכל להזין ב‑תיבה למטה את סיומות קבצים מופרדות בפסיקים, או להשאיר ריק ל‑“הכול”."
+            )
 
             # --- SharePoint config UI ---
             def _get_env_or_default(key, default=None):

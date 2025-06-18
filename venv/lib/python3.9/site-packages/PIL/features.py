@@ -17,7 +17,6 @@ modules = {
     "freetype2": ("PIL._imagingft", "freetype2_version"),
     "littlecms2": ("PIL._imagingcms", "littlecms_version"),
     "webp": ("PIL._webp", "webpdecoder_version"),
-    "avif": ("PIL._avif", "libavif_version"),
 }
 
 
@@ -128,7 +127,6 @@ features: dict[str, tuple[str, str | bool, str | None]] = {
     "fribidi": ("PIL._imagingft", "HAVE_FRIBIDI", "fribidi_version"),
     "harfbuzz": ("PIL._imagingft", "HAVE_HARFBUZZ", "harfbuzz_version"),
     "libjpeg_turbo": ("PIL._imaging", "HAVE_LIBJPEGTURBO", "libjpeg_turbo_version"),
-    "mozjpeg": ("PIL._imaging", "HAVE_MOZJPEG", "libjpeg_turbo_version"),
     "zlib_ng": ("PIL._imaging", "HAVE_ZLIBNG", "zlib_ng_version"),
     "libimagequant": ("PIL._imaging", "HAVE_LIBIMAGEQUANT", "imagequant_version"),
     "xcb": ("PIL._imaging", "HAVE_XCB", None),
@@ -289,7 +287,6 @@ def pilinfo(out: IO[str] | None = None, supported_formats: bool = True) -> None:
         ("freetype2", "FREETYPE2"),
         ("littlecms2", "LITTLECMS2"),
         ("webp", "WEBP"),
-        ("avif", "AVIF"),
         ("jpg", "JPEG"),
         ("jpg_2000", "OPENJPEG (JPEG2000)"),
         ("zlib", "ZLIB (PNG/ZIP)"),
@@ -303,8 +300,7 @@ def pilinfo(out: IO[str] | None = None, supported_formats: bool = True) -> None:
             if name == "jpg":
                 libjpeg_turbo_version = version_feature("libjpeg_turbo")
                 if libjpeg_turbo_version is not None:
-                    v = "mozjpeg" if check_feature("mozjpeg") else "libjpeg-turbo"
-                    v += " " + libjpeg_turbo_version
+                    v = "libjpeg-turbo " + libjpeg_turbo_version
             if v is None:
                 v = version(name)
             if v is not None:

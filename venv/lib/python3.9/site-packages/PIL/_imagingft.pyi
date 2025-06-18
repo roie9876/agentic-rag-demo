@@ -28,10 +28,10 @@ class Font:
         features: list[str] | None,
         lang: str | None,
         stroke_width: float,
-        stroke_filled: bool,
         anchor: str | None,
         foreground_ink_long: int,
-        start: tuple[float, float],
+        x_start: float,
+        y_start: float,
         /,
     ) -> tuple[_imaging.ImagingCore, tuple[int, int]]: ...
     def getsize(

@@ -42,7 +42,7 @@ MODES = {
 
 
 def _accept(prefix: bytes) -> bool:
-    return prefix.startswith(olefile.MAGIC)
+    return prefix[:8] == olefile.MAGIC
 
 
 ##

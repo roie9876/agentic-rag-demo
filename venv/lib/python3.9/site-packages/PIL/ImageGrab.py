@@ -25,17 +25,12 @@ import tempfile
 
 from . import Image
 
-TYPE_CHECKING = False
-if TYPE_CHECKING:
-    from . import ImageWin
-
 
 def grab(
     bbox: tuple[int, int, int, int] | None = None,
     include_layered_windows: bool = False,
     all_screens: bool = False,
     xdisplay: str | None = None,
-    window: int | ImageWin.HWND | None = None,
 ) -> Image.Image:
     im: Image.Image
     if xdisplay is None:
@@ -56,12 +51,8 @@ def grab(
                 return im_resized
             return im
         elif sys.platform == "win32":
-            if window is not None:
-                all_screens = -1
             offset, size, data = Image.core.grabscreen_win32(
-                include_layered_windows,
-                all_screens,
-                int(window) if window is not None else 0,
+                include_layered_windows, all_screens
             )
             im = Image.frombytes(
                 "RGB",
@@ -86,16 +77,14 @@ def grab(
             raise OSError(msg)
         size, data = Image.core.grabscreen_x11(display_name)
     except OSError:
-        if display_name is None and sys.platform not in ("darwin", "win32"):
-            if shutil.which("gnome-screenshot"):
-                args = ["gnome-screenshot", "-f"]
-            elif shutil.which("spectacle"):
-                args = ["spectacle", "-n", "-b", "-f", "-o"]
-            else:
-                raise
+        if (
+            display_name is None
+            and sys.platform not in ("darwin", "win32")
+            and shutil.which("gnome-screenshot")
+        ):
             fh, filepath = tempfile.mkstemp(".png")
             os.close(fh)
-            subprocess.call(args + [filepath])
+            subprocess.call(["gnome-screenshot", "-f", filepath])
             im = Image.open(filepath)
             im.load()
             os.unlink(filepath)

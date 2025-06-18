@@ -50,7 +50,7 @@ import warnings
 from collections.abc import Iterator, MutableMapping
 from fractions import Fraction
 from numbers import Number, Rational
-from typing import IO, Any, Callable, NoReturn, cast
+from typing import IO, TYPE_CHECKING, Any, Callable, NoReturn, cast
 
 from . import ExifTags, Image, ImageFile, ImageOps, ImagePalette, TiffTags
 from ._binary import i16be as i16
@@ -58,10 +58,9 @@ from ._binary import i32be as i32
 from ._binary import o8
 from ._deprecate import deprecate
 from ._typing import StrOrBytesPath
-from ._util import DeferredError, is_path
+from ._util import is_path
 from .TiffTags import TYPES
 
-TYPE_CHECKING = False
 if TYPE_CHECKING:
     from ._typing import Buffer, IntegralLike
 
@@ -276,12 +275,12 @@ OPEN_INFO = {
 MAX_SAMPLESPERPIXEL = max(len(key_tp[4]) for key_tp in OPEN_INFO)
 
 PREFIXES = [
-    b"MM\x00\x2a",  # Valid TIFF header with big-endian byte order
-    b"II\x2a\x00",  # Valid TIFF header with little-endian byte order
-    b"MM\x2a\x00",  # Invalid TIFF header, assume big-endian
-    b"II\x00\x2a",  # Invalid TIFF header, assume little-endian
-    b"MM\x00\x2b",  # BigTIFF with big-endian byte order
-    b"II\x2b\x00",  # BigTIFF with little-endian byte order
+    b"MM\x00\x2A",  # Valid TIFF header with big-endian byte order
+    b"II\x2A\x00",  # Valid TIFF header with little-endian byte order
+    b"MM\x2A\x00",  # Invalid TIFF header, assume big-endian
+    b"II\x00\x2A",  # Invalid TIFF header, assume little-endian
+    b"MM\x00\x2B",  # BigTIFF with big-endian byte order
+    b"II\x2B\x00",  # BigTIFF with little-endian byte order
 ]
 
 if not getattr(Image.core, "libtiff_support_custom_tags", True):
@@ -289,7 +288,7 @@ if not getattr(Image.core, "libtiff_support_custom_tags", True):
 
 
 def _accept(prefix: bytes) -> bool:
-    return prefix.startswith(tuple(PREFIXES))
+    return prefix[:4] in PREFIXES
 
 
 def _limit_rational(
@@ -405,7 +404,7 @@ class IFDRational(Rational):
     def __repr__(self) -> str:
         return str(float(self._val))
 
-    def __hash__(self) -> int:  # type: ignore[override]
+    def __hash__(self) -> int:
         return self._val.__hash__()
 
     def __eq__(self, other: object) -> bool:
@@ -583,7 +582,7 @@ class ImageFileDirectory_v2(_IFDv2Base):
 
     def __init__(
         self,
-        ifh: bytes = b"II\x2a\x00\x00\x00\x00\x00",
+        ifh: bytes = b"II\x2A\x00\x00\x00\x00\x00",
         prefix: bytes | None = None,
         group: int | None = None,
     ) -> None:
@@ -950,7 +949,7 @@ class ImageFileDirectory_v2(_IFDv2Base):
             warnings.warn(str(msg))
             return
 
-    def _get_ifh(self) -> bytes:
+    def _get_ifh(self):
         ifh = self._prefix + self._pack("H", 43 if self._bigtiff else 42)
         if self._bigtiff:
             ifh += self._pack("HH", 8, 0)
@@ -963,16 +962,13 @@ class ImageFileDirectory_v2(_IFDv2Base):
         result = self._pack("Q" if self._bigtiff else "H", len(self._tags_v2))
 
         entries: list[tuple[int, int, int, bytes, bytes]] = []
-
-        fmt = "Q" if self._bigtiff else "L"
-        fmt_size = 8 if self._bigtiff else 4
-        offset += (
-            len(result) + len(self._tags_v2) * (20 if self._bigtiff else 12) + fmt_size
-        )
+        offset += len(result) + len(self._tags_v2) * (20 if self._bigtiff else 12) + 4
         stripoffsets = None
 
         # pass 1: convert tags to binary format
         # always write tags in ascending order
+        fmt = "Q" if self._bigtiff else "L"
+        fmt_size = 8 if self._bigtiff else 4
         for tag, value in sorted(self._tags_v2.items()):
             if tag == STRIPOFFSETS:
                 stripoffsets = len(entries)
@@ -1028,7 +1024,7 @@ class ImageFileDirectory_v2(_IFDv2Base):
             )
 
         # -- overwrite here for multi-page --
-        result += self._pack(fmt, 0)  # end of entries
+        result += b"\0\0\0\0"  # end of entries
 
         # pass 3: write auxiliary data to file
         for tag, typ, count, value, data in entries:
@@ -1223,8 +1219,6 @@ class TiffImageFile(ImageFile.ImageFile):
             self._im = None
 
     def _seek(self, frame: int) -> None:
-        if isinstance(self._fp, DeferredError):
-            raise self._fp.ex
         self.fp = self._fp
 
         while len(self._frame_pos) <= frame:
@@ -1283,7 +1277,7 @@ class TiffImageFile(ImageFile.ImageFile):
         blocks = {}
         val = self.tag_v2.get(ExifTags.Base.ImageResources)
         if val:
-            while val.startswith(b"8BIM"):
+            while val[:4] == b"8BIM":
                 id = i16(val[4:6])
                 n = math.ceil((val[6] + 1) / 2) * 2
                 size = i32(val[6 + n : 10 + n])
@@ -1412,8 +1406,7 @@ class TiffImageFile(ImageFile.ImageFile):
             self.fp = None  # might be shared
 
         if err < 0:
-            msg = f"decoder error {err}"
-            raise OSError(msg)
+            raise OSError(err)
 
         return Image.Image.load(self)
 
@@ -1587,7 +1580,7 @@ class TiffImageFile(ImageFile.ImageFile):
             # byte order.
             elif rawmode == "I;16":
                 rawmode = "I;16N"
-            elif rawmode.endswith((";16B", ";16L")):
+            elif rawmode.endswith(";16B") or rawmode.endswith(";16L"):
                 rawmode = rawmode[:-1] + "N"
 
             # Offset in the tile tuple is 0, we go from 0,0 to
@@ -1611,10 +1604,6 @@ class TiffImageFile(ImageFile.ImageFile):
                     raise ValueError(msg)
                 w = tilewidth
 
-            if w == xsize and h == ysize and self._planar_configuration != 2:
-                # Every tile covers the image. Only use the last offset
-                offsets = offsets[-1:]
-
             for offset in offsets:
                 if x + w > xsize:
                     stride = w * sum(bps_tuple) / 8  # bytes per line
@@ -1637,11 +1626,11 @@ class TiffImageFile(ImageFile.ImageFile):
                         args,
                     )
                 )
-                x += w
+                x = x + w
                 if x >= xsize:
                     x, y = 0, y + h
                     if y >= ysize:
-                        y = 0
+                        x = y = 0
                         layer += 1
         else:
             logger.debug("- unsupported data organization")
@@ -2054,21 +2043,20 @@ class AppendingTiffWriter(io.BytesIO):
         self.offsetOfNewPage = 0
 
         self.IIMM = iimm = self.f.read(4)
-        self._bigtiff = b"\x2b" in iimm
         if not iimm:
             # empty file - first page
             self.isFirst = True
             return
 
         self.isFirst = False
-        if iimm not in PREFIXES:
+        if iimm == b"II\x2a\x00":
+            self.setEndian("<")
+        elif iimm == b"MM\x00\x2a":
+            self.setEndian(">")
+        else:
             msg = "Invalid TIFF file header"
             raise RuntimeError(msg)
 
-        self.setEndian("<" if iimm.startswith(II) else ">")
-
-        if self._bigtiff:
-            self.f.seek(4, os.SEEK_CUR)
         self.skipIFDs()
         self.goToEnd()
 
@@ -2088,13 +2076,11 @@ class AppendingTiffWriter(io.BytesIO):
             msg = "IIMM of new page doesn't match IIMM of first page"
             raise RuntimeError(msg)
 
-        if self._bigtiff:
-            self.f.seek(4, os.SEEK_CUR)
-        ifd_offset = self._read(8 if self._bigtiff else 4)
+        ifd_offset = self.readLong()
         ifd_offset += self.offsetOfNewPage
         assert self.whereToWriteNewIFDOffset is not None
         self.f.seek(self.whereToWriteNewIFDOffset)
-        self._write(ifd_offset, 8 if self._bigtiff else 4)
+        self.writeLong(ifd_offset)
         self.f.seek(ifd_offset)
         self.fixIFD()
 
@@ -2140,20 +2126,18 @@ class AppendingTiffWriter(io.BytesIO):
         self.endian = endian
         self.longFmt = f"{self.endian}L"
         self.shortFmt = f"{self.endian}H"
-        self.tagFormat = f"{self.endian}HH" + ("Q" if self._bigtiff else "L")
+        self.tagFormat = f"{self.endian}HHL"
 
     def skipIFDs(self) -> None:
         while True:
-            ifd_offset = self._read(8 if self._bigtiff else 4)
+            ifd_offset = self.readLong()
             if ifd_offset == 0:
-                self.whereToWriteNewIFDOffset = self.f.tell() - (
-                    8 if self._bigtiff else 4
-                )
+                self.whereToWriteNewIFDOffset = self.f.tell() - 4
                 break
 
             self.f.seek(ifd_offset)
-            num_tags = self._read(8 if self._bigtiff else 2)
-            self.f.seek(num_tags * (20 if self._bigtiff else 12), os.SEEK_CUR)
+            num_tags = self.readShort()
+            self.f.seek(num_tags * 12, os.SEEK_CUR)
 
     def write(self, data: Buffer, /) -> int:
         return self.f.write(data)
@@ -2183,19 +2167,17 @@ class AppendingTiffWriter(io.BytesIO):
             msg = f"wrote only {bytes_written} bytes but wanted {expected}"
             raise RuntimeError(msg)
 
-    def _rewriteLast(
-        self, value: int, field_size: int, new_field_size: int = 0
-    ) -> None:
-        self.f.seek(-field_size, os.SEEK_CUR)
-        if not new_field_size:
-            new_field_size = field_size
-        bytes_written = self.f.write(
-            struct.pack(self.endian + self._fmt(new_field_size), value)
-        )
-        self._verify_bytes_written(bytes_written, new_field_size)
-
     def rewriteLastShortToLong(self, value: int) -> None:
-        self._rewriteLast(value, 2, 4)
+        self.f.seek(-2, os.SEEK_CUR)
+        bytes_written = self.f.write(struct.pack(self.longFmt, value))
+        self._verify_bytes_written(bytes_written, 4)
+
+    def _rewriteLast(self, value: int, field_size: int) -> None:
+        self.f.seek(-field_size, os.SEEK_CUR)
+        bytes_written = self.f.write(
+            struct.pack(self.endian + self._fmt(field_size), value)
+        )
+        self._verify_bytes_written(bytes_written, field_size)
 
     def rewriteLastShort(self, value: int) -> None:
         return self._rewriteLast(value, 2)
@@ -2203,17 +2185,13 @@ class AppendingTiffWriter(io.BytesIO):
     def rewriteLastLong(self, value: int) -> None:
         return self._rewriteLast(value, 4)
 
-    def _write(self, value: int, field_size: int) -> None:
-        bytes_written = self.f.write(
-            struct.pack(self.endian + self._fmt(field_size), value)
-        )
-        self._verify_bytes_written(bytes_written, field_size)
-
     def writeShort(self, value: int) -> None:
-        self._write(value, 2)
+        bytes_written = self.f.write(struct.pack(self.shortFmt, value))
+        self._verify_bytes_written(bytes_written, 2)
 
     def writeLong(self, value: int) -> None:
-        self._write(value, 4)
+        bytes_written = self.f.write(struct.pack(self.longFmt, value))
+        self._verify_bytes_written(bytes_written, 4)
 
     def close(self) -> None:
         self.finalize()
@@ -2221,37 +2199,24 @@ class AppendingTiffWriter(io.BytesIO):
             self.f.close()
 
     def fixIFD(self) -> None:
-        num_tags = self._read(8 if self._bigtiff else 2)
+        num_tags = self.readShort()
 
         for i in range(num_tags):
-            tag, field_type, count = struct.unpack(
-                self.tagFormat, self.f.read(12 if self._bigtiff else 8)
-            )
+            tag, field_type, count = struct.unpack(self.tagFormat, self.f.read(8))
 
             field_size = self.fieldSizes[field_type]
             total_size = field_size * count
-            fmt_size = 8 if self._bigtiff else 4
-            is_local = total_size <= fmt_size
+            is_local = total_size <= 4
             if not is_local:
-                offset = self._read(fmt_size) + self.offsetOfNewPage
-                self._rewriteLast(offset, fmt_size)
+                offset = self.readLong() + self.offsetOfNewPage
+                self.rewriteLastLong(offset)
 
             if tag in self.Tags:
                 cur_pos = self.f.tell()
 
-                logger.debug(
-                    "fixIFD: %s (%d) - type: %s (%d) - type size: %d - count: %d",
-                    TiffTags.lookup(tag).name,
-                    tag,
-                    TYPES.get(field_type, "unknown"),
-                    field_type,
-                    field_size,
-                    count,
-                )
-
                 if is_local:
                     self._fixOffsets(count, field_size)
-                    self.f.seek(cur_pos + fmt_size)
+                    self.f.seek(cur_pos + 4)
                 else:
                     self.f.seek(offset)
                     self._fixOffsets(count, field_size)
@@ -2259,33 +2224,24 @@ class AppendingTiffWriter(io.BytesIO):
 
             elif is_local:
                 # skip the locally stored value that is not an offset
-                self.f.seek(fmt_size, os.SEEK_CUR)
+                self.f.seek(4, os.SEEK_CUR)
 
     def _fixOffsets(self, count: int, field_size: int) -> None:
         for i in range(count):
             offset = self._read(field_size)
             offset += self.offsetOfNewPage
-
-            new_field_size = 0
-            if self._bigtiff and field_size in (2, 4) and offset >= 2**32:
-                # offset is now too large - we must convert long to long8
-                new_field_size = 8
-            elif field_size == 2 and offset >= 2**16:
-                # offset is now too large - we must convert short to long
-                new_field_size = 4
-            if new_field_size:
+            if field_size == 2 and offset >= 65536:
+                # offset is now too large - we must convert shorts to longs
                 if count != 1:
                     msg = "not implemented"
                     raise RuntimeError(msg)  # XXX TODO
 
                 # simple case - the offset is just one and therefore it is
                 # local (not referenced with another offset)
-                self._rewriteLast(offset, field_size, new_field_size)
-                # Move back past the new offset, past 'count', and before 'field_type'
-                rewind = -new_field_size - 4 - 2
-                self.f.seek(rewind, os.SEEK_CUR)
-                self.writeShort(new_field_size)  # rewrite the type
-                self.f.seek(2 - rewind, os.SEEK_CUR)
+                self.rewriteLastShortToLong(offset)
+                self.f.seek(-10, os.SEEK_CUR)
+                self.writeShort(TiffTags.LONG)  # rewrite the type to LONG
+                self.f.seek(8, os.SEEK_CUR)
             else:
                 self._rewriteLast(offset, field_size)
 
@@ -2302,7 +2258,9 @@ class AppendingTiffWriter(io.BytesIO):
 
 
 def _save_all(im: Image.Image, fp: IO[bytes], filename: str | bytes) -> None:
-    append_images = list(im.encoderinfo.get("append_images", []))
+    encoderinfo = im.encoderinfo.copy()
+    encoderconfig = im.encoderconfig
+    append_images = list(encoderinfo.get("append_images", []))
     if not hasattr(im, "n_frames") and not append_images:
         return _save(im, fp, filename)
 
@@ -2310,11 +2268,12 @@ def _save_all(im: Image.Image, fp: IO[bytes], filename: str | bytes) -> None:
     try:
         with AppendingTiffWriter(fp) as tf:
             for ims in [im] + append_images:
-                if not hasattr(ims, "encoderinfo"):
-                    ims.encoderinfo = {}
-                if not hasattr(ims, "encoderconfig"):
-                    ims.encoderconfig = ()
-                nfr = getattr(ims, "n_frames", 1)
+                ims.encoderinfo = encoderinfo
+                ims.encoderconfig = encoderconfig
+                if not hasattr(ims, "n_frames"):
+                    nfr = 1
+                else:
+                    nfr = ims.n_frames
 
                 for idx in range(nfr):
                     ims.seek(idx)
