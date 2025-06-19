@@ -9,14 +9,14 @@ from .chunkers.transcription_chunker import TranscriptionChunker
 from .chunkers.json_chunker import JSONChunker
 from .chunkers.nl2sql_chunker import NL2SQLChunker
 
-from tools import DocumentIntelligenceClient
+from tools.document_intelligence_client import DocumentIntelligenceClientWrapper
 from utils import get_filename_from_data, get_file_extension
 
 class ChunkerFactory:
     """Factory class to create appropriate chunker based on file extension."""
     
     def __init__(self):
-        docint_client = DocumentIntelligenceClient()
+        docint_client = DocumentIntelligenceClientWrapper()
         self.docint_40_api = docint_client.docint_40_api 
         _multimodality = os.getenv("MULTIMODAL", "false").lower()
         self.multimodality = _multimodality in ["true", "1", "yes"]
@@ -36,6 +36,38 @@ class ChunkerFactory:
         logging.info(f"[chunker_factory][{filename}] Creating chunker")
 
         extension = get_file_extension(filename)
+        
+        # Enhanced logging for user information
+        processing_info = {
+            'vtt': ('TranscriptionChunker', 'Video/Audio transcript processing'),
+            'json': ('JSONChunker', 'Structured JSON data extraction'),
+            'xlsx': ('SpreadsheetChunker', 'Excel spreadsheet data parsing'), 
+            'xls': ('SpreadsheetChunker', 'Excel spreadsheet data parsing'),
+            'pdf': ('DocAnalysisChunker' if not self.multimodality else 'MultimodalChunker', 
+                   'Azure Document Intelligence with OCR' + (' + multimodal figure processing' if self.multimodality else '')),
+            'png': ('DocAnalysisChunker' if not self.multimodality else 'MultimodalChunker',
+                   'Azure Document Intelligence image analysis' + (' + multimodal processing' if self.multimodality else '')),
+            'jpeg': ('DocAnalysisChunker' if not self.multimodality else 'MultimodalChunker', 
+                    'Azure Document Intelligence image analysis' + (' + multimodal processing' if self.multimodality else '')),
+            'jpg': ('DocAnalysisChunker' if not self.multimodality else 'MultimodalChunker',
+                   'Azure Document Intelligence image analysis' + (' + multimodal processing' if self.multimodality else '')),
+            'bmp': ('DocAnalysisChunker' if not self.multimodality else 'MultimodalChunker',
+                   'Azure Document Intelligence image analysis' + (' + multimodal processing' if self.multimodality else '')),
+            'tiff': ('DocAnalysisChunker' if not self.multimodality else 'MultimodalChunker',
+                    'Azure Document Intelligence image analysis' + (' + multimodal processing' if self.multimodality else '')),
+            'docx': ('DocAnalysisChunker' if self.docint_40_api else 'LangChainChunker (fallback)', 
+                    'Azure Document Intelligence layout analysis' + (' + multimodal processing' if self.multimodality else '') if self.docint_40_api else 'Basic text extraction (Doc Intelligence 4.0 not available)'),
+            'pptx': ('DocAnalysisChunker' if self.docint_40_api else 'LangChainChunker (fallback)',
+                    'Azure Document Intelligence presentation analysis' + (' + multimodal processing' if self.multimodality else '') if self.docint_40_api else 'Basic text extraction (Doc Intelligence 4.0 not available)'),
+            'nl2sql': ('NL2SQLChunker', 'Natural language to SQL processing'),
+        }
+        
+        if extension in processing_info:
+            chunker_type, description = processing_info[extension]
+            logging.info(f"[chunker_factory][{filename}] Using {chunker_type}: {description}")
+        else:
+            logging.info(f"[chunker_factory][{filename}] Using LangChainChunker: General text processing")
+        
         if extension == 'vtt':
             return TranscriptionChunker(data)
         elif extension == 'json':
@@ -54,8 +86,9 @@ class ChunkerFactory:
                 else:
                     return DocAnalysisChunker(data)
             else:
-                logging.info(f"[chunker_factory][{filename}] Processing 'pptx' and 'docx' files requires Doc Intelligence 4.0.")
-                raise RuntimeError("Processing 'pptx' and 'docx' files requires Doc Intelligence 4.0.")
+                logging.warning(f"[chunker_factory][{filename}] Document Intelligence 4.0 not available for {extension}. Falling back to LangChainChunker.")
+                # Fallback to LangChain chunker instead of throwing error
+                return LangChainChunker(data)
         elif extension in ('nl2sql'):
             return NL2SQLChunker(data)
         else:

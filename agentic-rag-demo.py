@@ -460,6 +460,17 @@ def _plainfile_to_docs(
                 "source_file": file_name,
                 "source": file_name,
                 "url": file_url or "",
+                # Enhanced metadata for fallback processing
+                "extraction_method": "simple_parser",
+                "document_type": {
+                    ".docx": "Word Document",
+                    ".pptx": "PowerPoint Presentation", 
+                    ".txt": "Text Document",
+                    ".md": "Markdown Document",
+                    ".json": "JSON Document"
+                }.get(ext, "Text Document"),
+                "has_figures": False,
+                "processing_timestamp": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             }
         )
     return docs
@@ -486,7 +497,8 @@ def _chunk_to_docs(
     # ── EARLY BYPASS for known troublesome formats ────────────────
     if ext in (".csv", ".xls", ".xlsx"):
         return _tabular_to_docs(file_name, file_bytes, file_url, oai_client, embed_deployment)
-    if ext in (".docx", ".pptx", ".txt", ".md", ".json"):
+    # Remove DOCX/PPTX from bypass to allow Document Intelligence processing
+    if ext in (".txt", ".md", ".json"):
         return _plainfile_to_docs(file_name, file_bytes, file_url, oai_client, embed_deployment)
     # ------------------------------------------------------------------
 
@@ -519,12 +531,35 @@ def _chunk_to_docs(
 
     docs = []
     label = f"[{file_name}] "                 # ← prefix for DocumentChunker path
+    
+    # Determine extraction method and document type
+    extraction_method = "document_intelligence" if ext in ('.pdf', '.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.docx', '.pptx', '.xlsx', '.html') else "langchain_chunker"
+    document_type = {
+        '.pdf': 'PDF Document',
+        '.docx': 'Word Document', 
+        '.pptx': 'PowerPoint Presentation',
+        '.xlsx': 'Excel Spreadsheet',
+        '.png': 'Image',
+        '.jpg': 'Image',
+        '.jpeg': 'Image',
+        '.bmp': 'Image',
+        '.tiff': 'Image',
+        '.html': 'HTML Document'
+    }.get(ext, 'Text Document')
+    
+    has_figures = False
+    
     for i, ch in enumerate(chunks):
         txt = ch.get("page_chunk") or ch.get("chunk") or ch.get("content") or ""
         if not txt:
             continue
         if not txt.startswith(label):         # avoid double-prefix
             txt = label + txt                 # ← prepend filename
+            
+        # Check if chunk contains figures (for multimodal processing)
+        if any(key in ch for key in ['figure_urls', 'figure_descriptions', 'combined_caption']):
+            has_figures = True
+            
         # embedding – reuse if present, else create with safe fallback
         vector = ch.get("page_embedding_text_3_large")
         if not vector:
@@ -542,6 +577,11 @@ def _chunk_to_docs(
                 "source_file": file_name,
                 "source": file_name,
                 "url": file_url or "",
+                # Enhanced metadata
+                "extraction_method": extraction_method,
+                "document_type": document_type, 
+                "has_figures": has_figures,
+                "processing_timestamp": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             }
         )
     return docs
@@ -561,6 +601,7 @@ def _tabular_to_docs(
     Turns every ~4 000-char slice of the table (as CSV text) into one doc.
     """
     import io, pandas as pd  # pandas is only needed here
+    ext = os.path.splitext(file_name)[-1].lower()  # Add ext definition
     # Extract plain text
     if file_name.lower().endswith(".csv"):
         txt = file_bytes.decode("utf-8", errors="ignore")
@@ -591,6 +632,15 @@ def _tabular_to_docs(
                 "source_file": file_name,
                 "source": file_name,
                 "url": file_url or "",
+                # Enhanced metadata for tabular processing
+                "extraction_method": "pandas_parser",
+                "document_type": {
+                    ".csv": "CSV Spreadsheet",
+                    ".xlsx": "Excel Spreadsheet", 
+                    ".xls": "Excel Spreadsheet"
+                }.get(ext, "Tabular Data"),
+                "has_figures": False,
+                "processing_timestamp": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             }
         )
     return docs
@@ -679,12 +729,17 @@ def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bo
                 SimpleField(name="source_file",  type="Edm.String", filterable=True, facetable=True),
                 SimpleField(name="source",       type="Edm.String", filterable=True, facetable=True),
                 SimpleField(name="url",          type="Edm.String"),
+                # Enhanced metadata fields for Document Intelligence processing
+                SimpleField(name="extraction_method", type="Edm.String", filterable=True, facetable=True),
+                SimpleField(name="document_type", type="Edm.String", filterable=True, facetable=True),
+                SimpleField(name="has_figures", type="Edm.Boolean", filterable=True, facetable=True),
+                SimpleField(name="processing_timestamp", type="Edm.DateTimeOffset", filterable=True, sortable=True),
             ],
             vector_search = VectorSearch(
                 profiles   = [ VectorSearchProfile(name="hnsw_text_3_large", algorithm_configuration_name="alg",
                                                    vectorizer_name="azure_openai_text_3_large") ],
                 algorithms = [ HnswAlgorithmConfiguration(name="alg") ],
-                vectorizers= [ AzureOpenAIVectorizer(vectorizer_name="azure_openai_text_3_large",
+                vectorizers= [ AzureOpenAIVectorizer(vectorizer_name="azure_open_ai_text_3_large",
                                                      parameters=vec_params) ],           # ← משתמשים ב-vec_params
             ),
             semantic_search = SemanticSearch(
@@ -936,6 +991,81 @@ def _zip_function_folder(func_dir: Path, zip_path: Path) -> None:
             if itm.is_file():
                 zf.write(itm, itm.relative_to(func_dir))
 # -----------------------------------------------------------------------------
+# Processing Information Display Helper
+# -----------------------------------------------------------------------------
+def display_processing_info(file_name: str, file_ext: str, chunker_type: str = None, show_capabilities: bool = True):
+    """
+    Display processing information for a file to help users understand 
+    what tools and methods are being used for extraction.
+    """
+    ext = file_ext.lower()
+    
+    # File type mapping
+    file_type_map = {
+        '.pdf': '📄 PDF Document',
+        '.docx': '📝 Word Document', 
+        '.pptx': '📊 PowerPoint Presentation',
+        '.xlsx': '📈 Excel Spreadsheet',
+        '.xls': '📈 Excel Spreadsheet',
+        '.csv': '📈 CSV Data',
+        '.png': '🖼️ PNG Image',
+        '.jpg': '🖼️ JPEG Image',
+        '.jpeg': '🖼️ JPEG Image',
+        '.bmp': '🖼️ BMP Image',
+        '.tiff': '🖼️ TIFF Image',
+        '.txt': '📝 Text File',
+        '.md': '📝 Markdown File',
+        '.json': '🔧 JSON Data',
+        '.html': '🌐 HTML Document',
+        '.vtt': '🎬 Video Transcript'
+    }
+    
+    # Processing method mapping
+    processing_map = {
+        '.pdf': ('🔍 Azure Document Intelligence', 'Advanced OCR, layout analysis, table extraction'),
+        '.docx': ('🔍 Azure Document Intelligence', 'Layout analysis, text extraction, formatting preservation'),
+        '.pptx': ('🔍 Azure Document Intelligence', 'Slide analysis, text extraction, layout understanding'),
+        '.xlsx': ('🐼 Pandas Parser', 'Structured spreadsheet data extraction'),
+        '.xls': ('🐼 Pandas Parser', 'Legacy Excel format processing'),
+        '.csv': ('🐼 Pandas Parser', 'Comma-separated values processing'),
+        '.png': ('🔍 Azure Document Intelligence', 'OCR text extraction from images'),
+        '.jpg': ('🔍 Azure Document Intelligence', 'OCR text extraction from images'),
+        '.jpeg': ('🔍 Azure Document Intelligence', 'OCR text extraction from images'),
+        '.bmp': ('🔍 Azure Document Intelligence', 'OCR text extraction from images'),
+        '.tiff': ('🔍 Azure Document Intelligence', 'OCR text extraction from images'),
+        '.txt': ('📝 Simple Text Parser', 'Direct text content extraction'),
+        '.md': ('📝 Markdown Parser', 'Markdown formatting with text extraction'),
+        '.json': ('🔧 JSON Parser', 'Structured JSON data processing'),
+        '.html': ('🔍 Azure Document Intelligence', 'HTML structure and content analysis'),
+        '.vtt': ('🎬 Transcript Processor', 'Video subtitle and timing extraction')
+    }
+    
+    file_type = file_type_map.get(ext, f'📄 {ext.upper()} File')
+    method, capabilities = processing_map.get(ext, ('🔗 LangChain Chunker', 'General purpose text processing'))
+    
+    info_container = st.container()
+    with info_container:
+        col1, col2, col3 = st.columns([2, 3, 3])
+        
+        with col1:
+            st.markdown(f"**File:** {file_type}")
+            st.markdown(f"📋 `{file_name}`")
+            
+        with col2:
+            st.markdown(f"**Processing Tool:** {method}")
+            if show_capabilities:
+                st.markdown(f"⚙️ {capabilities}")
+                
+        with col3:
+            if ext in ['.pdf', '.docx', '.pptx', '.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.html']:
+                st.markdown("🎯 **Advanced Features:**")
+                features = ["✅ Layout Analysis", "✅ Smart Text Extraction", "✅ OCR Processing"]
+                if chunker_type == "MultimodalChunker":
+                    features.extend(["✅ Figure Detection", "✅ AI Image Captions", "✅ Multimodal Processing"])
+                for feature in features:
+                    st.markdown(f"   {feature}")
+
+# -----------------------------------------------------------------------------
 # Streamlit UI wrapper (run with: streamlit run agentic-rag-demo.py)
 # -----------------------------------------------------------------------------
 def run_streamlit_ui() -> None:
@@ -997,7 +1127,7 @@ def run_streamlit_ui() -> None:
             _reload_env_and_restart()
 
     # ── Tabbed layout ─────────────────────────────────────────────────────
-    tab_create, tab_manage, tab_test, tab_cfg, tab_ai = st.tabs(
+    tab_health, tab_create, tab_manage, tab_test, tab_cfg, tab_ai = st.tabs(
         [
             "1️⃣ Create Index",
             "2️⃣ Manage Index",
@@ -1010,6 +1140,105 @@ def run_streamlit_ui() -> None:
 
     # Service‑root client used across tabs
     _, root_index_client = init_search_client()
+
+    # ─────────────────── Tab 0 – Health Check ────────────────────────────
+    with tab_health:
+        st.header("🩺 Service Health Check")
+        st.markdown("Check the status of all Azure services before processing documents or creating indexes.")
+        
+        col1, col2 = st.columns([1, 3])
+        
+        with col1:
+            if st.button("🔄 Check All Services", type="primary"):
+                with st.spinner("Checking services..."):
+                    results, all_healthy = check_all_services()
+                    st.session_state['health_results'] = results
+                    st.session_state['all_healthy'] = all_healthy
+        
+        with col2:
+            if st.button("🔄 Refresh Page"):
+                st.rerun()
+        
+        # Display results if available
+        if 'health_results' in st.session_state:
+            results = st.session_state['health_results']
+            all_healthy = st.session_state['all_healthy']
+            
+            if all_healthy:
+                st.success("🎉 All services are healthy and ready!")
+            else:
+                st.error("⚠️ Some services have issues. Please check configuration before proceeding to other tabs.")
+            
+            st.subheader("Service Status Details")
+            
+            for service_name, (status, message) in results.items():
+                with st.expander(f"{service_name} - {'✅ Healthy' if status else '❌ Issue'}", expanded=not status):
+                    if status:
+                        st.success(message)
+                    else:
+                        st.error(message)
+                        
+                        # Provide helpful tips for common issues
+                        if service_name == "OpenAI":
+                            st.info("💡 **Fix suggestions:**\n"
+                                   "- Check AZURE_OPENAI_ENDPOINT in .env\n"
+                                   "- Check AZURE_OPENAI_KEY in .env\n"
+                                   "- Verify the endpoint URL is correct\n"
+                                   "- Ensure the OpenAI resource is running")
+                        elif service_name == "AI Search":
+                            st.info("💡 **Fix suggestions:**\n"
+                                   "- Check AZURE_SEARCH_ENDPOINT in .env\n"
+                                   "- Check AZURE_SEARCH_KEY in .env (if using API key auth)\n"
+                                   "- Verify search service is running\n"
+                                   "- Check network connectivity\n"
+                                   "- Verify RBAC permissions if using Azure AD")
+                        elif service_name == "Document Intelligence":
+                            st.info("💡 **Fix suggestions:**\n"
+                                   "- Check DOCUMENT_INTEL_ENDPOINT in .env\n"
+                                   "- Check DOCUMENT_INTEL_KEY in .env\n"
+                                   "- Verify Document Intelligence service is provisioned\n"
+                                   "- Check if Document Intelligence 4.0 API is available in your region\n"
+                                   "- Note: DOCX/PPTX processing requires Document Intelligence 4.0")
+            
+            # Document Intelligence 4.0 special message
+            doc_int_result = results.get("Document Intelligence", (False, ""))
+            if doc_int_result[0] and "Not Available" in doc_int_result[1]:
+                st.warning("⚠️ **Note:** Document Intelligence 4.0 API is not available. DOCX and PPTX files will fall back to basic text extraction.")
+        
+        # Warning about proceeding without health check
+        if 'health_results' not in st.session_state:
+            st.info("ℹ️ **Tip:** Run a health check before proceeding to other tabs to ensure all services are available.")
+
+        # Display supported formats based on available services
+        with st.expander("ℹ️ Supported File Types", expanded=False):
+            st.markdown("""
+            ### Supported File Formats:
+            
+            **With Document Intelligence:**
+            - PDF files (OCR and text extraction)
+            - Images (PNG, JPG, JPEG, BMP, TIFF)
+            
+            **With Document Intelligence 4.0:**  
+            - Word documents (DOCX) with layout preservation
+            - PowerPoint presentations (PPTX) with layout preservation
+            
+            **Other Formats:**
+            - Excel spreadsheets (XLSX)
+            - CSV files
+            - Plain text (TXT)
+            - JSON files
+            - Markdown (MD)
+            """)
+            
+            if 'health_results' in st.session_state:
+                doc_int_result = st.session_state['health_results'].get("Document Intelligence", (False, ""))
+                if doc_int_result[0]:
+                    if "Not Available" in doc_int_result[1]:
+                        st.warning("⚠️ Document Intelligence 4.0 not available - DOCX/PPTX will use fallback processing.")
+                    else:
+                        st.success("✅ Document Intelligence 4.0 available - full DOCX/PPTX support enabled.")
+                else:
+                    st.error("❌ Document Intelligence not available - reduced format support.")
 
     # ─────────────────── Tab 1 – Create Index ────────────────────────────
     with tab_create:
@@ -1065,6 +1294,49 @@ def run_streamlit_ui() -> None:
             "פורמטים נתמכים בהעלאה ישירה: **PDF, DOCX, PPTX, XLSX/CSV, TXT, MD, JSON**  \n"
             "_קבצים אחרים יידחו אוטומטית או יועלו כ‑binary ללא חיפוש סמנטי._"
         )
+        
+        # Processing Information Section
+        with st.expander("ℹ️ Document Processing Information", expanded=False):
+            st.markdown("### 🔧 Processing Tools & Capabilities")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 🔍 Azure Document Intelligence")
+                st.markdown("**Supported:** PDF, DOCX, PPTX, Images (PNG, JPG, BMP, TIFF)")
+                st.markdown("**Capabilities:**")
+                st.markdown("✅ Advanced OCR with high accuracy")
+                st.markdown("✅ Layout and structure analysis")
+                st.markdown("✅ Table extraction and formatting")
+                st.markdown("✅ Figure and image detection")
+                st.markdown("✅ Page-aware text chunking")
+                st.markdown("✅ Multimodal processing (when enabled)")
+                
+                st.markdown("#### 🐼 Pandas Parser")
+                st.markdown("**Supported:** CSV, XLS, XLSX")
+                st.markdown("**Capabilities:**")
+                st.markdown("✅ Structured data extraction")
+                st.markdown("✅ Multiple sheet processing")
+                st.markdown("✅ Data type preservation")
+                
+            with col2:
+                st.markdown("#### 🔗 LangChain Chunker")
+                st.markdown("**Supported:** General text files")
+                st.markdown("**Capabilities:**")
+                st.markdown("✅ Smart text chunking")
+                st.markdown("✅ Overlap management")
+                st.markdown("✅ Token-aware splitting")
+                
+                st.markdown("#### 📝 Simple Parser")
+                st.markdown("**Supported:** TXT, MD, JSON")
+                st.markdown("**Capabilities:**")
+                st.markdown("✅ Direct text extraction")
+                st.markdown("✅ Format preservation")
+                st.markdown("✅ Fast processing")
+            
+            st.markdown("---")
+            st.info("💡 **Tip:** Office documents (DOCX, PPTX) now automatically use Azure Document Intelligence for better structure preservation and metadata extraction!")
+        
         if not st.session_state.selected_index:
             st.info("Select an index first.")
         else:
@@ -1074,6 +1346,13 @@ def run_streamlit_ui() -> None:
                 accept_multiple_files=True
             )
             if uploaded and st.button("🚀 Ingest"):
+                # Display processing overview
+                st.markdown("### 🔄 Processing Overview")
+                for pf in uploaded:
+                    ext = os.path.splitext(pf.name)[-1].lower()
+                    display_processing_info(pf.name, ext, show_capabilities=False)
+                    st.markdown("---")
+                
                 with st.spinner("Embedding and uploading…"):
                     ###############################################
                     # Build buffered sender with error‑tracking
@@ -1121,6 +1400,39 @@ def run_streamlit_ui() -> None:
 
                         if not docs:
                             continue
+                            
+                        # Show processing information to user
+                        processing_info = []
+                        for doc in docs[:1]:  # Check first document for processing info
+                            method = doc.get("extraction_method", "unknown")
+                            doc_type = doc.get("document_type", "Unknown")
+                            has_figs = doc.get("has_figures", False)
+                            
+                            if method == "document_intelligence":
+                                processing_info.append(f"📄 **{pf.name}** ({doc_type})")
+                                processing_info.append("🔍 **Processing Tool:** Azure Document Intelligence")
+                                processing_info.append("✨ **Capabilities:** Advanced layout analysis, OCR, table extraction")
+                                if has_figs:
+                                    processing_info.append("🖼️ **Figures:** Detected and processed with multimodal AI")
+                            elif method == "simple_parser":
+                                processing_info.append(f"📄 **{pf.name}** ({doc_type})")
+                                processing_info.append("🔧 **Processing Tool:** Simple text parser")
+                                processing_info.append("📝 **Capabilities:** Basic text extraction")
+                            elif method == "pandas_parser":
+                                processing_info.append(f"📊 **{pf.name}** ({doc_type})")
+                                processing_info.append("🐼 **Processing Tool:** Pandas data parser")
+                                processing_info.append("📈 **Capabilities:** Structured data extraction")
+                            elif method == "langchain_chunker":
+                                processing_info.append(f"📄 **{pf.name}** ({doc_type})")
+                                processing_info.append("🔗 **Processing Tool:** LangChain document loader")
+                                processing_info.append("⚡ **Capabilities:** Smart text chunking")
+                        
+                        if processing_info:
+                            with st.expander(f"ℹ️ Processing Details for {pf.name}", expanded=False):
+                                for info in processing_info:
+                                    st.markdown(info)
+                                st.markdown(f"📊 **Chunks Created:** {len(docs)}")
+                        
                         sender.upload_documents(documents=docs)
                         total_pages += len(docs)
 
@@ -1192,6 +1504,9 @@ def run_streamlit_ui() -> None:
             file_types = [ft.strip() for ft in file_type_input.split(",") if ft.strip()] if file_type_input else None
             if st.button("🔗 Ingest from SharePoint"):
                 with st.spinner("Fetching and ingesting files from SharePoint…"):
+                    # Initialize processing status display
+                    status_container = st.empty()
+                    
                     try:
                         from connectors.sharepoint.sharepoint_data_reader import SharePointDataReader
                         import io
@@ -1235,6 +1550,20 @@ def run_streamlit_ui() -> None:
                                     continue
                                 ext = os.path.splitext(fname)[-1].lower()
                                 docs = []
+                                
+                                # Show processing information
+                                processing_method = ""
+                                if ext == ".pdf":
+                                    processing_method = "📄 PDF → PyMuPDF text extraction"
+                                elif ext in ['.docx', '.pptx', '.xlsx', '.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.html']:
+                                    processing_method = f"🔍 {ext.upper()} → Azure Document Intelligence"
+                                elif ext in ['.csv', '.xls']:
+                                    processing_method = f"📊 {ext.upper()} → Pandas data parser"  
+                                else:
+                                    processing_method = f"📝 {ext.upper()} → LangChain text chunker"
+                                    
+                                st.info(f"Processing file {idx+1}/{total_files}: {fname} | {processing_method}")
+                                
                                 # Ensure file_bytes is bytes (robust base64 decode first)
                                 if not isinstance(file_bytes, bytes):
                                     if isinstance(file_bytes, str):
@@ -1373,105 +1702,6 @@ def run_streamlit_ui() -> None:
                             # ref_id may be missing – fall back to running index
                             "ref_id": getattr(c, "ref_id", None) or len(chunks),
                             "content": getattr(c, "text", ""),
-                            "url": getattr(c, "url", None) or sdoc.get("url"),
-                            # source_file could be stored as source_file or source
-                            "source_file": (
-                                getattr(c, "source_file", None)
-                                or sdoc.get("source_file")
-                                or sdoc.get("source")
-                            ),
-                            "page_number": getattr(c, "page_number", None) or sdoc.get("page_number"),
-                            "score": getattr(c, "score", None),
-                            # Try both direct attr and the doc id as doc_key
-                            "doc_key": getattr(c, "doc_key", None) or sdoc.get("id"),
-                        }
-                        # Remove keys with empty / None values
-                        chunks.append({k: v for k, v in chunk.items() if v not in (None, "")})
-
-                raw_text = json.dumps(chunks, ensure_ascii=False)
-                st.session_state.raw_index_json = raw_text
-                st.session_state.agent_messages.append(
-                    {"role": "assistant", "content": raw_text}
-                )
-
-                # ────────────────────────────────────────────────────────────
-                # Post‑processing: parse raw_text → build answer + citations
-                # ────────────────────────────────────────────────────────────
-                try:
-                    parsed_json = json.loads(raw_text)
-                except Exception:
-                    parsed_json = None      # plain text fallback
-
-                answer_text: str | None = None
-                sources_data: list[dict] = []
-                chunk_count = 0
-                usage_tok = 0
-                ctx_for_llm: str | None = None
-
-                # ---------- Case 1: {"answer": "...", "sources": [...]} ----------
-                if isinstance(parsed_json, dict) and "answer" in parsed_json:
-                    answer_text = parsed_json.get("answer", "").strip()
-                    sources_data = parsed_json.get("sources", [])
-                    chunk_count = 1
-
-                # ---------- Case 2: list‑of‑chunks (classic) ----------------------
-                elif isinstance(parsed_json, list):
-                    # Ensure each chunk has source_file (lookup by doc_key when missing)
-                    for itm in parsed_json:
-                        # Hydrate missing metadata from the indexed document (via doc_key)
-                        if "doc_key" in itm:
-                            try:
-                                doc = search_client.get_document(key=itm["doc_key"])
-                                if doc:
-                                    # Source filename
-                                    if "source_file" not in itm and "source_file" in doc:
-                                        itm["source_file"] = doc["source_file"]
-                                    # Public URL to original file
-                                    if (not itm.get("url")) and "url" in doc:
-                                        itm["url"] = doc["url"]
-                            except Exception:
-                                pass  # ignore lookup errors
-
-                    def _label(itm: dict) -> str:
-                        """
-                        Return the best human‑readable citation label,
-                        priority order:
-                          1) source_file   – injected during ingestion
-                          2) source        – alias field
-                          3) url           – last segment of URL
-                          4) filename embedded inside the content itself,
-                             e.g. text begins with “[my.pdf] …”
-                          5) fallback      – generic doc{ref_id}
-                        """
-                        # 1) explicit filename from metadata
-                        if itm.get("source_file"):
-                            return itm["source_file"]
-
-                        # 2) alias field (also set during ingestion)
-                        if itm.get("source"):
-                            return itm["source"]
-
-                        # 3) last path segment of URL
-                        if itm.get("url"):
-                            from pathlib import Path
-                            return Path(itm["url"]).name or itm["url"]
-
-                        # 4) extract leading “[filename] ...” from the content
-                        txt = itm.get("content", "")
-                        if txt.startswith("[") and "]" in txt[:150]:
-                            return txt[1 : txt.find("]")]
-
-                        # 5) generic fallback
-                        return f"doc{itm.get('ref_id', '?')}"
-
-                    ctx_for_llm = "\n\n".join(
-                        f"[{_label(itm)}] {itm.get('content','')}" for itm in parsed_json
-                    )
-                    chunk_count = len(parsed_json)
-
-                    # Summarise via OpenAI (answer function defined earlier)
-                    answer_text, usage_tok = answer(user_query, ctx_for_llm, oai_client, chat_params)
-
                     # Build sources list – keep one entry per source_file but make sure to
                     # capture the first non‑empty URL we encounter.
                     tmp_sources: dict[str, dict] = {}
@@ -1897,6 +2127,94 @@ def run_streamlit_ui() -> None:
             except Exception as err:
                 st.error("Failed to create agent via SDK:")
                 st.exception(err)
+
+##############################################################################
+# Health Check Functions 
+##############################################################################
+
+def check_openai_health():
+    """Check if OpenAI service is available and responsive."""
+    try:
+        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
+        key = os.getenv("AZURE_OPENAI_KEY", "").strip()
+        api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview")
+        
+        if not endpoint or not key:
+            return False, "Missing AZURE_OPENAI_ENDPOINT or AZURE_OPENAI_KEY"
+        
+        client = AzureOpenAI(
+            azure_endpoint=endpoint,
+            api_key=key,
+            api_version=api_version
+        )
+        
+        # Try to list models as a simple health check
+        models = client.models.list()
+        model_count = len(list(models))
+        
+        return True, f"✅ Connected successfully. Found {model_count} models."
+        
+    except Exception as e:
+        return False, f"❌ Error: {str(e)}"
+
+def check_ai_search_health():
+    """Check if Azure AI Search service is available and responsive."""
+    try:
+        search_endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "").strip()
+        if not search_endpoint:
+            return False, "Missing AZURE_SEARCH_ENDPOINT"
+        
+        credential = _search_credential()
+        client = SearchIndexClient(endpoint=search_endpoint, credential=credential)
+        
+        # Try to list indexes as a simple health check
+        indexes = list(client.list_indexes())
+        index_count = len(indexes)
+        
+        auth_mode = "Azure AD" if not os.getenv("AZURE_SEARCH_KEY") else "API Key"
+        rbac_status = "🟢 Enabled" if _rbac_enabled(search_endpoint) else "🔴 Disabled"
+        
+        return True, f"✅ Connected successfully. Found {index_count} indexes. Auth: {auth_mode}, RBAC: {rbac_status}"
+        
+    except Exception as e:
+        return False, f"❌ Error: {str(e)}"
+
+def check_document_intelligence_health():
+    """Check if Document Intelligence service is available and responsive."""
+    try:
+        from tools.document_intelligence_client import DocumentIntelligenceClientWrapper
+        
+        docint_wrapper = DocumentIntelligenceClientWrapper()
+        
+        if not docint_wrapper.client:
+            return False, "❌ Document Intelligence not configured (missing endpoint/key)"
+        
+        # Check if Document Intelligence 4.0 API is available
+        docint_40_status = "✅ Available" if docint_wrapper.docint_40_api else "❌ Not Available"
+        
+        # Try to get account properties as a health check
+        try:
+            properties = docint_wrapper.client.get_account_properties()
+            quota_info = f"Quota used: {getattr(properties, 'quota_used', 'N/A')}"
+        except Exception as e:
+            quota_info = f"Could not get quota info: {str(e)}"
+        
+        return True, f"✅ Connected successfully. Doc Intelligence 4.0: {docint_40_status}. {quota_info}"
+        
+    except Exception as e:
+        return False, f"❌ Error: {str(e)}"
+
+def check_all_services():
+    """Check health of all services and return summary."""
+    results = {
+        "OpenAI": check_openai_health(),
+        "AI Search": check_ai_search_health(), 
+        "Document Intelligence": check_document_intelligence_health()
+    }
+    
+    all_healthy = all(status for status, _ in results.values())
+    
+    return results, all_healthy
 # Add this guard to call run_streamlit_ui() when the script is run
 if __name__ == "__main__":
     run_streamlit_ui()

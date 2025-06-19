@@ -9,6 +9,7 @@ azure-identity>=1.15.0
 azure-core>=1.30.0
 azure-ai-agents==1.0.1
 azure-ai-projects
+azure.ai.documentintelligence
 
 streamlit>=1.33
 
