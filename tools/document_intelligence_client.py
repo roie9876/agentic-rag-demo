@@ -31,11 +31,31 @@ class DocumentIntelligenceClientWrapper:
 
         self.client = DocumentIntelligenceClient(ep, AzureKeyCredential(key))
 
-        # Quick probe: is the 2023-10-31-preview / v4.0 endpoint available?
-        # (Needed for DOCX / PPTX parsing.)
+        # Check for v4.0 API availability (needed for DOCX/PPTX parsing)
+        # We'll use multiple methods to detect 4.0 API availability
+        self.docint_40_api = False
         try:
-            # Will raise if the version is unsupported
-            _ = self.client.get_account_properties()
-            self.docint_40_api = True
+            # Method 1: Try to check if get_account_properties exists
+            if hasattr(self.client, 'get_account_properties'):
+                try:
+                    _ = self.client.get_account_properties()
+                    self.docint_40_api = True
+                except Exception:
+                    pass
+
+            # Method 2: Check API version through client._config.api_version if available
+            if hasattr(self.client, '_config') and hasattr(self.client._config, 'api_version'):
+                api_version = getattr(self.client._config, 'api_version', '')
+                if api_version:
+                    # Check for 4.0-compatible API versions
+                    if any(ver in api_version for ver in ['2023-10-31', '2024-', '4.0']):
+                        self.docint_40_api = True
+            
+            # Method 3: Check for methods that were added in 4.0 API
+            if hasattr(self.client, 'begin_analyze_document_from_url'):
+                # This method exists in newer versions
+                self.docint_40_api = True
+            
         except Exception:
+            # If any error occurs during version detection, assume 4.0 API is not available
             self.docint_40_api = False

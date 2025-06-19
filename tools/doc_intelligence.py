@@ -36,7 +36,14 @@ class DocumentIntelligenceClient:
             # remove a trailing slash if present
             self.endpoint = raw_endpoint.rstrip("/")
         elif service_name:
-            self.endpoint = f"https://{service_name}.cognitiveservices.azure.com"
+            # Check if service_name already contains a URL structure
+            if '.' in service_name:
+                if service_name.startswith('http'):
+                    self.endpoint = service_name.rstrip("/")
+                else:
+                    self.endpoint = f"https://{service_name}"
+            else:
+                self.endpoint = f"https://{service_name}.cognitiveservices.azure.com"
         else:
             logging.error("[docintelligence] You must set either 'AZURE_FORMREC_ENDPOINT' or 'AZURE_FORMREC_SERVICE'.")
             raise EnvironmentError("Neither 'AZURE_FORMREC_ENDPOINT' nor 'AZURE_FORMREC_SERVICE' is set.")
@@ -74,16 +81,23 @@ class DocumentIntelligenceClient:
             self.output_content_format = "markdown"            
             self.analyze_output_options = "figures"
 
-        # Initialize the ChainedTokenCredential with ManagedIdentityCredential and AzureCliCredential
-        try:
-            self.credential = ChainedTokenCredential(
-                ManagedIdentityCredential(),
-                AzureCliCredential()
-            )
-            logging.debug("[docintelligence] Initialized ChainedTokenCredential with ManagedIdentityCredential and AzureCliCredential.")
-        except Exception as e:
-            logging.error(f"[docintelligence] Failed to initialize ChainedTokenCredential: {e}")
-            raise
+        # Get the API key for authentication
+        self.api_key = os.getenv('AZURE_FORMREC_KEY', os.getenv('DOCUMENT_INTEL_KEY', ''))
+        
+        if not self.api_key:
+            # Initialize the ChainedTokenCredential with ManagedIdentityCredential and AzureCliCredential as fallback
+            try:
+                self.credential = ChainedTokenCredential(
+                    ManagedIdentityCredential(),
+                    AzureCliCredential()
+                )
+                logging.debug("[docintelligence] Initialized ChainedTokenCredential with ManagedIdentityCredential and AzureCliCredential.")
+            except Exception as e:
+                logging.error(f"[docintelligence] Failed to initialize ChainedTokenCredential and no API key found: {e}")
+                raise
+        else:
+            self.credential = None
+            logging.debug("[docintelligence] Using API key authentication")
 
     def _get_file_extension(self, filepath):
         """
@@ -162,14 +176,20 @@ class DocumentIntelligenceClient:
             request_endpoint += f"&output={self.analyze_output_options}"
 
         # Set request headers
+        headers = {
+            "Content-Type": content_type,
+            "x-ms-useragent": "gpt-rag/1.0.0"
+        }
+        
         try:
-            token = self.credential.get_token("https://cognitiveservices.azure.com/.default")
-            headers = {
-                "Content-Type": content_type,
-                "Authorization": f"Bearer {token.token}",
-                "x-ms-useragent": "gpt-rag/1.0.0"
-            }
-            logging.debug(f"[docintelligence][{filename}] Retrieved authentication token.")
+            # Use API key if available, otherwise fall back to token authentication
+            if self.api_key:
+                headers["Ocp-Apim-Subscription-Key"] = self.api_key
+                logging.debug(f"[docintelligence][{filename}] Using API key authentication.")
+            else:
+                token = self.credential.get_token("https://cognitiveservices.azure.com/.default")
+                headers["Authorization"] = f"Bearer {token.token}"
+                logging.debug(f"[docintelligence][{filename}] Retrieved authentication token.")
         except ClientAuthenticationError as e:
             error_message = f"Authentication failed: {e}"
             logging.error(f"[docintelligence][{filename}] {error_message}")
@@ -283,14 +303,20 @@ class DocumentIntelligenceClient:
             request_endpoint += f"&output={self.analyze_output_options}"
 
         # Set request headers
+        headers = {
+            "Content-Type": self._get_content_type(file_ext),
+            "x-ms-useragent": "gpt-rag/1.0.0"
+        }
+        
         try:
-            token = self.credential.get_token("https://cognitiveservices.azure.com/.default")
-            headers = {
-                "Content-Type": self._get_content_type(file_ext),
-                "Authorization": f"Bearer {token.token}",
-                "x-ms-useragent": "gpt-rag/1.0.0"
-            }
-            logging.debug(f"[docintelligence][{filename}] Retrieved authentication token.")
+            # Use API key if available, otherwise fall back to token authentication
+            if self.api_key:
+                headers["Ocp-Apim-Subscription-Key"] = self.api_key
+                logging.debug(f"[docintelligence][{filename}] Using API key authentication.")
+            else:
+                token = self.credential.get_token("https://cognitiveservices.azure.com/.default")
+                headers["Authorization"] = f"Bearer {token.token}"
+                logging.debug(f"[docintelligence][{filename}] Retrieved authentication token.")
         except ClientAuthenticationError as e:
             error_message = f"Authentication failed: {e}"
             logging.error(f"[docintelligence][{filename}] {error_message}")
@@ -419,12 +445,20 @@ class DocumentIntelligenceClient:
         endpoint = f"{self.endpoint}/documentintelligence/documentModels/{model_id}/analyzeResults/{result_id}/figures/{figure_id}"
         url = f"{endpoint}?api-version={self.api_version}"
 
+        headers = {
+            "x-ms-useragent": "gpt-rag/1.0.0"
+        }
+        
         try:
-            token = self.credential.get_token("https://cognitiveservices.azure.com/.default")
-            headers = {
-                "Authorization": f"Bearer {token.token}",
-                "x-ms-useragent": "gpt-rag/1.0.0"
-            }
+            # Use API key if available, otherwise fall back to token authentication
+            if self.api_key:
+                headers["Ocp-Apim-Subscription-Key"] = self.api_key
+                logging.debug(f"[docintelligence] Using API key authentication for fetching figure {figure_id}.")
+            else:
+                token = self.credential.get_token("https://cognitiveservices.azure.com/.default")
+                headers["Authorization"] = f"Bearer {token.token}"
+                logging.debug(f"[docintelligence] Using token authentication for fetching figure {figure_id}.")
+            
             logging.debug(f"[docintelligence] Fetching figure {figure_id} from result {result_id} using model {model_id}.")
         except ClientAuthenticationError as e:
             error_message = f"Authentication failed while fetching figure: {e}"

@@ -24,7 +24,7 @@ import time  # Added to support sleep in polling after ingestion
 import base64  # Added to encode document bytes for _chunk_to_docs
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 # ---------------------------------------------------------------------------
 # Streamlit Data‑Editor helper (works on both old & new versions)
@@ -729,6 +729,7 @@ def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bo
                 SimpleField(name="source_file",  type="Edm.String", filterable=True, facetable=True),
                 SimpleField(name="source",       type="Edm.String", filterable=True, facetable=True),
                 SimpleField(name="url",          type="Edm.String"),
+                SimpleField(name="doc_key",      type="Edm.String", filterable=True), # Added for proper document referencing
                 # Enhanced metadata fields for Document Intelligence processing
                 SimpleField(name="extraction_method", type="Edm.String", filterable=True, facetable=True),
                 SimpleField(name="document_type", type="Edm.String", filterable=True, facetable=True),
@@ -737,7 +738,7 @@ def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bo
             ],
             vector_search = VectorSearch(
                 profiles   = [ VectorSearchProfile(name="hnsw_text_3_large", algorithm_configuration_name="alg",
-                                                   vectorizer_name="azure_openai_text_3_large") ],
+                                                   vectorizer_name="azure_open_ai_text_3_large") ],
                 algorithms = [ HnswAlgorithmConfiguration(name="alg") ],
                 vectorizers= [ AzureOpenAIVectorizer(vectorizer_name="azure_open_ai_text_3_large",
                                                      parameters=vec_params) ],           # ← משתמשים ב-vec_params
@@ -1069,6 +1070,10 @@ def display_processing_info(file_name: str, file_ext: str, chunker_type: str = N
 # Streamlit UI wrapper (run with: streamlit run agentic-rag-demo.py)
 # -----------------------------------------------------------------------------
 def run_streamlit_ui() -> None:
+    # Import required modules at function scope to avoid namespace conflicts
+    import json as local_json
+    from subprocess import check_output, CalledProcessError
+    
     st.set_page_config(page_title="Agentic RAG Demo", page_icon="📚", layout="wide")
 
     # ── persistent session keys ───────────────────────────────────────────
@@ -1127,121 +1132,104 @@ def run_streamlit_ui() -> None:
             _reload_env_and_restart()
 
     # ── Tabbed layout ─────────────────────────────────────────────────────
-    tab_health, tab_create, tab_manage, tab_test, tab_cfg, tab_ai = st.tabs(
-        [
-            "1️⃣ Create Index",
-            "2️⃣ Manage Index",
-            "3️⃣ Test Retrieval",
-            "⚙️ Function Config",
-            "🤖 AI Foundry Agent"
-        ]
-    )
-    
-
-    # Service‑root client used across tabs
+    # Initialize search client for index management
     _, root_index_client = init_search_client()
+    
+    tab_health, tab_create, tab_manage, tab_test, tab_cfg, tab_ai = st.tabs([
+        "🩺 Health Check",
+        "1️⃣ Create Index",
+        "2️⃣ Manage Index",
+        "3️⃣ Test Retrieval",
+        "⚙️ Function Config",
+        "🤖 AI Foundry Agent"
+    ])
 
-    # ─────────────────── Tab 0 – Health Check ────────────────────────────
+    # Health Check Tab
     with tab_health:
         st.header("🩺 Service Health Check")
-        st.markdown("Check the status of all Azure services before processing documents or creating indexes.")
-        
-        col1, col2 = st.columns([1, 3])
-        
-        with col1:
-            if st.button("🔄 Check All Services", type="primary"):
-                with st.spinner("Checking services..."):
-                    results, all_healthy = check_all_services()
-                    st.session_state['health_results'] = results
-                    st.session_state['all_healthy'] = all_healthy
-        
-        with col2:
-            if st.button("🔄 Refresh Page"):
-                st.rerun()
-        
-        # Display results if available
+        if st.button("🔄 Check All Services"):
+            with st.spinner("Checking services..."):
+                results, all_healthy, troubleshooting = check_all_services()
+                st.session_state['health_results'] = results
+                st.session_state['all_healthy'] = all_healthy
+                st.session_state['troubleshooting'] = troubleshooting
+
         if 'health_results' in st.session_state:
             results = st.session_state['health_results']
             all_healthy = st.session_state['all_healthy']
+            troubleshooting = st.session_state.get('troubleshooting', None)
             
             if all_healthy:
                 st.success("🎉 All services are healthy and ready!")
             else:
                 st.error("⚠️ Some services have issues. Please check configuration before proceeding to other tabs.")
             
-            st.subheader("Service Status Details")
-            
             for service_name, (status, message) in results.items():
-                with st.expander(f"{service_name} - {'✅ Healthy' if status else '❌ Issue'}", expanded=not status):
-                    if status:
-                        st.success(message)
-                    else:
-                        st.error(message)
+                st.write(f"**{service_name}:** {'✅' if status else '❌'} {message}")
+                
+                # Show troubleshooting info for failed services
+                if not status and troubleshooting and service_name in troubleshooting:
+                    with st.expander(f"Troubleshooting steps for {service_name}", expanded=True):
+                        st.info(troubleshooting[service_name])
                         
-                        # Provide helpful tips for common issues
+                        # For OpenAI specifically, add environment variable inspection
                         if service_name == "OpenAI":
-                            st.info("💡 **Fix suggestions:**\n"
-                                   "- Check AZURE_OPENAI_ENDPOINT in .env\n"
-                                   "- Check AZURE_OPENAI_KEY in .env\n"
-                                   "- Verify the endpoint URL is correct\n"
-                                   "- Ensure the OpenAI resource is running")
-                        elif service_name == "AI Search":
-                            st.info("💡 **Fix suggestions:**\n"
-                                   "- Check AZURE_SEARCH_ENDPOINT in .env\n"
-                                   "- Check AZURE_SEARCH_KEY in .env (if using API key auth)\n"
-                                   "- Verify search service is running\n"
-                                   "- Check network connectivity\n"
-                                   "- Verify RBAC permissions if using Azure AD")
-                        elif service_name == "Document Intelligence":
-                            st.info("💡 **Fix suggestions:**\n"
-                                   "- Check DOCUMENT_INTEL_ENDPOINT in .env\n"
-                                   "- Check DOCUMENT_INTEL_KEY in .env\n"
-                                   "- Verify Document Intelligence service is provisioned\n"
-                                   "- Check if Document Intelligence 4.0 API is available in your region\n"
-                                   "- Note: DOCX/PPTX processing requires Document Intelligence 4.0")
-            
-            # Document Intelligence 4.0 special message
-            doc_int_result = results.get("Document Intelligence", (False, ""))
-            if doc_int_result[0] and "Not Available" in doc_int_result[1]:
-                st.warning("⚠️ **Note:** Document Intelligence 4.0 API is not available. DOCX and PPTX files will fall back to basic text extraction.")
-        
-        # Warning about proceeding without health check
-        if 'health_results' not in st.session_state:
-            st.info("ℹ️ **Tip:** Run a health check before proceeding to other tabs to ensure all services are available.")
+                            st.subheader("Environment Variables")
+                            env_vars = {
+                                "AZURE_OPENAI_ENDPOINT": os.getenv("AZURE_OPENAI_ENDPOINT", "Not set"),
+                                "AZURE_OPENAI_ENDPOINT_41": os.getenv("AZURE_OPENAI_ENDPOINT_41", "Not set"),
+                                "AZURE_OPENAI_ENDPOINT_4o": os.getenv("AZURE_OPENAI_ENDPOINT_4o", "Not set"),
+                                "AZURE_OPENAI_KEY": "***" if os.getenv("AZURE_OPENAI_KEY") else "Not set",
+                                "AZURE_OPENAI_KEY_41": "***" if os.getenv("AZURE_OPENAI_KEY_41") else "Not set",
+                                "AZURE_OPENAI_API_VERSION": os.getenv("AZURE_OPENAI_API_VERSION", "Not set"),
+                                "AZURE_OPENAI_DEPLOYMENT": os.getenv("AZURE_OPENAI_DEPLOYMENT", "Not set"),
+                                "AZURE_OPENAI_DEPLOYMENT_41": os.getenv("AZURE_OPENAI_DEPLOYMENT_41", "Not set"),
+                            }
+                            st.json(env_vars)
+                # For Document Intelligence service, add more information even if it's healthy
+                if service_name == "Document Intelligence":
+                    with st.expander("Document Intelligence Details", expanded=False):
+                        st.markdown("""
+                        ### Document Intelligence API Versions
+                        
+                        **Document Intelligence 4.0 API (2023-10-31 and newer):**
+                        - Supports DOCX and PPTX parsing
+                        - Enhanced layout analysis
+                        - More accurate results
+                        - Available in 2023-10-31-preview, 2024-02-29-preview, 2024-11-30 (General Availability) API versions
+                        
+                        **Document Intelligence 3.x API:**
+                        - Basic document analysis features
+                        - PDF and image analysis
+                        - Limited DOCX/PPTX support
+                        
+                        If your service says "❌ Not Available" for Document Intelligence 4.0 API but you believe you have a 4.0 API resource,
+                        check that you're using the correct environment variables that point to your 4.0 API resource.
+                        """)
+                        
+                        # Show environment variables
+                        st.subheader("Environment Variables")
+                        env_vars = {
+                            "DOCUMENT_INTEL_ENDPOINT": os.getenv("DOCUMENT_INTEL_ENDPOINT", "Not set"),
+                            "DOCUMENT_INTEL_KEY": "***" if os.getenv("DOCUMENT_INTEL_KEY") else "Not set",
+                            "AZURE_FORMREC_SERVICE": os.getenv("AZURE_FORMREC_SERVICE", "Not set (legacy)"),
+                            "AZURE_FORMREC_KEY": "***" if os.getenv("AZURE_FORMREC_KEY") else "Not set (legacy)",
+                            "AZURE_FORMRECOGNIZER_ENDPOINT": os.getenv("AZURE_FORMRECOGNIZER_ENDPOINT", "Not set (legacy)"),
+                            "AZURE_FORMRECOGNIZER_KEY": "***" if os.getenv("AZURE_FORMRECOGNIZER_KEY") else "Not set (legacy)"
+                        }
+                        st.json(env_vars)
+        else:
+            st.info("Run a health check before using other tabs.")
 
-        # Display supported formats based on available services
-        with st.expander("ℹ️ Supported File Types", expanded=False):
-            st.markdown("""
-            ### Supported File Formats:
-            
-            **With Document Intelligence:**
-            - PDF files (OCR and text extraction)
-            - Images (PNG, JPG, JPEG, BMP, TIFF)
-            
-            **With Document Intelligence 4.0:**  
-            - Word documents (DOCX) with layout preservation
-            - PowerPoint presentations (PPTX) with layout preservation
-            
-            **Other Formats:**
-            - Excel spreadsheets (XLSX)
-            - CSV files
-            - Plain text (TXT)
-            - JSON files
-            - Markdown (MD)
-            """)
-            
-            if 'health_results' in st.session_state:
-                doc_int_result = st.session_state['health_results'].get("Document Intelligence", (False, ""))
-                if doc_int_result[0]:
-                    if "Not Available" in doc_int_result[1]:
-                        st.warning("⚠️ Document Intelligence 4.0 not available - DOCX/PPTX will use fallback processing.")
-                    else:
-                        st.success("✅ Document Intelligence 4.0 available - full DOCX/PPTX support enabled.")
-                else:
-                    st.error("❌ Document Intelligence not available - reduced format support.")
+    # Block other tabs if health check not passed
+    def health_block():
+        if 'all_healthy' not in st.session_state or not st.session_state['all_healthy']:
+            st.warning("Please run the Health Check tab and ensure all services are healthy before using this feature.")
+            st.stop()
 
-    # ─────────────────── Tab 1 – Create Index ────────────────────────────
+    # ─────────────────── Tab 1 – Create Index ────────────────────────────
     with tab_create:
+        health_block()
         st.header("🆕 Create a New Vector Index")
         new_index_name = st.text_input("New index name", placeholder="e.g. agentic‑vectors")
         if st.button("➕ Create new index") and new_index_name:
@@ -1253,6 +1241,7 @@ def run_streamlit_ui() -> None:
 
     # ─────────────────── Tab 2 – Manage Index ────────────────────────────
     with tab_manage:
+        health_block()
         st.header("📂 Manage Existing Index")
 
         # refresh list each render
@@ -1548,38 +1537,6 @@ def run_streamlit_ui() -> None:
                                 if not file_bytes or not fname:
                                     progress_bar.progress((idx + 1) / total_files, text=f"Skipped file {idx+1}/{total_files}")
                                     continue
-                                ext = os.path.splitext(fname)[-1].lower()
-                                docs = []
-                                
-                                # Show processing information
-                                processing_method = ""
-                                if ext == ".pdf":
-                                    processing_method = "📄 PDF → PyMuPDF text extraction"
-                                elif ext in ['.docx', '.pptx', '.xlsx', '.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.html']:
-                                    processing_method = f"🔍 {ext.upper()} → Azure Document Intelligence"
-                                elif ext in ['.csv', '.xls']:
-                                    processing_method = f"📊 {ext.upper()} → Pandas data parser"  
-                                else:
-                                    processing_method = f"📝 {ext.upper()} → LangChain text chunker"
-                                    
-                                st.info(f"Processing file {idx+1}/{total_files}: {fname} | {processing_method}")
-                                
-                                # Ensure file_bytes is bytes (robust base64 decode first)
-                                if not isinstance(file_bytes, bytes):
-                                    if isinstance(file_bytes, str):
-                                        try:
-                                            file_bytes = base64.b64decode(file_bytes, validate=True)
-                                        except Exception:
-                                            try:
-                                                file_bytes = file_bytes.encode('utf-8')
-                                            except Exception as enc_err:
-                                                logging.error(f"[SharePoint] Could not convert file_bytes for {fname}: {type(file_bytes)} {str(file_bytes)[:100]} | Error: {enc_err}")
-                                                continue
-                                    else:
-                                        logging.error(f"[SharePoint] file_bytes for {fname} is not bytes or str: {type(file_bytes)} | Value: {str(file_bytes)[:100]}")
-                                        continue
-                                if ext == ".pdf":
-                                    pdf_file = io.BytesIO(file_bytes)
                                     pdf_file.name = fname
                                     docs = pdf_to_documents(pdf_file, oai_client, embed_deploy)
                                     # Patch each doc's url to SharePoint webUrl
@@ -1619,6 +1576,7 @@ def run_streamlit_ui() -> None:
 
     # ─────────────────── Tab 3 – Test Retrieval ──────────────────────────
     with tab_test:
+        health_block()
         st.header("🧪 Test Retrieval Without Foundry")
         if not st.session_state.selected_index:
             st.info("Select or create an index in the previous tabs.")
@@ -1698,26 +1656,66 @@ def run_streamlit_ui() -> None:
                         # Prefer metadata carried inside the underlying Search document
                         sdoc = getattr(c, "search_document", {}) or {}
 
+                        # Get the doc_key or source_file from the search document
+                        doc_key = sdoc.get("doc_key", "")
+                        source_file = sdoc.get("source_file", "")
+                        
+                        # Extract document name from the content if it's formatted like "[filename] content"
+                        content_text = getattr(c, "text", "")
+                        extracted_filename = ""
+                        if content_text and content_text.startswith("[") and "]" in content_text:
+                            extracted_filename = content_text.split("]")[0].strip("[")
+                            # Clean up the content if we found a filename prefix
+                            content_text = content_text[content_text.find("]")+1:].strip()
+                        
                         chunk = {
                             # ref_id may be missing – fall back to running index
                             "ref_id": getattr(c, "ref_id", None) or len(chunks),
-                            "content": getattr(c, "text", ""),
-                    # Build sources list – keep one entry per source_file but make sure to
-                    # capture the first non‑empty URL we encounter.
-                    tmp_sources: dict[str, dict] = {}
-                    for itm in parsed_json:
-                        src_name = itm.get("source_file") or _label(itm)
-                        src_url  = itm.get("url", "")
-                        if src_name not in tmp_sources:
-                            tmp_sources[src_name] = {"source_file": src_name, "url": src_url}
-                        # If we saw this source before but URL was empty, update when we
-                        # finally encounter a non‑empty URL.
-                        elif (not tmp_sources[src_name]["url"]) and src_url:
-                            tmp_sources[src_name]["url"] = src_url
+                            "content": content_text,
+                            "source_file": source_file or doc_key or extracted_filename,
+                            "doc_key": doc_key or source_file or extracted_filename,
+                            "url": sdoc.get("url", "")
+                        }
+                        chunks.append(chunk)
+                
+                # Build sources list – keep one entry per source_file but make sure to
+                # capture the first non‑empty URL we encounter.
+                # ------------------ build deduplicated sources list ------------------
+                tmp_sources: Dict[str, dict] = {}
+                for itm in chunks:
+                    # Handle both dictionary and string/JSON formats
+                    if isinstance(itm, str) and itm.startswith('{'):
+                        try:
+                            itm = local_json.loads(itm)
+                        except:
+                            pass  # Keep as is if parsing fails
+                    
+                    # Extract source name from content if needed
+                    content = itm.get("content", "")
+                    extracted_src = ""
+                    if isinstance(content, str) and content.startswith('[') and ']' in content:
+                        extracted_src = content[1:content.find(']')]
+                    
+                    # Prefer source_file or doc_key; fall back to extracted name, URL or generic "doc#" label
+                    src_name = (
+                        itm.get("source_file")
+                        or itm.get("doc_key")
+                        or extracted_src
+                        or itm.get("url")
+                        or f"doc{itm.get('ref_id', itm.get('id', '?'))}"
+                    )
+                    src_url = itm.get("url", "")
+                    # First time we see this source → add entry
+                    if src_name not in tmp_sources:
+                        tmp_sources[src_name] = {"source_file": src_name, "url": src_url}
+                    # If we saw this source before but URL was empty, update when we
+                    # finally encounter a non‑empty URL.
+                    elif not tmp_sources[src_name]["url"] and src_url:
+                        tmp_sources[src_name]["url"] = src_url
 
-                    sources_data = list(tmp_sources.values())
-                    # ---- Best‑effort URL enrichment (if still missing) ----
-                    for entry in sources_data:
+                sources_data = list(tmp_sources.values())
+                # ---- Best‑effort URL enrichment (if still missing) ----
+                for entry in sources_data:
                         if entry.get("url"):
                             continue  # already have one
                         try:
@@ -1732,23 +1730,71 @@ def run_streamlit_ui() -> None:
                         except Exception:
                             pass  # silent failure; leave url empty
 
-                # ---------- Case 3: raw plain text -------------------------------
-                else:
-                    answer_text = raw_text.strip()
-                    chunk_count = 1
+                # ---------- Generate answer from chunks -------------------------------
+                # Debug chunk data
+                st.expander("Debug Chunks Data").json(chunks)
+                
+                # Format each chunk with its source file for better readability
+                formatted_chunks = []
+                for c in chunks:
+                    source = c.get("source_file") or c.get("doc_key") or f"doc{c.get('ref_id')}"
+                    content = c.get("content", "")
+                    formatted_chunks.append(f"**Source: {source}**\n\n{content}\n")
+                
+                answer_text = "\n\n---\n\n".join(formatted_chunks) if chunks else ""
+                answer_text = answer_text.strip()
+                chunk_count = len(chunks) if chunks else 0
 
                 # Update sidebar diagnostic
                 st.session_state.dbg_chunks = chunk_count
 
                 # ---------- Render assistant answer ------------------------------
                 with st.chat_message("assistant"):
-                    st.markdown(answer_text or "*[לא התקבלה תשובה]*", unsafe_allow_html=True)
+                    # Ensure we're displaying plain text, not raw JSON
+                    formatted_answer = answer_text
+                    if isinstance(answer_text, str) and answer_text.startswith('{"'):
+                        try:
+                            # Try to parse it as JSON and extract content field
+                            parsed = local_json.loads(answer_text)
+                            if isinstance(parsed, list):
+                                formatted_chunks = []
+                                for item in parsed:
+                                    if isinstance(item, dict) and 'content' in item:
+                                        chunk_content = item['content']
+                                        src = None
+                                        if chunk_content.startswith('[') and ']' in chunk_content:
+                                            src_end = chunk_content.find(']')
+                                            src = chunk_content[1:src_end]
+                                            chunk_content = chunk_content[src_end+1:].strip()
+                                        if src:
+                                            formatted_chunks.append(f"**Source: {src}**\n\n{chunk_content}")
+                                        else:
+                                            formatted_chunks.append(chunk_content)
+                                formatted_answer = "\n\n---\n\n".join(formatted_chunks)
+                            elif isinstance(parsed, dict) and 'content' in parsed:
+                                formatted_answer = parsed['content']
+                        except:
+                            # If JSON parsing fails, keep the original text
+                            pass
+                    
+                    st.markdown(formatted_answer or "*[לא התקבלה תשובה]*", unsafe_allow_html=True)
 
                     if sources_data:
                         st.markdown("#### 🗂️ Sources")
                         for src in sources_data:
-                            name = src.get("source_file") or src.get("url") or "unknown"
-                            url  = src.get("url")
+                            if isinstance(src, str) and src.startswith('{'):
+                                # Try to parse JSON source
+                                try:
+                                    parsed_src = local_json.loads(src)
+                                    name = parsed_src.get("source_file") or parsed_src.get("content", "").split("]")[0].strip("[") if "]" in parsed_src.get("content", "") else "unknown"
+                                    url = parsed_src.get("url", "")
+                                except:
+                                    name = "unknown"
+                                    url = ""
+                            else:
+                                name = src.get("source_file") or src.get("url") or "unknown"
+                                url = src.get("url", "")
+                                
                             if url:
                                 # clickable name **and** raw URL so the user always sees the link target
                                 st.markdown(f"- [{name}]({url}) – <{url}>")
@@ -1756,12 +1802,33 @@ def run_streamlit_ui() -> None:
                                 st.markdown(f"- {name}")
 
                 # ---------- Optional: raw chunks for debugging --------------------
-                if isinstance(parsed_json, list) and parsed_json:
+                if isinstance(chunks, list) and chunks:
                     with st.expander("📚 Chunks", expanded=False):
-                        for itm in parsed_json:
-                            ref = itm.get("ref_id", itm.get("id", '?'))
-                            st.markdown(f"**📄 מקור {ref}:**")
-                            st.write(itm.get("content", ""))
+                        for itm in chunks:
+                            # Handle both dictionary and string/JSON formats
+                            if isinstance(itm, str) and itm.startswith('{'):
+                                try:
+                                    import json
+                                    parsed_itm = local_json.loads(itm)
+                                    ref = parsed_itm.get("ref_id", parsed_itm.get("id", '?'))
+                                    content = parsed_itm.get("content", "")
+                                    if content.startswith('[') and ']' in content:
+                                        src = content[1:content.find(']')]
+                                        content = content[content.find(']')+1:].strip()
+                                        st.markdown(f"**📄 מקור {ref} - {src}:**")
+                                    else:
+                                        st.markdown(f"**📄 מקור {ref}:**")
+                                    st.write(content)
+                                except:
+                                    st.write(itm)  # Fallback to raw display
+                            else:
+                                ref = itm.get("ref_id", itm.get("id", '?'))
+                                source = itm.get("source_file", "") or itm.get("doc_key", "")
+                                if source:
+                                    st.markdown(f"**📄 מקור {ref} - {source}:**")
+                                else:
+                                    st.markdown(f"**📄 מקור {ref}:**")
+                                st.write(itm.get("content", ""))
                             st.markdown("---")
 
                 # ── Raw payload for debugging ───────────────────────────
@@ -1809,7 +1876,7 @@ def run_streamlit_ui() -> None:
         # Try to pre‑fill subscription from az cli
         from subprocess import check_output, CalledProcessError
         try:
-            az_acc = json.loads(check_output(["az", "account", "show", "-o", "json"], text=True))
+            az_acc = local_json.loads(check_output(["az", "account", "show", "-o", "json"], text=True))
             cli_sub = az_acc.get("id", "")
         except (CalledProcessError, FileNotFoundError, json.JSONDecodeError):
             cli_sub = ""
@@ -1821,6 +1888,7 @@ def run_streamlit_ui() -> None:
         if sub_id:
             from azure.identity import DefaultAzureCredential
             from azure.mgmt.web import WebSiteManagementClient
+
             try:
                 _wcli_tmp = WebSiteManagementClient(DefaultAzureCredential(), sub_id)
                 for site in _wcli_tmp.web_apps.list():
@@ -1976,6 +2044,7 @@ def run_streamlit_ui() -> None:
 
     # ─────────────────── Single Tab – AI Foundry Agent ──────────────────
     with tab_ai:
+        health_block()
         st.header("🤖 Create AI Foundry Agent")
 
         func_map     = st.session_state.get("func_map", {})
@@ -2132,28 +2201,83 @@ def run_streamlit_ui() -> None:
 # Health Check Functions 
 ##############################################################################
 
+def _init_openai_for_health_check():
+    """
+    Initialize OpenAI client for health check using the same logic as the rest of the app.
+    Tries all available endpoint configurations in order: _41, _4o, and base.
+    """
+    clients = []
+    models_tried = []
+    
+    # Try the endpoint variations in priority order
+    for suffix in ["_41", "_4o", ""]:
+        endpoint = os.getenv(f"AZURE_OPENAI_ENDPOINT{suffix}", "").strip()
+        key = os.getenv(f"AZURE_OPENAI_KEY{suffix}", "").strip()
+        api_version = os.getenv(f"AZURE_OPENAI_API_VERSION{suffix}", "2024-05-01-preview").strip()
+        deployment = os.getenv(f"AZURE_OPENAI_DEPLOYMENT{suffix}", "").strip()
+        
+        if endpoint and (key or os.getenv("AZURE_TENANT_ID")):
+            models_tried.append(f"AZURE_OPENAI_ENDPOINT{suffix}")
+            try:
+                # If key is available, use key auth
+                if key:
+                    client = AzureOpenAI(
+                        azure_endpoint=endpoint,
+                        api_key=key,
+                        api_version=api_version
+                    )
+                else:
+                    # Use AAD auth as fallback
+                    aad = get_bearer_token_provider(
+                        DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+                    )
+                    client = AzureOpenAI(
+                        azure_endpoint=endpoint,
+                        azure_ad_token_provider=aad,
+                        api_version=api_version
+                    )
+                    
+                # Verify the client works by listing models
+                models = list(client.models.list())
+                clients.append({
+                    "client": client,
+                    "endpoint_var": f"AZURE_OPENAI_ENDPOINT{suffix}",
+                    "endpoint": endpoint,
+                    "models": models,
+                    "deployment": deployment
+                })
+            except Exception:
+                pass
+    
+    if not clients:
+        return None, models_tried
+    
+    # Return the first working client
+    return clients[0], models_tried
+
 def check_openai_health():
     """Check if OpenAI service is available and responsive."""
     try:
-        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
-        key = os.getenv("AZURE_OPENAI_KEY", "").strip()
-        api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview")
+        client_info, models_tried = _init_openai_for_health_check()
         
-        if not endpoint or not key:
-            return False, "Missing AZURE_OPENAI_ENDPOINT or AZURE_OPENAI_KEY"
+        if not client_info:
+            if not models_tried:
+                return False, "❌ No OpenAI endpoints configured. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY environment variables."
+            else:
+                return False, f"❌ Could not connect to any OpenAI endpoints. Tried: {', '.join(models_tried)}"
         
-        client = AzureOpenAI(
-            azure_endpoint=endpoint,
-            api_key=key,
-            api_version=api_version
-        )
+        # Successfully connected
+        model_count = len(client_info["models"])
+        model_names = ", ".join([m.id for m in client_info["models"][:3]])
+        if model_count > 3:
+            model_names += f", and {model_count - 3} more"
         
-        # Try to list models as a simple health check
-        models = client.models.list()
-        model_count = len(list(models))
+        endpoint_var = client_info["endpoint_var"]
+        deployment = client_info["deployment"]
+        deployment_info = f" (deployment: {deployment})" if deployment else ""
         
-        return True, f"✅ Connected successfully. Found {model_count} models."
-        
+        return True, f"✅ Connected successfully via {endpoint_var}{deployment_info}. Found {model_count} models: {model_names}"
+            
     except Exception as e:
         return False, f"❌ Error: {str(e)}"
 
@@ -2183,23 +2307,56 @@ def check_document_intelligence_health():
     """Check if Document Intelligence service is available and responsive."""
     try:
         from tools.document_intelligence_client import DocumentIntelligenceClientWrapper
+        import importlib
+        
+        # Force reload the module to pick up our changes
+        import tools.document_intelligence_client
+        importlib.reload(tools.document_intelligence_client)
+        from tools.document_intelligence_client import DocumentIntelligenceClientWrapper
         
         docint_wrapper = DocumentIntelligenceClientWrapper()
         
         if not docint_wrapper.client:
             return False, "❌ Document Intelligence not configured (missing endpoint/key)"
         
+        # Get endpoint information
+        endpoint = (
+            os.getenv("DOCUMENT_INTEL_ENDPOINT") or
+            os.getenv("AZURE_FORMREC_SERVICE") or
+            os.getenv("AZURE_FORMRECOGNIZER_ENDPOINT") or
+            "Unknown"
+        )
+        
+        # Try to get API version information
+        api_version = "Unknown"
+        if hasattr(docint_wrapper.client, '_config') and hasattr(docint_wrapper.client._config, 'api_version'):
+            api_version = getattr(docint_wrapper.client._config, 'api_version', 'Unknown')
+        
         # Check if Document Intelligence 4.0 API is available
         docint_40_status = "✅ Available" if docint_wrapper.docint_40_api else "❌ Not Available"
         
-        # Try to get account properties as a health check
-        try:
-            properties = docint_wrapper.client.get_account_properties()
-            quota_info = f"Quota used: {getattr(properties, 'quota_used', 'N/A')}"
-        except Exception as e:
-            quota_info = f"Could not get quota info: {str(e)}"
+        # Build informational message
+        features = []
         
-        return True, f"✅ Connected successfully. Doc Intelligence 4.0: {docint_40_status}. {quota_info}"
+        # Check document formats support
+        if docint_wrapper.docint_40_api:
+            features.append("DOCX/PPTX parsing supported")
+        else:
+            features.append("DOCX/PPTX parsing may be limited")
+        
+        # Check if we can analyze basic documents
+        if hasattr(docint_wrapper.client, 'begin_analyze_document'):
+            features.append("Basic document analysis available")
+        
+        # Check for layout analysis
+        if hasattr(docint_wrapper.client, 'begin_analyze_layout'):
+            features.append("Layout analysis available")
+        
+        features_str = ", ".join(features)
+        
+        # Format a nice message
+        api_info = f"API Version: {api_version}"
+        return True, f"✅ Connected successfully to {endpoint}. Doc Intelligence 4.0: {docint_40_status}. {api_info}. Features: {features_str}"
         
     except Exception as e:
         return False, f"❌ Error: {str(e)}"
@@ -2214,7 +2371,30 @@ def check_all_services():
     
     all_healthy = all(status for status, _ in results.values())
     
-    return results, all_healthy
+    # Add troubleshooting info for failed services
+    troubleshooting_info = {}
+    if not results["OpenAI"][0]:
+        troubleshooting_info["OpenAI"] = (
+            "Check that your OpenAI environment variables are set correctly:\n"
+            "- Either AZURE_OPENAI_ENDPOINT or AZURE_OPENAI_ENDPOINT_41 should be set\n"
+            "- AZURE_OPENAI_KEY should be set\n"
+            "- Your app is using AZURE_OPENAI_ENDPOINT_41, ensure the health check can access it\n"
+            "- Verify your network connection and firewall settings\n"
+            "- Check the API version matches what your endpoint supports\n\n"
+            "The app will use the suffix (_41, _4o) endpoints if available, falling back to the base variables."
+        )
+    if not results["AI Search"][0]:
+        troubleshooting_info["AI Search"] = (
+            "Check that AZURE_SEARCH_ENDPOINT is set correctly. "
+            "If using API key authentication, ensure AZURE_SEARCH_KEY is set."
+        )
+    if not results["Document Intelligence"][0]:
+        troubleshooting_info["Document Intelligence"] = (
+            "Check that DOCUMENT_INTEL_ENDPOINT/DOCUMENT_INTEL_KEY or the legacy "
+            "AZURE_FORMREC_SERVICE/AZURE_FORMREC_KEY environment variables are set correctly."
+        )
+    
+    return results, all_healthy, troubleshooting_info if troubleshooting_info else None
 # Add this guard to call run_streamlit_ui() when the script is run
 if __name__ == "__main__":
     run_streamlit_ui()
