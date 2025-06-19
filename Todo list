@@ -1,0 +1,6 @@
+Todo list
+1. split agentic-rag-demo.py
+2. we cant run any section of the code before finish the health check step, we need to remove this depenency and allow users to run the code even without health check step.
+2. fix .env file contain duplicated recoreds
+3. update readme file 
+4. does the code suppot pptx ? i try to upload pptx and the file was not show in the index.
