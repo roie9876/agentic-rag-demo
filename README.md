@@ -32,33 +32,63 @@ streamlit run agentic-rag-demo.py
 
 ## Environment variables (`.env`)
 
-| Key | Example value (fake) | Where to find it in Azure |
-|-----|----------------------|---------------------------|
-| `AZURE_OPENAI_ENDPOINT_41` | `https://my-openai-eastus.openai.azure.com/` | **OpenAI resource → Keys & Endpoint** |
-| `AZURE_OPENAI_KEY_41` | `YOUR-OPENAI-KEY` | same blade |
-| `AZURE_OPENAI_API_VERSION_41` | `2025-01-01-preview` | API version |
-| `AZURE_OPENAI_DEPLOYMENT_41` | `gpt-4.1` | **Model deployments → Name** |
-| `AGENT_FUNC_KEY` | `YOUR-FUNCTION-HOST-KEY` | **Function App → Function Keys → `default`** |
-| `AZURE_SEARCH_ENDPOINT` | `https://my-search-eastus.search.windows.net` | **Cognitive Search → Overview** |
-| `PROJECT_ENDPOINT` | `https://my-aoai-resource.services.azure.com/api/projects/my-project` | only if using AI Studio “projects” |
-| `MODEL_DEPLOYMENT_NAME` | `gpt-4.1` | same as deployment name |
+Below are the main environment variables used by this project. **Do not use real secrets in documentation or commits.**
 
-### Variables pushed to the Function App
+| Key | Example value (fake) | Description |
+|-----|----------------------|-------------|
+| `AZURE_OPENAI_ENDPOINT_41` | `https://my-openai-eastus.openai.azure.com/` | Azure OpenAI endpoint for GPT-4.1 |
+| `AZURE_OPENAI_KEY_41` | `YOUR-OPENAI-KEY` | Azure OpenAI API key for GPT-4.1 |
+| `AZURE_OPENAI_API_VERSION_41` | `2025-01-01-preview` | API version for GPT-4.1 deployment |
+| `AZURE_OPENAI_DEPLOYMENT_41` | `gpt-4.1` | Model deployment name for GPT-4.1 |
+| `AZURE_OPENAI_ENDPOINT` | `https://my-openai.openai.azure.com/` | Default Azure OpenAI endpoint |
+| `AZURE_OPENAI_KEY` | `YOUR-OPENAI-KEY` | Default Azure OpenAI API key |
+| `AZURE_OPENAI_API_VERSION` | `2025-01-01-preview` | Default OpenAI API version |
+| `AZURE_OPENAI_SERVICE_NAME` | `my-openai` | Azure OpenAI resource name |
+| `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | `text-embedding-3-large` | Embedding model deployment name |
+| `AZURE_OPENAI_CHATGPT_DEPLOYMENT` | `chat` | ChatGPT deployment name |
+| `AGENT_FUNC_KEY` | `YOUR-FUNCTION-HOST-KEY` | Azure Function host key |
+| `AZURE_SEARCH_ENDPOINT` | `https://my-search-eastus.search.windows.net` | Azure Cognitive Search endpoint |
+| `AZURE_SEARCH_SERVICE` | `my-search-eastus` | Azure Cognitive Search service name |
+| `SEARCH_API_KEY` | `YOUR-SEARCH-ADMIN-KEY` | Azure Cognitive Search admin key |
+| `SERVICE_NAME` | `my-search-eastus` | Search service name (used by Function) |
+| `PROJECT_ENDPOINT` | `https://my-aoai-resource.services.azure.com/api/projects/my-project` | AI Studio project endpoint (optional) |
+| `MODEL_DEPLOYMENT_NAME` | `gpt-4.1` | Model deployment name (optional) |
+| `API_VERSION` | `2025-05-01-preview` | API version for search runtime |
+| `MAX_OUTPUT_SIZE` | `16000` | Max output token size |
+| `OPENAI_ENDPOINT` | `https://my-openai.openai.azure.com` | OpenAI endpoint for Function calls |
+| `OPENAI_KEY` | `YOUR-OPENAI-KEY` | OpenAI key for Function calls |
+| `OPENAI_DEPLOYMENT` | `gpt-4.1` | Model deployment for Function calls |
+| `RERANKER_THRESHOLD` | `1` | Reranker cut-off threshold |
+| `includesrc` | `true` | Return raw chunks in results |
+| `debug` | `false` | Enable extra logging |
+| `TOP_K` | `5` | Default number of top results |
+| `PDF_BASE_URL` | `https://my-storage.blob.core.windows.net/docs/` | (Optional) Base URL for PDF links |
+| `AZURE_KEY_VAULT_NAME` | `my-keyvault` | Azure Key Vault name |
+| `AZURE_KEY_VAULT_ENDPOINT` | `https://my-keyvault.vault.azure.net/` | Azure Key Vault endpoint |
+| `AZURE_FORMREC_SERVICE` | `my-formrec-service` | Azure Document Intelligence service name |
+| `AZURE_FORMREC_KEY` | `YOUR-FORMREC-KEY` | Azure Document Intelligence API key |
+| `AZURE_FORMREC_ENDPOINT` | `https://my-formrec.cognitiveservices.azure.com` | (Optional) Document Intelligence endpoint |
+| `SHAREPOINT_TENANT_ID` | `00000000-0000-0000-0000-000000000000` | SharePoint tenant ID |
+| `SHAREPOINT_SITE_DOMAIN` | `mytenant.sharepoint.com` | SharePoint site domain |
+| `SHAREPOINT_SITE_NAME` | `mysite` | SharePoint site name |
+| `SHAREPOINT_DRIVE_NAME` | `Documents` | SharePoint drive name |
+| `SHAREPOINT_SITE_FOLDER` | `/MyFolder` | SharePoint folder path |
+| `SHAREPOINT_CONNECTOR_ENABLED` | `true` | Enable SharePoint connector |
+| `SHAREPOINT_INDEX_DIRECT` | `true` | Directly index SharePoint files |
+| `AZURE_SEARCH_SHAREPOINT_INDEX_NAME` | `my-index` | Search index for SharePoint files |
+| `AGENTIC_APP_SPN_CLIENTID` | `00000000-0000-0000-0000-000000000000` | App registration client ID for SharePoint |
+| `AGENTIC_APP_SPN_CERT_PATH` | `/path/to/cert.pfx` | Path to app registration certificate |
+| `AGENTIC_APP_SPN_CERT_PASSWORD` | `your-cert-password` | Password for app registration certificate |
+| `AZURE_TENANT_ID` | `00000000-0000-0000-0000-000000000000` | Azure tenant ID |
 
-| Key | Purpose |
-|-----|---------|
-| `API_VERSION` | search runtime version (`2025-05-01-preview`) |
-| `AZURE_OPENAI_API_VERSION` | OpenAI API version |
-| `MAX_OUTPUT_SIZE` | token cap (16 000 default) |
-| `OPENAI_ENDPOINT`, `OPENAI_KEY`, `OPENAI_DEPLOYMENT` | AOAI creds the Function calls |
-| `SERVICE_NAME` | search service name (e.g. `my-search-eastus`) |
-| `SEARCH_API_KEY` | search admin key |
-| `RERANKER_THRESHOLD` | reranker cut‑off |
-| `includesrc` | `true` → return raw chunks |
-| `debug` | extra logging |
-| `AGENT_FUNC_KEY` | host key used by the agent |
+### Chunking/Tokenization
+| Key | Example value | Description |
+|-----|---------------|-------------|
+| `NUM_TOKENS` | `2048` | Max tokens per chunk |
+| `TOKEN_OVERLAP` | `100` | Overlap between chunks |
+| `MIN_CHUNK_SIZE` | `100` | Minimum chunk size |
 
-> Fill these once in `.env`; the **Function Config** tab can push them to the Function automatically.
+> Fill these once in `.env`. The **Function Config** tab can push them to the Function automatically.
 
 ---
 
