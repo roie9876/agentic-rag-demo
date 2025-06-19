@@ -213,7 +213,7 @@ class BaseChunker:
             "chunk_id": chunk_id,
             "url": self.url,
             "filepath": self.filepath,
-            "content": truncated_content,
+            "content": f"[{self.filename}] {truncated_content}",  # Prefix content with filename for better context
             "imageCaptions": "",
             "summary": summary,
             "category": "",
@@ -223,6 +223,8 @@ class BaseChunker:
             "title": self._extract_title_from_filename(self.filename) if not title else title,
             "page": page,
             "offset": offset,
+            "source_file": self.filename,  # Add explicit source file field for citation
+            "doc_key": self.filename,      # Add doc_key for proper document referencing
             "relatedImages": related_images,
             "relatedFiles": related_files          
         }
