@@ -1553,10 +1553,6 @@ def run_streamlit_ui() -> None:
                                 if not file_bytes or not fname:
                                     progress_bar.progress((idx + 1) / total_files, text=f"Skipped file {idx+1}/{total_files}")
                                     continue
-                                
-                                # If it's a PDF file
-                                if fname.lower().endswith('.pdf'):
-                                    pdf_file = io.BytesIO(file_bytes)
                                     pdf_file.name = fname
                                     docs = pdf_to_documents(pdf_file, oai_client, embed_deploy)
                                     # Patch each doc's url to SharePoint webUrl
@@ -1964,7 +1960,7 @@ def run_streamlit_ui() -> None:
                                     import json as stdlib_json
                                     # Wrap the string in quotes for json.loads to work
                                     # This handles Unicode escape sequences like \u05D0 (Hebrew)
-                                    escaped_content = "\"" + content.replace("\"", "\\\"") + "\""
+                                    escaped_content = f'"{content.replace('"', '\\"')}"'
                                     try:
                                         content = stdlib_json.loads(escaped_content)
                                     except:
@@ -2231,7 +2227,12 @@ def run_streamlit_ui() -> None:
                                             html_content = content.replace('\n', '<br>')
                                             st.markdown(html_content, unsafe_allow_html=True)
                                         else:
-                                            st.write(content)
+                                            # Convert newlines to HTML breaks for proper rendering of Hebrew and special chars
+                                    if isinstance(content, str):
+                                        html_content = content.replace('\n', '<br>')
+                                        st.markdown(html_content, unsafe_allow_html=True)
+                                    else:
+                                        st.write(content)
                                 except Exception as ex:
                                     st.warning(f"Error parsing content: {str(ex)[:100]}")
                                     st.write(itm)  # Fallback to raw display
