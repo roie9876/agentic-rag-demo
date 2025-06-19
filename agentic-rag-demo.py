@@ -21,6 +21,7 @@ import zipfile
 import tempfile
 import subprocess
 import time  # Added to support sleep in polling after ingestion
+import base64  # Added to encode document bytes for _chunk_to_docs
 
 from pathlib import Path
 from typing import List, Tuple
@@ -29,6 +30,7 @@ from typing import List, Tuple
 # Streamlit Data‑Editor helper (works on both old & new versions)
 # ---------------------------------------------------------------------------
 import streamlit as st
+from chunking import DocumentChunker
 
 def _st_data_editor(*args, **kwargs):
     """
@@ -378,6 +380,212 @@ def pdf_to_documents(pdf_file, oai_client: AzureOpenAI, embed_deployment: str) -
         }
         docs.append(doc)
     pdf.close()
+    return docs
+
+
+# ───────── Text-based fallback for Office / plain files ─────────
+def _plainfile_to_docs(
+    file_name: str,
+    file_bytes: bytes,
+    file_url: str,
+    oai_client: AzureOpenAI,
+    embed_deployment: str,
+) -> list[dict]:
+    """
+    Fallback extractor for DOCX, PPTX, TXT, MD, JSON.
+    Tries rich-parsers first; if unavailable, uses a simple XML/text strip.
+    Splits the resulting text into ~4 000-char chunks and embeds them.
+    """
+    import re, zipfile, io
+    ext = os.path.splitext(file_name)[-1].lower()
+    txt = ""
+
+    def _strip_xml(xml_bytes: bytes) -> str:
+        """Very rough tag-stripper – good enough for plain text."""
+        return re.sub(r"<[^>]+>", " ", xml_bytes.decode("utf-8", errors="ignore"))
+
+    try:
+        if ext == ".docx":
+            try:
+                from docx import Document            # python-docx
+                txt = "\n".join(p.text for p in Document(io.BytesIO(file_bytes)).paragraphs)
+            except ImportError:
+                # Fallback: read word/document.xml inside the docx zip
+                with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+                    xml = zf.read("word/document.xml")
+                txt = _strip_xml(xml)
+        elif ext == ".pptx":
+            try:
+                from pptx import Presentation        # python-pptx
+                prs = Presentation(io.BytesIO(file_bytes))
+                slides = []
+                for slide in prs.slides:
+                    slides.append(
+                        "\n".join(shape.text for shape in slide.shapes if hasattr(shape, "text"))
+                    )
+                txt = "\n\n".join(slides)
+            except ImportError:
+                # Fallback: concatenate text from slide XMLs
+                with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+                    slide_files = [n for n in zf.namelist() if n.startswith("ppt/slides/") and n.endswith(".xml")]
+                    txt = "\n\n".join(_strip_xml(zf.read(f)) for f in slide_files)
+        elif ext in (".txt", ".md"):
+            txt = file_bytes.decode("utf-8", errors="ignore")
+        elif ext == ".json":
+            import json as _json
+            txt = _json.dumps(_json.loads(file_bytes), indent=2, ensure_ascii=False)
+    except Exception as parse_err:
+        logging.error("Plain extraction failed for %s: %s", file_name, parse_err)
+        txt = ""  # will return [] later if empty
+
+    if not txt.strip():
+        return []
+
+    chunks = textwrap.wrap(txt, 4000)
+    docs = []
+    for i, chunk in enumerate(chunks):
+        try:
+            vector = embed_text(oai_client, embed_deployment, chunk)
+        except Exception as emb_err:
+            logging.error("Embedding failed for %s (chunk %d): %s", file_name, i, emb_err)
+            continue
+        docs.append(
+            {
+                "id": hashlib.md5(f"{file_name}_{i}".encode()).hexdigest(),
+                "page_chunk": chunk,
+                "page_embedding_text_3_large": vector,
+                "page_number": i + 1,
+                "source_file": file_name,
+                "source": file_name,
+                "url": file_url or "",
+            }
+        )
+    return docs
+# -----------------------------------------------------------------
+
+def _chunk_to_docs(
+    file_name: str,
+    file_bytes: bytes,
+    file_url: str,
+    oai_client: AzureOpenAI,
+    embed_deployment: str,
+) -> list[dict]:
+    """
+    Run DocumentChunker on *file_bytes* and convert the chunks to the schema
+    that agentic-rag indexes (adds url/source_file and ensures embeddings).
+
+    Fix: send **raw bytes** first (needed for XLSX, DOCX, …).  
+    Fallback to the old base-64 path if that fails – keeps compatibility
+    with formats that still expect a string.
+    """
+    dc = DocumentChunker()
+
+    ext = os.path.splitext(file_name)[-1].lower()
+    # ── EARLY BYPASS for known troublesome formats ────────────────
+    if ext in (".csv", ".xls", ".xlsx"):
+        return _tabular_to_docs(file_name, file_bytes, file_url, oai_client, embed_deployment)
+    if ext in (".docx", ".pptx", ".txt", ".md", ".json"):
+        return _plainfile_to_docs(file_name, file_bytes, file_url, oai_client, embed_deployment)
+    # ------------------------------------------------------------------
+
+    def _call_chunker(doc_bytes):
+        data = {
+            "fileName": file_name,
+            "documentBytes": doc_bytes,
+            "documentUrl": file_url or "",
+        }
+        return dc.chunk_documents(data)
+
+    try:
+        chunks, _, _ = _call_chunker(file_bytes)          # 1️⃣ raw bytes
+    except Exception as first_err:
+        try:
+            # 2️⃣ base64 fallback (legacy)
+            b64_str = (
+                file_bytes
+                if isinstance(file_bytes, str)
+                else base64.b64encode(file_bytes).decode("utf-8")
+            )
+            chunks, _, _ = _call_chunker(b64_str)
+        except Exception as second_err:
+            # 3️⃣ tabular fallback for XLS/CSV
+            ext = os.path.splitext(file_name)[-1].lower()
+            if ext in (".csv", ".xlsx", ".xls"):
+                return _tabular_to_docs(file_name, file_bytes, file_url, oai_client, embed_deployment)
+            # Nothing worked – re-raise original error
+            raise first_err from second_err
+
+    docs = []
+    for i, ch in enumerate(chunks):
+        txt = ch.get("page_chunk") or ch.get("chunk") or ch.get("content") or ""
+        if not txt:
+            continue
+        # embedding – reuse if present, else create with safe fallback
+        vector = ch.get("page_embedding_text_3_large")
+        if not vector:
+            try:
+                vector = embed_text(oai_client, embed_deployment, txt)
+            except Exception as emb_err:
+                logging.error("Embedding failed for %s (chunk %d): %s", file_name, i, emb_err)
+                continue  # skip this chunk
+        docs.append(
+            {
+                "id": ch.get("id") or hashlib.md5(f"{file_name}_{i}".encode()).hexdigest(),
+                "page_chunk": txt,
+                "page_embedding_text_3_large": vector,
+                "page_number": ch.get("page_number") or i + 1,
+                "source_file": file_name,
+                "source": file_name,
+                "url": file_url or "",
+            }
+        )
+    return docs
+# ───────────────────────── end helper ────────────────────────────────
+
+
+# ─────────────── Fallback: CSV / XLS(X) → docs ───────────────
+def _tabular_to_docs(
+    file_name: str,
+    file_bytes: bytes,
+    file_url: str,
+    oai_client: AzureOpenAI,
+    embed_deployment: str,
+) -> list[dict]:
+    """
+    Last-resort converter for CSV/XLS/XLSX when DocumentChunker fails.
+    Turns every ~4 000-char slice of the table (as CSV text) into one doc.
+    """
+    import io, pandas as pd  # pandas is only needed here
+    # Extract plain text
+    if file_name.lower().endswith(".csv"):
+        txt = file_bytes.decode("utf-8", errors="ignore")
+    else:  # .xls / .xlsx
+        excel = pd.ExcelFile(io.BytesIO(file_bytes))
+        txt_parts = []
+        for sheet in excel.sheet_names:
+            df = excel.parse(sheet)
+            txt_parts.append(f"\n\n### Sheet: {sheet}\n" + df.to_csv(index=False))
+        txt = "".join(txt_parts)
+
+    chunks = textwrap.wrap(txt, 4000)
+    docs = []
+    for i, chunk in enumerate(chunks):
+        try:
+            vector = embed_text(oai_client, embed_deployment, chunk)
+        except Exception as emb_err:
+            logging.error("Embedding failed for %s (chunk %d): %s", file_name, i, emb_err)
+            continue  # skip this chunk
+        docs.append(
+            {
+                "id": hashlib.md5(f"{file_name}_{i}".encode()).hexdigest(),
+                "page_chunk": chunk,
+                "page_embedding_text_3_large": vector,
+                "page_number": i + 1,
+                "source_file": file_name,
+                "source": file_name,
+                "url": file_url or "",
+            }
+        )
     return docs
 
 
@@ -890,31 +1098,19 @@ def run_streamlit_ui() -> None:
                         if ext == ".pdf":
                             # --- PDF path -------------------------------------------------
                             docs = pdf_to_documents(pf, oai_client, embed_deploy)
-
                         else:
-                            # --- Textual / other path ------------------------------------
+                            # --- ALL other files – use DocumentChunker --------------------
                             try:
-                                raw_bytes = pf.getbuffer()
-                                # try utf‑8 first; fallback latin‑1
-                                try:
-                                    txt = raw_bytes.decode("utf-8")
-                                except UnicodeDecodeError:
-                                    txt = raw_bytes.decode("latin1", errors="ignore")
-                            except Exception as deco_err:
-                                logging.error("Failed to read %s: %s", pf.name, deco_err)
-                                txt = "[Binary file, preview not available]"
-
-                            # simple single‑chunk document; no embedding for now
-                            doc = {
-                                "id": hashlib.md5(pf.name.encode()).hexdigest(),
-                                "page_chunk": f"[{pf.name}] {txt[:2000]}",
-                                "page_embedding_text_3_large": [],
-                                "page_number": 1,
-                                "source_file": pf.name,
-                                "source": pf.name,
-                                "url": "",   # no public URL for local upload
-                            }
-                            docs = [doc]
+                                docs = _chunk_to_docs(
+                                    pf.name,
+                                    bytes(pf.getbuffer()),
+                                    "",          # no public URL for local upload
+                                    oai_client,
+                                    embed_deploy,
+                                )
+                            except Exception as docerr:
+                                logging.error("DocumentChunker failed for %s: %s", pf.name, docerr)
+                                docs = []
 
                         if not docs:
                             continue
@@ -1032,6 +1228,20 @@ def run_streamlit_ui() -> None:
                                     continue
                                 ext = os.path.splitext(fname)[-1].lower()
                                 docs = []
+                                # Ensure file_bytes is bytes (robust base64 decode first)
+                                if not isinstance(file_bytes, bytes):
+                                    if isinstance(file_bytes, str):
+                                        try:
+                                            file_bytes = base64.b64decode(file_bytes, validate=True)
+                                        except Exception:
+                                            try:
+                                                file_bytes = file_bytes.encode('utf-8')
+                                            except Exception as enc_err:
+                                                logging.error(f"[SharePoint] Could not convert file_bytes for {fname}: {type(file_bytes)} {str(file_bytes)[:100]} | Error: {enc_err}")
+                                                continue
+                                    else:
+                                        logging.error(f"[SharePoint] file_bytes for {fname} is not bytes or str: {type(file_bytes)} | Value: {str(file_bytes)[:100]}")
+                                        continue
                                 if ext == ".pdf":
                                     pdf_file = io.BytesIO(file_bytes)
                                     pdf_file.name = fname
@@ -1040,21 +1250,17 @@ def run_streamlit_ui() -> None:
                                     for d in docs:
                                         d["url"] = file_url
                                 else:
-                                    # For non-PDF, index as a single doc with content as bytes or text
                                     try:
-                                        text_content = file_bytes.decode("utf-8", errors="ignore")
-                                    except Exception:
-                                        text_content = "[Binary file, preview not available]"
-                                    doc = {
-                                        "id": hashlib.md5(fname.encode()).hexdigest(),
-                                        "page_chunk": f"[{fname}] {text_content[:2000]}",
-                                        "page_embedding_text_3_large": [],
-                                        "page_number": 1,
-                                        "source_file": fname,
-                                        "source": fname,
-                                        "url": file_url,
-                                    }
-                                    docs = [doc]
+                                        docs = _chunk_to_docs(
+                                            fname,
+                                            file_bytes,
+                                            file_url,
+                                            oai_client,
+                                            embed_deploy,
+                                        )
+                                    except Exception as derr:
+                                        logging.error("Chunker failed for %s: %s", fname, derr)
+                                        docs = []
                                 sender.upload_documents(documents=docs)
                                 total_pages += len(docs)
                                 progress_bar.progress((idx + 1) / total_files, text=f"Processed {idx+1}/{total_files} files")
@@ -1149,10 +1355,33 @@ def run_streamlit_ui() -> None:
                         st.code(traceback.format_exc())
                         st.stop()
 
-                # The agent returns a single assistant message whose first
-                # content item is a JSON string (list of chunks).
+                # Build chunks directly from the structured Message → Content objects
+                chunks = []
+                for msg in result.response:
+                    for c in getattr(msg, "content", []):
+                        # Prefer metadata carried inside the underlying Search document
+                        sdoc = getattr(c, "search_document", {}) or {}
 
-                raw_text = result.response[0].content[0].text
+                        chunk = {
+                            # ref_id may be missing – fall back to running index
+                            "ref_id": getattr(c, "ref_id", None) or len(chunks),
+                            "content": getattr(c, "text", ""),
+                            "url": getattr(c, "url", None) or sdoc.get("url"),
+                            # source_file could be stored as source_file or source
+                            "source_file": (
+                                getattr(c, "source_file", None)
+                                or sdoc.get("source_file")
+                                or sdoc.get("source")
+                            ),
+                            "page_number": getattr(c, "page_number", None) or sdoc.get("page_number"),
+                            "score": getattr(c, "score", None),
+                            # Try both direct attr and the doc id as doc_key
+                            "doc_key": getattr(c, "doc_key", None) or sdoc.get("id"),
+                        }
+                        # Remove keys with empty / None values
+                        chunks.append({k: v for k, v in chunk.items() if v not in (None, "")})
+
+                raw_text = json.dumps(chunks, ensure_ascii=False)
                 st.session_state.raw_index_json = raw_text
                 st.session_state.agent_messages.append(
                     {"role": "assistant", "content": raw_text}
