@@ -17,6 +17,7 @@ The script:
 """
 
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -175,6 +176,15 @@ def summarize_with_llm(chunks_text: str, user_q: str) -> str:
     except Exception:
         return chunks_text[:MAX_OUTPUT_SIZE]
 
+
+# ---------------------------------------------------------------------------
+def _extract_citation_labels(text: str) -> set[str]:
+    """
+    Return the set of labels that appear inside square-brackets in *text*,
+    e.g. "… כמו [foo.pdf] ו-[bar.docx]" -> {"foo.pdf", "bar.docx"}.
+    """
+    return {m.strip() for m in re.findall(r"\[([^\[\]]+?)\]", text)}
+# ---------------------------------------------------------------------------
 
 def answer_question(
         user_question: str,
@@ -414,6 +424,31 @@ def answer_question(
                 except Exception:
                     # Leave url empty on any failure
                     pass
+
+            # ── NEW: filter out sources that were not cited in the answer ──────
+            cited = _extract_citation_labels(final_answer)
+            if cited:
+                def _match(src: dict) -> bool:
+                    fname = src.get("source_file", "")
+                    url   = src.get("url", "")
+                    url_tail = Path(url).name if url else ""
+                    return fname in cited or url_tail in cited
+                sources = [s for s in sources if _match(s)]
+
+            # ── NEW: second-pass enrichment to restore missing URLs ───────────
+            for entry in sources:
+                if entry.get("url"):               # already has one
+                    continue
+                try:
+                    sclient = _search_client(idx)  # reuse helper
+                    safe_src = entry["source_file"].replace("'", "''")
+                    hits = sclient.search(search_text="*", filter=f"source_file eq '{safe_src}'", top=1)
+                    for h in hits:
+                        if h.get("url"):
+                            entry["url"] = h["url"]
+                            break
+                except Exception:
+                    pass  # leave url empty on error
 
             # ←── return JSON object instead of plain text
             return {"answer": final_answer, "sources": sources}

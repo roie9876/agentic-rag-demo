@@ -443,16 +443,18 @@ def _plainfile_to_docs(
 
     chunks = textwrap.wrap(txt, 4000)
     docs = []
+    label = f"[{file_name}] "                 # ← new unified prefix
     for i, chunk in enumerate(chunks):
+        chunk_txt = label + chunk             # ← prepend filename
         try:
-            vector = embed_text(oai_client, embed_deployment, chunk)
+            vector = embed_text(oai_client, embed_deployment, chunk_txt)   # embed prefixed text
         except Exception as emb_err:
             logging.error("Embedding failed for %s (chunk %d): %s", file_name, i, emb_err)
             continue
         docs.append(
             {
                 "id": hashlib.md5(f"{file_name}_{i}".encode()).hexdigest(),
-                "page_chunk": chunk,
+                "page_chunk": chunk_txt,      # store prefixed chunk
                 "page_embedding_text_3_large": vector,
                 "page_number": i + 1,
                 "source_file": file_name,
@@ -516,10 +518,13 @@ def _chunk_to_docs(
             raise first_err from second_err
 
     docs = []
+    label = f"[{file_name}] "                 # ← prefix for DocumentChunker path
     for i, ch in enumerate(chunks):
         txt = ch.get("page_chunk") or ch.get("chunk") or ch.get("content") or ""
         if not txt:
             continue
+        if not txt.startswith(label):         # avoid double-prefix
+            txt = label + txt                 # ← prepend filename
         # embedding – reuse if present, else create with safe fallback
         vector = ch.get("page_embedding_text_3_large")
         if not vector:
@@ -569,16 +574,18 @@ def _tabular_to_docs(
 
     chunks = textwrap.wrap(txt, 4000)
     docs = []
+    label = f"[{file_name}] "                 # ← prefix for CSV / Excel
     for i, chunk in enumerate(chunks):
+        chunk_txt = label + chunk
         try:
-            vector = embed_text(oai_client, embed_deployment, chunk)
+            vector = embed_text(oai_client, embed_deployment, chunk_txt)
         except Exception as emb_err:
             logging.error("Embedding failed for %s (chunk %d): %s", file_name, i, emb_err)
             continue  # skip this chunk
         docs.append(
             {
                 "id": hashlib.md5(f"{file_name}_{i}".encode()).hexdigest(),
-                "page_chunk": chunk,
+                "page_chunk": chunk_txt,
                 "page_embedding_text_3_large": vector,
                 "page_number": i + 1,
                 "source_file": file_name,
