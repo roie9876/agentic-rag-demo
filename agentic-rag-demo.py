@@ -101,6 +101,13 @@ from dotenv import load_dotenv
 # Health Check Module
 from health_check import HealthChecker, HealthCheckUI
 
+# Import the new module for AI Foundry functionality
+from agent_foundry import (
+    check_azure_cli_login, 
+    get_ai_foundry_projects,
+    create_ai_foundry_agent
+)
+
 from azure.search.documents import SearchIndexingBufferedSender  # NEW
 import fitz                            # PyMuPDF
 import hashlib, tempfile               # for PDF processing
@@ -174,51 +181,53 @@ def _az_logged_user() -> tuple[str | None, str | None]:
         return None, None
 
 
-def check_azure_cli_login() -> tuple[bool, dict | None]:
-    """
-    Return (logged_in, account_json_or_None) by running `az account show`.
-    """
-    try:
-        out = subprocess.check_output(
-            ["az", "account", "show", "--output", "json"],
-            text=True,
-            timeout=5,
-        )
-        return True, json.loads(out)
-    except subprocess.CalledProcessError:
-        return False, None
-    except Exception:
-        return False, None
+# Remove the duplicate function since it's now in agent_foundry.py
+# def check_azure_cli_login() -> tuple[bool, dict | None]:
+#     """
+#     Return (logged_in, account_json_or_None) by running `az account show`.
+#     """
+#     try:
+#         out = subprocess.check_output(
+#             ["az", "account", "show", "--output", "json"],
+#             text=True,
+#             timeout=5,
+#         )
+#         return True, json.loads(out)
+#     except subprocess.CalledProcessError:
+#         return False, None
+#     except Exception:
+#         return False, None
 
 
-def get_ai_foundry_projects(cred: AzureCliCredential) -> list[dict]:
-    """
-    Return a list of Foundry projects visible to the signed‑in CLI user via
-    `az ai project list`. Each item includes:
-        {name, location, endpoint, resource_group, hub_name}
-    """
-    try:
-        out = subprocess.check_output(
-            ["az", "ai", "project", "list", "--output", "json"],
-            text=True,
-            timeout=10,
-        )
-        data = json.loads(out)
-        projs = []
-        for p in data:
-            projs.append(
-                {
-                    "name": p["name"],
-                    "location": p["location"],
-                    "endpoint": p["properties"]["endpoint"],
-                    "resource_group": p["resourceGroup"],
-                    "hub_name": p["properties"].get("hubName", ""),
-                }
-            )
-        return projs
-    except Exception as err:
-        logging.warning("Failed to list AI Foundry projects: %s", err)
-        return []
+# Remove the duplicate function since it's now in agent_foundry.py
+# def get_ai_foundry_projects(cred: AzureCliCredential) -> list[dict]:
+#     """
+#     Return a list of Foundry projects visible to the signed‑in CLI user via
+#     `az ai project list`. Each item includes:
+#         {name, location, endpoint, resource_group, hub_name}
+#     """
+#     try:
+#         out = subprocess.check_output(
+#             ["az", "ai", "project", "list", "--output", "json"],
+#             text=True,
+#             timeout=10,
+#         )
+#         data = json.loads(out)
+#         projs = []
+#         for p in data:
+#             projs.append(
+#                 {
+#                     "name": p["name"],
+#                     "location": p["location"],
+#                     "endpoint": p["properties"]["endpoint"],
+#                     "resource_group": p["resourceGroup"],
+#                     "hub_name": p["properties"].get("hubName", ""),
+#                 }
+#             )
+#         return projs
+#     except Exception as err:
+#         logging.warning("Failed to list AI Foundry projects: %s", err)
+#         return []
 
 
 def _grant_search_role(service_name: str, subscription_id: str, resource_group: str, principal: str, role: str) -> tuple[bool, str]:
@@ -1767,6 +1776,7 @@ def run_streamlit_ui() -> None:
                     chunks = [{"ref_id": 0, "content": f"Error parsing retrieval results: {str(chunk_ex)}", "source_file": "error", "doc_key": "", "url": ""}]
                 
                 # Build sources list – keep one entry per source_file but make sure to
+               
                 # capture the first non‑empty URL we encounter.
                 # ------------------ build deduplicated sources list ------------------
                 tmp_sources: Dict[str, dict] = {}
@@ -1875,7 +1885,7 @@ def run_streamlit_ui() -> None:
                             content = str(chunk_dict)
                                 
                         # Step 4: Parse [filename] prefix in content if present
-                        if isinstance(content, str) and content.startswith('[') and ']' in content[:100]:
+                        if isinstance(content, str) and content.startswith('[') and ']' in content:
                             filename = content[1:content.find(']')]
                             if filename and (not source or source.startswith('doc')):
                                 source = filename
@@ -2151,6 +2161,7 @@ def run_streamlit_ui() -> None:
                                                 content = stdlib_json.loads(escaped_content)
                                             except:
                                                 pass  # Keep original if this fails
+                                    
                                     # Handle content with proper line breaks and special characters
                                     if isinstance(content, str):
                                         # Convert newlines to HTML breaks for proper rendering
@@ -2414,7 +2425,7 @@ def run_streamlit_ui() -> None:
         cli_cred = AzureCliCredential()
         logged_in, _ = check_azure_cli_login()
         if not logged_in:
-            st.error("🔑 Run `az login` before using this feature.")
+            st.error("🔑 Run `az login` before using this feature.")
             st.stop()
 
         projects = get_ai_foundry_projects(cli_cred)
@@ -2429,130 +2440,29 @@ def run_streamlit_ui() -> None:
             }]
 
         if not projects:
-            st.warning("No AI Foundry projects detected.")
+            st.warning("No AI Foundry projects detected.")
             st.stop()
 
         proj_labels = [f"{p['name']} – {p['location']}" for p in projects]
         sel = st.selectbox("Choose Foundry project", proj_labels, index=0)
         project_endpoint = projects[proj_labels.index(sel)]['endpoint']
-        st.caption(f"🔗 Endpoint: {project_endpoint}")
+        st.caption(f"🔗 Endpoint: {project_endpoint}")
 
         agent_name = st.text_input("Agent name", placeholder="function‑assistant")
-        if st.button("🚀 Create Agent") and agent_name:
-            # --- Build anonymous OpenAPI tool -----------------------------------
-            TOOL_NAME = "Test_askAgentFunction"
-            tool_schema = {
-                "openapi": "3.0.1",
-                "info": {
-                    "title": "AgentFunction",
-                    "version": "1.0.0"
-                },
-                # Base URL for the Function App (no query‑string here!)
-                "servers": [
-                    {
-                        "url": base_url
-                    }
-                ],
-                "paths": {
-                    "/AgentFunction/{question}": {
-                        "post": {
-                            "operationId": "askAgentFunction",
-                            "summary": "Ask the Azure Function",
-                            "parameters": [
-                                {
-                                    "name": "question",
-                                    "in": "path",
-                                    "required": True,
-                                    "schema": {"type": "string"}
-                                },
-                                {
-                                    "name": "code",
-                                    "in": "query",
-                                    "required": True,
-                                    "schema": {
-                                        "type": "string",
-                                        "default": FUNCTION_KEY
-                                    },
-                                    "description": "Function host key (taken from env‑var AGENT_FUNC_KEY)"
-                                },
-                                {
-                                    "name": "includesrc",
-                                    "in": "query",
-                                    "required": False,
-                                    "schema": {
-                                        "type": "boolean",
-                                        "default": True
-                                    },
-                                    "description": "Include sources in the Function response"
-                                }
-                            ],
-                            "responses": {
-                                "200": {
-                                    "description": "Plain‑text answer",
-                                    "content": {
-                                        "text/plain": {
-                                            "schema": {"type": "string"}
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            SYSTEM_MSG = (
-                "You have one action called Test_askAgentFunction.\n"
-                "Call it **every time** the user asks a factual question.\n"
-                "Send the whole question unchanged as the {question} path parameter **and** include the two query parameters exactly as shown below:\n"
-                f"  • code={FUNCTION_KEY}\n"
-                "  • includesrc=true\n"
-                "Example URL you must generate (line breaks added for clarity):\n"
-                f"POST {base_url}/AgentFunction/{{question}}?code={FUNCTION_KEY}&includesrc=true"
-                "Return the Function's plain‑text response **verbatim and in full**, including any inline citations such as [my_document.pdf].\n"
-                "Do **NOT** add, remove, reorder, or paraphrase content, and do **NOT** drop those citation markers.\n"
-                "If the action fails, reply exactly with: I don't know\n"
-                "Do **NOT** answer from your own internal knowledge and do **NOT** answer questions unrelated to the Function.\n"
-                "\n"
-                "### How to respond\n"
-                "1. Parse the JSON the Function returns.\n"
-                "2. Reply with the **exact value of \"answer\"** – do NOT change it.\n"
-                "3. After that, print a short “Sources:” list. For each object in \"sources\" show its **source_file**, and – if \"url\" is present and not empty – append “ – <url>”. If source_file is empty, show the url instead; if both are missing, use the placeholder doc#.\n"
-                "   Example:\n"
-                "   Sources:\n"
-                "   • המב 50.02.pdf\n"
-                "   • מס 40.021.pdf\n"
+        if st.button("🚀 Create Agent") and agent_name:
+            # Use the refactored function instead of inline code
+            success, message, agent = create_ai_foundry_agent(
+                project_endpoint=project_endpoint,
+                agent_name=agent_name,
+                base_url=base_url,
+                function_key=FUNCTION_KEY
             )
-
-            # --- Create OpenAPI tool (anonymous auth) ---------------------------
-            auth = OpenApiAnonymousAuthDetails()  # public endpoint – no key required
-            openapi_tool = OpenApiTool(
-                name=TOOL_NAME,
-                spec=tool_schema,
-                description="Invoke the Azure Function via HTTP POST",
-                auth=auth,
-            )
-
-            # Create the agent via the Azure AI Projects SDK
-            try:
-                proj_client = AIProjectClient(project_endpoint, DefaultAzureCredential())
-                with proj_client:
-                    agent = proj_client.agents.create_agent(
-                        name=agent_name,
-                        model="gpt-4.1",                   # make sure this deployment exists
-                        instructions=SYSTEM_MSG,
-                        description="Assistant created from Streamlit UI",
-                        tools=openapi_tool.definitions,   # <-- note: *definitions*
-                    )
+            
+            if success:
                 st.success(f"✅ Agent **{agent.name}** created (ID: {agent.id})")
-            except Exception as err:
+            else:
                 st.error("Failed to create agent via SDK:")
-                st.exception(err)
-
-##############################################################################
-# Health Check Functions 
-##############################################################################
-
+                st.error(message)
 
 # Add this guard to call run_streamlit_ui() when the script is run
 if __name__ == "__main__":
