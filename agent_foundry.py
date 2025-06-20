@@ -51,12 +51,60 @@ def check_azure_cli_login() -> Tuple[bool, Union[Dict, None]]:
         return False, None
 
 
+def check_and_install_ai_extension() -> bool:
+    """Check if Azure AI CLI extension is installed and install if needed."""
+    try:
+        # Check if extension is already installed
+        out = subprocess.check_output(
+            ["az", "extension", "list", "--output", "json"], 
+            text=True,
+            timeout=5
+        )
+        extensions = json.loads(out)
+        
+        # Look for AI extension
+        for ext in extensions:
+            if ext.get("name") == "ai":
+                return True
+                
+        # If not found, install it
+        import logging
+        logging.info("Azure AI CLI extension not found, installing...")
+        subprocess.check_call(
+            ["az", "extension", "add", "--name", "ai", "--yes"],
+            timeout=30
+        )
+        logging.info("Azure AI CLI extension installed successfully")
+        return True
+    except Exception as err:
+        import logging
+        logging.warning(f"Failed to check/install Azure AI CLI extension: {err}")
+        return False
+
 def get_ai_foundry_projects(cred: AzureCliCredential) -> List[Dict]:
     """
     Return a list of Foundry projects visible to the signed‑in CLI user via
     `az ai project list`. Each item includes:
         {name, location, endpoint, resource_group, hub_name}
     """
+    projects = []
+    
+    # First try to get projects from environment variable as a fallback
+    if os.getenv("PROJECT_ENDPOINT"):
+        ep = os.getenv("PROJECT_ENDPOINT").strip()
+        projects.append({
+            "name": ep.split('/')[-1][:30] or "env-project",
+            "location": "env",
+            "endpoint": ep,
+            "resource_group": "env",
+            "hub_name": "env",
+        })
+        return projects
+    
+    # Ensure AI extension is installed
+    check_and_install_ai_extension()
+    
+    # Then try Azure CLI
     try:
         out = subprocess.check_output(
             ["az", "ai", "project", "list", "--output", "json"],
@@ -64,23 +112,41 @@ def get_ai_foundry_projects(cred: AzureCliCredential) -> List[Dict]:
             timeout=10,
         )
         data = json.loads(out)
-        projs = []
+        
+        # Check if we got any projects
+        if not data:
+            import logging
+            logging.warning("No AI Foundry projects returned from az ai project list")
+            return projects
+            
         for p in data:
-            projs.append(
-                {
+            # Ensure we have all required fields with proper error handling
+            try:
+                projects.append({
                     "name": p["name"],
-                    "location": p["location"],
+                    "location": p.get("location", "unknown"),
                     "endpoint": p["properties"]["endpoint"],
-                    "resource_group": p["resourceGroup"],
+                    "resource_group": p.get("resourceGroup", "unknown"),
                     "hub_name": p["properties"].get("hubName", ""),
-                }
-            )
-        return projs
+                })
+            except KeyError as key_err:
+                import logging
+                logging.warning(f"Missing key in project data: {key_err} - Skipping project")
+                continue
+                
+        return projects
+    except subprocess.CalledProcessError as e:
+        import logging
+        logging.warning(f"Azure CLI error when listing projects: {e.stderr if hasattr(e, 'stderr') else str(e)}")
+        return projects
+    except json.JSONDecodeError:
+        import logging
+        logging.warning("Invalid JSON returned from az ai project list")
+        return projects
     except Exception as err:
         import logging
-        logging.warning("Failed to list AI Foundry projects: %s", err)
-        return []
-
+        logging.warning(f"Failed to list AI Foundry projects: {str(err)}")
+        return projects
 
 def create_openapi_tool(tool_name: str, base_url: str, function_key: str) -> OpenApiTool:
     """Create an OpenAPI tool definition for the Azure Function."""

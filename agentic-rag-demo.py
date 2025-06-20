@@ -108,6 +108,16 @@ from agent_foundry import (
     create_ai_foundry_agent
 )
 
+# Import Azure Function helper module
+from azure_function_helper import (
+    load_env_vars,
+    get_azure_subscription,
+    list_function_apps,
+    load_function_settings,
+    push_function_settings,
+    deploy_function_code
+)
+
 from azure.search.documents import SearchIndexingBufferedSender  # NEW
 import fitz                            # PyMuPDF
 import hashlib, tempfile               # for PDF processing
@@ -1013,12 +1023,12 @@ def _zip_function_folder(func_dir: Path, zip_path: Path) -> None:
             if p.is_file():
                 zf.write(p, p.relative_to(func_dir))
 # ────────────────────────── Helper: zip Azure Function folder ──────────────
-def _zip_function_folder(func_dir: Path, zip_path: Path) -> None:
-    """Zip *func_dir* (כולל host.json וכו') כ-relative paths אל *zip_path*."""
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for itm in func_dir.rglob("*"):
-            if itm.is_file():
-                zf.write(itm, itm.relative_to(func_dir))
+# def _zip_function_folder(func_dir: Path, zip_path: Path) -> None:
+#     """Zip *func_dir* (כולל host.json וכו') כ-relative paths אל *zip_path*."""
+#     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+#         for itm in func_dir.rglob("*"):
+#             if itm.is_file():
+#                 zf.write(itm, itm.relative_to(func_dir))
 # -----------------------------------------------------------------------------
 # Processing Information Display Helper
 # -----------------------------------------------------------------------------
@@ -1731,7 +1741,7 @@ def run_streamlit_ui() -> None:
                             for c in getattr(msg, "content", []):
                                 # Prefer metadata carried inside the underlying Search document
                                 sdoc = getattr(c, "search_document", {}) or {}
-        
+
                                 # Get the doc_key or source_file from the search document
                                 doc_key = sdoc.get("doc_key", "")
                                 source_file = sdoc.get("source_file", "")
@@ -1792,7 +1802,7 @@ def run_streamlit_ui() -> None:
                     content = itm.get("content", "")
                     extracted_src = ""
                     if isinstance(content, str) and content.startswith('[') and ']' in content:
-                        extracted_src = content[1:content.find(']')]
+                        extracted_src = content[1:content.find('')]
                     
                     # Prefer source_file or doc_key; fall back to extracted name, URL or generic "doc#" label
                     src_name = (
@@ -1886,7 +1896,7 @@ def run_streamlit_ui() -> None:
                                 
                         # Step 4: Parse [filename] prefix in content if present
                         if isinstance(content, str) and content.startswith('[') and ']' in content:
-                            filename = content[1:content.find(']')]
+                            filename = content[1:content.find('')]
                             if filename and (not source or source.startswith('doc')):
                                 source = filename
                             # Remove the prefix from content
@@ -1894,9 +1904,9 @@ def run_streamlit_ui() -> None:
                         
                         # Step 5: Process escape sequences (like \n) to make content readable
                         if isinstance(content, str):
-                            # Process common escape sequences for better readability
+                            # Process common escape sequences properly
                             try:
-                                # Handle common escape sequences properly
+                                # Handle common escape sequences
                                 content = content.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"').replace("\\'", "'")
                                 
                                 # Handle further nested escapes if present (e.g., JSON within JSON)
@@ -1926,9 +1936,7 @@ def run_streamlit_ui() -> None:
                                     source = source_obj.get("source_file", source_obj.get("content", "unknown file"))
                                     # If content has a [filename], extract it
                                     if isinstance(source, str) and source.startswith('[') and ']' in source:
-                                        source = source[1:source.find(']')]
-                                else:
-                                    source = "unknown file"
+                                        source = source[1:source.find('')]
                             except:
                                 # If parsing fails, use a simple string
                                 source = "unknown file"
@@ -2093,7 +2101,7 @@ def run_streamlit_ui() -> None:
                                     if not source_name and "content" in c:
                                         content = c.get("content", "")
                                         if isinstance(content, str) and content.startswith('[') and ']' in content:
-                                            source_name = content[1:content.find(']')].strip()
+                                            source_name = content[1:content.find('')].strip()
                                     
                                     if source_name:
                                         # If source is a path, extract just the filename
@@ -2143,7 +2151,7 @@ def run_streamlit_ui() -> None:
                                     if isinstance(content, str):
                                         # Check for [filename] pattern
                                         if content.startswith('[') and ']' in content:
-                                            src = content[1:content.find(']')]
+                                            src = content[1:content.find('')]
                                             content = content[content.find(']')+1:].strip()
                                             st.markdown(f"**📄 מקור {ref} - {src}:**")
                                         else:
@@ -2202,18 +2210,14 @@ def run_streamlit_ui() -> None:
                         except Exception:
                             st.code(st.session_state.raw_index_json)
 
-    # ─────────────────── Tab 5 – Function Config ──────────────────────────
+    # ─────────────────── Tab 5 – Function Config ──────────────────────────
     with tab_cfg:
         st.header("⚙️ Configure Azure Function")
 
-        # ── Load .env once for this tab ────────────────────────────────
-        from dotenv import dotenv_values
-        env_file_path = Path(__file__).resolve().parent / ".env"
-        env_vars = dotenv_values(env_file_path) if env_file_path.exists() else {}
+        # Load .env once for this tab
+        env_vars = load_env_vars()
 
-        # ------------------------------------------------------------------
         # Runtime parameters – choose index from dropdown
-        # ------------------------------------------------------------------
         st.markdown("##### Runtime parameters")
 
         # Populate from earlier tabs (Manage/Create) – falls back to manual
@@ -2236,99 +2240,52 @@ def run_streamlit_ui() -> None:
         # Display the derived AGENT_NAME (read‑only)
         st.text_input("AGENT_NAME", env_vars["AGENT_NAME"], disabled=True)
 
-        # Try to pre‑fill subscription from az cli
-        from subprocess import check_output, CalledProcessError
-        try:
-            az_acc = local_json.loads(check_output(["az", "account", "show", "-o", "json"], text=True))
-            cli_sub = az_acc.get("id", "")
-        except (CalledProcessError, FileNotFoundError, json.JSONDecodeError):
-            cli_sub = ""
+        # Try to pre‑fill subscription from az cli
+        cli_sub = get_azure_subscription()
         sub_id = st.text_input("Subscription ID", cli_sub)
 
-        # List Function Apps in this subscription (needs DefaultAzureCredential)
-        func_choices = []
-        func_map = {}          # "app (rg)" → (name, rg)
-        if sub_id:
-            from azure.identity import DefaultAzureCredential
-            from azure.mgmt.web import WebSiteManagementClient
-
-            try:
-                _wcli_tmp = WebSiteManagementClient(DefaultAzureCredential(), sub_id)
-                for site in _wcli_tmp.web_apps.list():
-                    # Filter only Function Apps (kind contains "functionapp")
-                    if site.kind and "functionapp" in site.kind:
-                        label = f"{site.name}  ({site.resource_group})"
-                        func_choices.append(label)
-                        func_map[label] = (site.name, site.resource_group)
-            except Exception as _exc:
-                st.warning("⚠️ Could not list Function Apps automatically; fill manually.")
+        # List Function Apps in this subscription
+        func_choices, func_map = list_function_apps(sub_id)
+        
+        if not func_choices and sub_id:
+            st.warning("⚠️ Could not list Function Apps automatically; fill manually.")
 
         func_sel_lbl = st.selectbox(
             "Choose Function App",
             ["-- manual input --"] + func_choices,
             index=0
         )
-        st.session_state["func_map"]     = func_map
+        st.session_state["func_map"] = func_map
         st.session_state["func_choices"] = func_choices
+        
         if func_sel_lbl != "-- manual input --":
             app, rg = func_map[func_sel_lbl]
         else:
             rg = st.text_input("Resource Group", os.getenv("AZURE_RG", ""))
             app = st.text_input("Function App name", os.getenv("AZURE_FUNCTION_APP", ""))
+        
         # Normalise variable names (func_name / func_rg) and keep old aliases
         func_name = app
-        func_rg   = rg
+        func_rg = rg
 
         if not all((sub_id, rg, app)):
             st.info("Fill subscription / RG / Function-App and click 🔄 Load settings.")
         else:
-            from azure.identity import DefaultAzureCredential
-            from azure.mgmt.web import WebSiteManagementClient
-            import pandas as pd, re
-
-            wcli = WebSiteManagementClient(DefaultAzureCredential(), sub_id)
-
-            def _mask(v: str) -> str:
-                if v.startswith("@Microsoft.KeyVault(") or re.search(r"(key|secret|token|pass)", v, re.I):
-                    return "••••••"
-                return v
-
             if "func_raw" not in st.session_state:
                 st.session_state.func_raw = {}
             if "func_df" not in st.session_state:
-                st.session_state.func_df  = pd.DataFrame(columns=["key", "value"])
+                st.session_state.func_df = pd.DataFrame(columns=["key", "value"])
 
             if st.button("🔄 Load settings"):
-                try:
-                    cfg = wcli.web_apps.list_application_settings(rg, app)
-                    raw = cfg.properties or {}
+                success, df, raw, error_msg = load_function_settings(rg, app, sub_id, env_vars)
+                if success:
                     st.session_state.func_raw = raw
+                    st.session_state.func_df = df
+                    st.success(f"Loaded & merged {len(df)} setting(s).")
+                else:
+                    st.error(f"Failed to load: {error_msg}")
 
-                    # ── Merge precedence: Function settings ← .env values (1‑to‑1) ──
-                    param_vals = raw.copy()
-                    param_vals.update(env_vars)   # .env already matches Function key names
-                    REQUIRED_KEYS = [
-                        "AGENT_FUNC_KEY", "AGENT_NAME", "API_VERSION",
-                        "APPLICATIONINSIGHTS_CONNECTION_STRING",
-                        "AZURE_OPENAI_API_VERSION", "AzureWebJobsStorage", "debug",
-                        "DEPLOYMENT_STORAGE_CONNECTION_STRING", "includesrc",
-                        "INDEX_NAME", "MAX_OUTPUT_SIZE",
-                        "OPENAI_DEPLOYMENT", "OPENAI_ENDPOINT", "OPENAI_KEY",
-                        "RERANKER_THRESHOLD", "SEARCH_API_KEY",
-                        "SERVICE_NAME"
-                    ]
-                    for k in REQUIRED_KEYS:
-                        param_vals.setdefault(k, "")
-
-                    rows = [{"key": k, "value": _mask(str(param_vals[k]))} for k in REQUIRED_KEYS]
-                    st.session_state.func_df = pd.DataFrame(rows)
-
-                    st.success(f"Loaded & merged {len(st.session_state.func_df)} setting(s).")
-                except Exception as err:
-                    st.error(f"Failed to load: {err}")
-
-        
-        # ── Show editable table on every render once loaded ───────────────
+        # Show editable table on every render once loaded
         if st.session_state.get("func_df") is not None and not st.session_state.func_df.empty:
             st.markdown("#### Function App Settings")
             st.session_state.func_df = _st_data_editor(
@@ -2338,74 +2295,34 @@ def run_streamlit_ui() -> None:
                 key="func_editor",
             )
 
-            # ── Push edited settings back to the Function App ────────────────
+            # Push edited settings back to the Function App
             st.divider()
             if st.button("💾 Push settings to Function"):
-                if not all((sub_id, func_rg, func_name)):
-                    st.error("Fill subscription / resource‑group / app name first.")
-                elif st.session_state.func_df.empty:
-                    st.error("Nothing to push – load settings first.")
+                success, message = push_function_settings(
+                    func_rg, 
+                    func_name, 
+                    sub_id, 
+                    st.session_state.func_df,
+                    st.session_state.func_raw
+                )
+                if success:
+                    st.success(f"✅ {message} on **{func_name}**")
                 else:
-                    try:
-                        # Build new property map –
-                        # start with the *original* raw to preserve hidden keys
-                        new_props = dict(st.session_state.func_raw)
+                    st.error(f"Failed to update Function settings:\n{message}")
 
-                        # Overwrite with rows from the edited table
-                        for _, row in st.session_state.func_df.iterrows():
-                            k = str(row["key"]).strip()
-                            v = str(row["value"]).strip()
-                            # If the cell still shows masked dots, keep original
-                            if v == "••••••" and k in new_props:
-                                continue
-                            new_props[k] = v
-
-                        # Update in Azure
-                        wcli.web_apps.update_application_settings(
-                            func_rg,
-                            func_name,
-                            {"properties": new_props}
-                        )
-                        st.success(f"✅ Updated {len(new_props)} settings on **{func_name}**")
-                    except Exception as push_err:
-                        st.error(f"Failed to update Function settings:\n{push_err}")
-
-            # ── Deploy local ./function code to this Function App ─────────────
-            st.divider()
-            # ── Deploy local ./function code to this Function App ─────────────
+        # Deploy local ./function code to this Function App
         st.divider()
         if st.button("🚀 Deploy local code to Function"):
-            if not all((sub_id, func_rg, func_name)):
-                st.error("Fill subscription / RG / Function-App first.")
-            else:
-                try:
-                    st.info("⏳ Zipping and deploying, please wait…")
+            with st.spinner("⏳ Zipping and deploying, please wait…"):
+                success, message, stdout = deploy_function_code(func_rg, func_name, sub_id)
+                if success:
+                    st.success(f"✅ {message}")
+                    if stdout:
+                        st.text(stdout)
+                else:
+                    st.error(message)
 
-                    func_dir = Path.cwd() / "function"
-                    if not func_dir.exists():
-                        st.error(f"Local 'function' folder not found: {func_dir}")
-                        st.stop()
-
-                    with tempfile.TemporaryDirectory() as td:
-                        zip_path = Path(td) / "function.zip"
-                        _zip_function_folder(func_dir, zip_path)
-
-                        cmd = [
-                            "az", "functionapp", "deployment", "source", "config-zip",
-                            "-g", func_rg,
-                            "-n", func_name,
-                            "--src", str(zip_path)
-                        ]
-                        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                        st.success("✅ Deployment completed")
-                        if result.stdout:
-                            st.text(result.stdout.strip())
-                except subprocess.CalledProcessError as cerr:
-                    st.error(f"az CLI deployment failed:\n{cerr.stderr}")
-                except Exception as ex:
-                    st.error(f"Failed to deploy: {ex}")
-
-    # ─────────────────── Single Tab – AI Foundry Agent ──────────────────
+    # ─────────────────── Tab 6 – AI Foundry Agent ────────────────────────
     with tab_ai:
         health_block()
         st.header("🤖 Create AI Foundry Agent")
@@ -2429,19 +2346,45 @@ def run_streamlit_ui() -> None:
             st.stop()
 
         projects = get_ai_foundry_projects(cli_cred)
-        if not projects and os.getenv("PROJECT_ENDPOINT"):
-            ep = os.getenv("PROJECT_ENDPOINT").strip()
-            projects = [{
-                "name": ep.split('/')[-1][:30] or "env-project",
-                "location": "env",
-                "endpoint": ep,
-                "resource_group": "env",
-                "hub_name": "env",
-            }]
-
+        
+        # If no projects found, show helpful message
         if not projects:
-            st.warning("No AI Foundry projects detected.")
-            st.stop()
+            st.warning("No AI Foundry projects found via Azure CLI.")
+            
+            # Check for PROJECT_ENDPOINT in .env
+            project_endpoint_env = os.getenv("PROJECT_ENDPOINT", "").strip()
+            if project_endpoint_env:
+                projects = [{
+                    "name": project_endpoint_env.split('/')[-1][:30] or "env-project",
+                    "location": "env",
+                    "endpoint": project_endpoint_env,
+                    "resource_group": "env",
+                    "hub_name": "env",
+                }]
+                st.success(f"Using PROJECT_ENDPOINT from .env: {project_endpoint_env}")
+            else:
+                # Allow manual entry
+                st.info(
+                    "You can either:\n"
+                    "1. Create a project in Azure AI Studio\n"
+                    "2. Set the PROJECT_ENDPOINT environment variable in your .env file\n"
+                    "3. Make sure you have access to at least one AI Foundry project"
+                )
+                
+                manual_endpoint = st.text_input(
+                    "Or enter Project Endpoint manually:",
+                    placeholder="https://my-project.api.region.ai.azure.com/"
+                )
+                if manual_endpoint:
+                    projects = [{
+                        "name": "manual-project",
+                        "location": "manual",
+                        "endpoint": manual_endpoint,
+                        "resource_group": "manual",
+                        "hub_name": "manual",
+                    }]
+                else:
+                    st.stop()
 
         proj_labels = [f"{p['name']} – {p['location']}" for p in projects]
         sel = st.selectbox("Choose Foundry project", proj_labels, index=0)
@@ -2464,6 +2407,53 @@ def run_streamlit_ui() -> None:
                 st.error("Failed to create agent via SDK:")
                 st.error(message)
 
-# Add this guard to call run_streamlit_ui() when the script is run
+
+##############################################################################
+# Main entry point
+##############################################################################
+
+def main():
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "question",
+        nargs="?",
+        help="Your question (e.g. 'What is Azure AI Search?')"
+    )
+    parser.add_argument(
+        "--model",
+        choices=["o3", "4o", "41"],
+        default="41",
+        help="Model variant: o3 | 4o | 41 (default: 41)"
+    )
+    args = parser.parse_args()
+
+    # If no question provided or running under Streamlit, show UI
+    if not args.question or _st_in_runtime():
+        run_streamlit_ui()
+        return
+
+    # CLI mode - process the question
+    oai_client, chat_params = init_openai(args.model)
+    search_client, _ = init_search_client(os.getenv("INDEX_NAME", "agentic-vectors"))
+
+    # Plan queries
+    queries = plan_queries(args.question, oai_client, chat_params)
+    print(f"📋 Planned queries: {queries}")
+
+    # Retrieve documents
+    docs = retrieve(queries, search_client)
+    print(f"📚 Retrieved {len(docs)} documents")
+
+    # Build context and answer
+    ctx = build_context(docs)
+    final_answer, tokens = answer(args.question, ctx, oai_client, chat_params)
+    
+    print("\n" + "="*80)
+    print(f"💬 Answer ({tokens} tokens):\n")
+    print(final_answer)
+    print("="*80 + "\n")
+
+
 if __name__ == "__main__":
-    run_streamlit_ui()
+    main()
