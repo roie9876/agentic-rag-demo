@@ -1,5 +1,5 @@
 Todo list
-1. split agentic-rag-demo.py
+1. split agentic-rag-demo.py - Done
 2. we cant run any section of the code before finish the health check step, we need to remove this depenency and allow users to run the code even without health check step.
 2. fix .env file contain duplicated recoreds
 3. update readme file 
