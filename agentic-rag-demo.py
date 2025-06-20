@@ -98,6 +98,9 @@ from azure.search.documents.agent.models import (
 )
 from dotenv import load_dotenv
 
+# Health Check Module
+from health_check import HealthChecker, HealthCheckUI
+
 from azure.search.documents import SearchIndexingBufferedSender  # NEW
 import fitz                            # PyMuPDF
 import hashlib, tempfile               # for PDF processing
@@ -1162,86 +1165,14 @@ def run_streamlit_ui() -> None:
 
     # Health Check Tab
     with tab_health:
-        st.header("🩺 Service Health Check")
-        if st.button("🔄 Check All Services"):
-            with st.spinner("Checking services..."):
-                results, all_healthy, troubleshooting = check_all_services()
-                st.session_state['health_results'] = results
-                st.session_state['all_healthy'] = all_healthy
-                st.session_state['troubleshooting'] = troubleshooting
+        # Initialize and render health check UI
+        health_ui = HealthCheckUI()
+        health_ui.render_health_check_tab()
 
-        if 'health_results' in st.session_state:
-            results = st.session_state['health_results']
-            all_healthy = st.session_state['all_healthy']
-            troubleshooting = st.session_state.get('troubleshooting', None)
-            
-            if all_healthy:
-                st.success("🎉 All services are healthy and ready!")
-            else:
-                st.error("⚠️ Some services have issues. Please check configuration before proceeding to other tabs.")
-            
-            for service_name, (status, message) in results.items():
-                st.write(f"**{service_name}:** {'✅' if status else '❌'} {message}")
-                
-                # Show troubleshooting info for failed services
-                if not status and troubleshooting and service_name in troubleshooting:
-                    with st.expander(f"Troubleshooting steps for {service_name}", expanded=True):
-                        st.info(troubleshooting[service_name])
-                        
-                        # For OpenAI specifically, add environment variable inspection
-                        if service_name == "OpenAI":
-                            st.subheader("Environment Variables")
-                            env_vars = {
-                                "AZURE_OPENAI_ENDPOINT": os.getenv("AZURE_OPENAI_ENDPOINT", "Not set"),
-                                "AZURE_OPENAI_ENDPOINT_41": os.getenv("AZURE_OPENAI_ENDPOINT_41", "Not set"),
-                                "AZURE_OPENAI_ENDPOINT_4o": os.getenv("AZURE_OPENAI_ENDPOINT_4o", "Not set"),
-                                "AZURE_OPENAI_KEY": "***" if os.getenv("AZURE_OPENAI_KEY") else "Not set",
-                                "AZURE_OPENAI_KEY_41": "***" if os.getenv("AZURE_OPENAI_KEY_41") else "Not set",
-                                "AZURE_OPENAI_API_VERSION": os.getenv("AZURE_OPENAI_API_VERSION", "Not set"),
-                                "AZURE_OPENAI_DEPLOYMENT": os.getenv("AZURE_OPENAI_DEPLOYMENT", "Not set"),
-                                "AZURE_OPENAI_DEPLOYMENT_41": os.getenv("AZURE_OPENAI_DEPLOYMENT_41", "Not set"),
-                            }
-                            st.json(env_vars)
-                # For Document Intelligence service, add more information even if it's healthy
-                if service_name == "Document Intelligence":
-                    with st.expander("Document Intelligence Details", expanded=False):
-                        st.markdown("""
-                        ### Document Intelligence API Versions
-                        
-                        **Document Intelligence 4.0 API (2023-10-31 and newer):**
-                        - Supports DOCX and PPTX parsing
-                        - Enhanced layout analysis
-                        - More accurate results
-                        - Available in 2023-10-31-preview, 2024-02-29-preview, 2024-11-30 (General Availability) API versions
-                        
-                        **Document Intelligence 3.x API:**
-                        - Basic document analysis features
-                        - PDF and image analysis
-                        - Limited DOCX/PPTX support
-                        
-                        If your service says "❌ Not Available" for Document Intelligence 4.0 API but you believe you have a 4.0 API resource,
-                        check that you're using the correct environment variables that point to your 4.0 API resource.
-                        """)
-                        
-                        # Show environment variables
-                        st.subheader("Environment Variables")
-                        env_vars = {
-                            "DOCUMENT_INTEL_ENDPOINT": os.getenv("DOCUMENT_INTEL_ENDPOINT", "Not set"),
-                            "DOCUMENT_INTEL_KEY": "***" if os.getenv("DOCUMENT_INTEL_KEY") else "Not set",
-                            "AZURE_FORMREC_SERVICE": os.getenv("AZURE_FORMREC_SERVICE", "Not set (legacy)"),
-                            "AZURE_FORMREC_KEY": "***" if os.getenv("AZURE_FORMREC_KEY") else "Not set (legacy)",
-                            "AZURE_FORMRECOGNIZER_ENDPOINT": os.getenv("AZURE_FORMRECOGNIZER_ENDPOINT", "Not set (legacy)"),
-                            "AZURE_FORMRECOGNIZER_KEY": "***" if os.getenv("AZURE_FORMRECOGNIZER_KEY") else "Not set (legacy)"
-                        }
-                        st.json(env_vars)
-        else:
-            st.info("Run a health check before using other tabs.")
-
-    # Block other tabs if health check not passed
+    # Show warnings if health check not passed (optional, non-blocking)
     def health_block():
-        if 'all_healthy' not in st.session_state or not st.session_state['all_healthy']:
-            st.warning("Please run the Health Check tab and ensure all services are healthy before using this feature.")
-            st.stop()
+        health_ui = HealthCheckUI()
+        health_ui.health_block()
 
     # ─────────────────── Tab 1 – Create Index ────────────────────────────
     with tab_create:
@@ -2622,200 +2553,7 @@ def run_streamlit_ui() -> None:
 # Health Check Functions 
 ##############################################################################
 
-def _init_openai_for_health_check():
-    """
-    Initialize OpenAI client for health check using the same logic as the rest of the app.
-    Tries all available endpoint configurations in order: _41, _4o, and base.
-    """
-    clients = []
-    models_tried = []
-    
-    # Try the endpoint variations in priority order
-    for suffix in ["_41", "_4o", ""]:
-        endpoint = os.getenv(f"AZURE_OPENAI_ENDPOINT{suffix}", "").strip()
-        key = os.getenv(f"AZURE_OPENAI_KEY{suffix}", "").strip()
-        api_version = os.getenv(f"AZURE_OPENAI_API_VERSION{suffix}", "2024-05-01-preview").strip()
-        deployment = os.getenv(f"AZURE_OPENAI_DEPLOYMENT{suffix}", "").strip()
-        
-        if endpoint and (key or os.getenv("AZURE_TENANT_ID")):
-            models_tried.append(f"AZURE_OPENAI_ENDPOINT{suffix}")
-            try:
-                # If key is available, use key auth
-                if key:
-                    client = AzureOpenAI(
-                        azure_endpoint=endpoint,
-                        api_key=key,
-                        api_version=api_version
-                    )
-                else:
-                    # Use AAD auth as fallback
-                    aad = get_bearer_token_provider(
-                        DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
-                    )
-                    client = AzureOpenAI(
-                        azure_endpoint=endpoint,
-                        azure_ad_token_provider=aad,
-                        api_version=api_version
-                    )
-                    
-                # Verify the client works by listing models
-                models = list(client.models.list())
-                clients.append({
-                    "client": client,
-                    "endpoint_var": f"AZURE_OPENAI_ENDPOINT{suffix}",
-                    "endpoint": endpoint,
-                    "models": models,
-                    "deployment": deployment
-                })
-            except Exception:
-                pass
-    
-    if not clients:
-        return None, models_tried
-    
-    # Return the first working client
-    return clients[0], models_tried
 
-def check_openai_health():
-    """Check if OpenAI service is available and responsive."""
-    try:
-        client_info, models_tried = _init_openai_for_health_check()
-        
-        if not client_info:
-            if not models_tried:
-                return False, "❌ No OpenAI endpoints configured. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY environment variables."
-            else:
-                return False, f"❌ Could not connect to any OpenAI endpoints. Tried: {', '.join(models_tried)}"
-        
-        # Successfully connected
-        model_count = len(client_info["models"])
-        model_names = ", ".join([m.id for m in client_info["models"][:3]])
-        if model_count > 3:
-            model_names += f", and {model_count - 3} more"
-        
-        endpoint_var = client_info["endpoint_var"]
-        deployment = client_info["deployment"]
-        deployment_info = f" (deployment: {deployment})" if deployment else ""
-        
-        return True, f"✅ Connected successfully via {endpoint_var}{deployment_info}. Found {model_count} models: {model_names}"
-            
-    except Exception as e:
-        return False, f"❌ Error: {str(e)}"
-
-def check_ai_search_health():
-    """Check if Azure AI Search service is available and responsive."""
-    try:
-        search_endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "").strip()
-        if not search_endpoint:
-            return False, "Missing AZURE_SEARCH_ENDPOINT"
-        
-        credential = _search_credential()
-        client = SearchIndexClient(endpoint=search_endpoint, credential=credential)
-        
-        # Try to list indexes as a simple health check
-        indexes = list(client.list_indexes())
-        index_count = len(indexes)
-        
-        auth_mode = "Azure AD" if not os.getenv("AZURE_SEARCH_KEY") else "API Key"
-        rbac_status = "🟢 Enabled" if _rbac_enabled(search_endpoint) else "🔴 Disabled"
-        
-        return True, f"✅ Connected successfully. Found {index_count} indexes. Auth: {auth_mode}, RBAC: {rbac_status}"
-        
-    except Exception as e:
-        return False, f"❌ Error: {str(e)}"
-
-def check_document_intelligence_health():
-    """Check if Document Intelligence service is available and responsive."""
-    try:
-        from tools.document_intelligence_client import DocumentIntelligenceClientWrapper
-        import importlib
-        
-        # Force reload the module to pick up our changes
-        import tools.document_intelligence_client
-        importlib.reload(tools.document_intelligence_client)
-        from tools.document_intelligence_client import DocumentIntelligenceClientWrapper
-        
-        docint_wrapper = DocumentIntelligenceClientWrapper()
-        
-        if not docint_wrapper.client:
-            return False, "❌ Document Intelligence not configured (missing endpoint/key)"
-        
-        # Get endpoint information
-        endpoint = (
-            os.getenv("DOCUMENT_INTEL_ENDPOINT") or
-            os.getenv("AZURE_FORMREC_SERVICE") or
-            os.getenv("AZURE_FORMRECOGNIZER_ENDPOINT") or
-            "Unknown"
-        )
-        
-        # Try to get API version information
-        api_version = "Unknown"
-        if hasattr(docint_wrapper.client, '_config') and hasattr(docint_wrapper.client._config, 'api_version'):
-            api_version = getattr(docint_wrapper.client._config, 'api_version', 'Unknown')
-        
-        # Check if Document Intelligence 4.0 API is available
-        docint_40_status = "✅ Available" if docint_wrapper.docint_40_api else "❌ Not Available"
-        
-        # Build informational message
-        features = []
-        
-        # Check document formats support
-        if docint_wrapper.docint_40_api:
-            features.append("DOCX/PPTX parsing supported")
-        else:
-            features.append("DOCX/PPTX parsing may be limited")
-        
-        # Check if we can analyze basic documents
-        if hasattr(docint_wrapper.client, 'begin_analyze_document'):
-            features.append("Basic document analysis available")
-        
-        # Check for layout analysis
-        if hasattr(docint_wrapper.client, 'begin_analyze_layout'):
-            features.append("Layout analysis available")
-        
-        features_str = ", ".join(features)
-        
-        # Format a nice message
-        api_info = f"API Version: {api_version}"
-        return True, f"✅ Connected successfully to {endpoint}. Doc Intelligence 4.0: {docint_40_status}. {api_info}. Features: {features_str}"
-        
-    except Exception as e:
-        return False, f"❌ Error: {str(e)}"
-
-def check_all_services():
-    """Check health of all services and return summary."""
-    results = {
-        "OpenAI": check_openai_health(),
-        "AI Search": check_ai_search_health(), 
-        "Document Intelligence": check_document_intelligence_health()
-    }
-    
-    all_healthy = all(status for status, _ in results.values())
-    
-    # Add troubleshooting info for failed services
-    troubleshooting_info = {}
-    if not results["OpenAI"][0]:
-        troubleshooting_info["OpenAI"] = (
-            "Check that your OpenAI environment variables are set correctly:\n"
-            "- Either AZURE_OPENAI_ENDPOINT or AZURE_OPENAI_ENDPOINT_41 should be set\n"
-            "- AZURE_OPENAI_KEY should be set\n"
-            "- Your app is using AZURE_OPENAI_ENDPOINT_41, ensure the health check can access it\n"
-            "- Verify your network connection and firewall settings\n"
-            "- Check the API version matches what your endpoint supports\n\n"
-            "The app will use the suffix (_41, _4o) endpoints if available, falling back to the base variables."
-        )
-    if not results["AI Search"][0]:
-        troubleshooting_info["AI Search"] = (
-            "Check that AZURE_SEARCH_ENDPOINT is set correctly. "
-            "If using API key authentication, ensure AZURE_SEARCH_KEY is set."
-        )
-    if not results["Document Intelligence"][0]:
-        troubleshooting_info["Document Intelligence"] = (
-            "Check that DOCUMENT_INTEL_ENDPOINT/DOCUMENT_INTEL_KEY or the legacy "
-            "AZURE_FORMREC_SERVICE/AZURE_FORMREC_KEY environment variables are set correctly."
-        )
-    
-    return results, all_healthy, troubleshooting_info if troubleshooting_info else None
 # Add this guard to call run_streamlit_ui() when the script is run
 if __name__ == "__main__":
     run_streamlit_ui()
