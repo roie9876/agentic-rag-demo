@@ -42,10 +42,10 @@ def check_azure_cli_login() -> Tuple[bool, Union[Dict, None]]:
         out = subprocess.check_output(
             ["az", "account", "show", "--output", "json"],
             text=True,
-            timeout=5,
+            timeout=10,  # Increased timeout to 10 seconds
         )
         return True, json.loads(out)
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return False, None
     except Exception:
         return False, None
@@ -58,7 +58,7 @@ def check_and_install_ai_extension() -> bool:
         out = subprocess.check_output(
             ["az", "extension", "list", "--output", "json"], 
             text=True,
-            timeout=5
+            timeout=10  # Increased timeout to 10 seconds
         )
         extensions = json.loads(out)
         
@@ -109,7 +109,7 @@ def get_ai_foundry_projects(cred: AzureCliCredential) -> List[Dict]:
         out = subprocess.check_output(
             ["az", "ai", "project", "list", "--output", "json"],
             text=True,
-            timeout=10,
+            timeout=15,  # Increased timeout to 15 seconds for project listing
         )
         data = json.loads(out)
         

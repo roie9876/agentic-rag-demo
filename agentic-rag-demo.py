@@ -188,7 +188,7 @@ def _az_logged_user() -> tuple[str | None, str | None]:
     """Return (UPN/email, subscription-id) of the signed‑in az cli user, or (None,None)."""
     try:
         out = subprocess.check_output(
-            ["az", "account", "show", "--output", "json"], text=True, timeout=3
+            ["az", "account", "show", "--output", "json"], text=True, timeout=10
         )
         data = json.loads(out)
         return data["user"]["name"], data["id"]
