@@ -31,7 +31,7 @@ def get_azure_subscription() -> str:
         out = subprocess.check_output(
             ["az", "account", "show", "-o", "json"], 
             text=True, 
-            timeout=3
+            timeout=10
         )
         data = json.loads(out)
         return data.get("id", "")
