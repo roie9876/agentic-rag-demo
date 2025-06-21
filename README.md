@@ -1,18 +1,61 @@
 # Agentic RAG Demo
 
-A full‑stack demonstration of **retrieval‑augmented generation** (RAG) built on:
+A demonstration of Agentic Retrieval-Augmented Generation on Azure using Azure OpenAI and Azure AI Search.
 
-* **Azure Cognitive Search** – hybrid + vector index  
-* **Azure OpenAI** – GPT‑4 / GPT‑4o for answer generation  
-* **Azure Functions** – lightweight API wrapper the agent calls  
-* **Streamlit** – local UI to manage the whole workflow
+## Environment Setup
 
-The UI lets you:
+The application uses environment variables for configuration. Follow these steps to set up your environment:
 
-1. Upload documents → build a vector + keyword index  
-2. Run ad‑hoc queries (“Test Retrieval”)  
-3. Configure a Function App – push environment variables & zip‑deploy code  
-4. Create an **AI Foundry Agent** whose OpenAPI schema points at the selected Function
+1. Copy the provided `.env.example` file to create your own `.env` file:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Edit the `.env` file with your own Azure service credentials and configuration.
+
+### Required Environment Variables
+
+At minimum, these variables are required:
+
+- **Azure OpenAI**:
+  - `AZURE_OPENAI_ENDPOINT` - Endpoint URL of your Azure OpenAI service
+  - `AZURE_OPENAI_KEY` - API key for your Azure OpenAI service
+  - `AZURE_OPENAI_API_VERSION` - API version (e.g., "2025-01-01-preview")
+  - `AZURE_OPENAI_DEPLOYMENT` - Name of your deployment model
+  - `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` - Name of your embedding model deployment
+
+- **Azure AI Search**:
+  - `AZURE_SEARCH_ENDPOINT` - Endpoint URL of your Azure AI Search service
+  - `AZURE_SEARCH_KEY` - API key for your Azure AI Search service
+
+### SharePoint Integration
+
+The application can connect to SharePoint to retrieve documents. You can use one of the following authentication methods:
+
+#### Option 1: Client Secret Authentication (Recommended)
+
+1. Register an application in Azure AD for your Agentic app.
+2. Grant the application permissions to access SharePoint sites and lists.
+3. Add a client secret to your Azure AD app registration.
+4. Configure the following environment variables:
+   - `SHAREPOINT_TENANT_ID` - Your SharePoint tenant ID
+   - `SHAREPOINT_CLIENT_ID` - Application (client) ID of your Azure AD app
+   - `SHAREPOINT_CLIENT_SECRET` - Client secret of your Azure AD app
+   - `SHAREPOINT_SITE_URL` - URL of the SharePoint site to connect to
+
+#### Option 2: Certificate Authentication
+
+1. Register an application in Azure AD for your Agentic app.
+2. Grant the application permissions to access SharePoint sites and lists.
+3. Create a self-signed certificate and upload it to your Azure AD app registration.
+4. Configure the following environment variables:
+   - `SHAREPOINT_TENANT_ID` - Your SharePoint tenant ID
+   - `SHAREPOINT_CLIENT_ID` - Application (client) ID of your Azure AD app
+   - `SHAREPOINT_CERTIFICATE_PATH` - Path to the certificate file (PEM or PFX)
+   - `SHAREPOINT_CERTIFICATE_PASSWORD` - Password for the certificate (if applicable)
+   - `SHAREPOINT_SITE_URL` - URL of the SharePoint site to connect to
+
+> Note: For development, you can use the `localhost` SharePoint site URL: `https://localhost/sites/yoursitename`. Ensure your Azure AD app is configured to allow this URL.
 
 ---
 
@@ -49,7 +92,6 @@ Below are the main environment variables used by this project. **Do not use real
 | `AGENT_FUNC_KEY` | `YOUR-FUNCTION-HOST-KEY` | Azure Function host key |
 | `AZURE_SEARCH_ENDPOINT` | `https://my-search-eastus.search.windows.net` | Azure Cognitive Search endpoint |
 | `AZURE_SEARCH_SERVICE` | `my-search-eastus` | Azure Cognitive Search service name |
-| `SEARCH_API_KEY` | `YOUR-SEARCH-ADMIN-KEY` | Azure Cognitive Search admin key |
 | `SERVICE_NAME` | `my-search-eastus` | Search service name (used by Function) |
 | `PROJECT_ENDPOINT` | `https://my-aoai-resource.services.azure.com/api/projects/my-project` | AI Studio project endpoint (optional) |
 | `MODEL_DEPLOYMENT_NAME` | `gpt-4.1` | Model deployment name (optional) |
