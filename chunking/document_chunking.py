@@ -4,6 +4,7 @@ import jsonschema
 
 from utils import get_filename_from_data
 from .chunker_factory import ChunkerFactory
+from .multimodal_processor import MultimodalProcessor
 
 class DocumentChunker:
     """
@@ -32,9 +33,21 @@ class DocumentChunker:
     - chunks: The list of document chunks created during the process.
     - errors: A list of error messages encountered during the chunking process.
     - warnings: A list of warnings generated during the chunking process.
+
+    Multimodal Support:
+    ------------------
+    When multimodal processing is enabled, the chunker will:
+    - Extract both text and images from the document
+    - Store images in Azure Blob Storage
+    - Associate image references with their corresponding text chunks
+    - Generate captions for images using Azure OpenAI
     """    
-    def __init__(self):
-        pass
+    def __init__(self, multimodal=False, openai_client=None):
+        self.multimodal = multimodal
+        self.openai_client = openai_client
+        
+        # Initialize multimodal processor if enabled
+        self.multimodal_processor = MultimodalProcessor() if multimodal else None
 
     def _error_message(self, exception=None, filename=""):
         """Generate an error message based on the error type."""
@@ -54,8 +67,15 @@ class DocumentChunker:
 
         filename = get_filename_from_data(data)
         try:
-            chunker = ChunkerFactory().get_chunker(data)
+            chunker = ChunkerFactory().get_chunker(
+                data, 
+                multimodal=self.multimodal,
+                multimodal_processor=self.multimodal_processor,
+                openai_client=self.openai_client
+            )
             chunks = chunker.get_chunks()
+            
+            # Image captions are now generated within the enhanced multimodal processing
         except Exception as e:
             errors.append(self._error_message(exception=e, filename=filename))
 

@@ -32,6 +32,7 @@ import pandas as pd           # ← ADD THIS LINE
 # ---------------------------------------------------------------------------
 import streamlit as st
 from chunking import DocumentChunker
+from tools.aoai import AzureOpenAIClient
 
 # Import the test_retrieval module
 from test_retrieval import render_test_retrieval_tab
@@ -371,9 +372,51 @@ def init_openai(model: str = "o3") -> Tuple[AzureOpenAI, dict]:
 
 
 def embed_text(oai_client: AzureOpenAI, deployment: str, text: str) -> list[float]:
-    """Return embedding vector for *text* using the specified deployment."""
-    resp = oai_client.embeddings.create(input=[text], model=deployment)
-    return resp.data[0].embedding
+    """
+    Return embedding vector for *text* using the Azure OpenAI client.
+    
+    This function now uses the proper AzureOpenAIClient from tools.aoai which:
+    - Uses actual token counting with tiktoken (not character estimation)
+    - Automatically truncates to the 8192 token limit for embedding models
+    - Has proper error handling and retry logic
+    """
+    try:
+        # Create an AzureOpenAIClient wrapper for better token handling
+        aoai_client = AzureOpenAIClient(document_filename="embedding")
+        
+        # Use the proper get_embeddings method which handles token limits automatically
+        embeddings = aoai_client.get_embeddings(text)
+        return embeddings
+        
+    except Exception as e:
+        # Fallback to the existing improved method
+        logging.warning(f"AzureOpenAIClient failed, using fallback method: {e}")
+        
+        MAX_EMBEDDING_TOKENS = 8000  # Conservative limit, leaving 192 tokens buffer
+        
+        # Try to use tiktoken for accurate token counting if available
+        try:
+            import tiktoken
+            encoding = tiktoken.encoding_for_model("text-embedding-3-large")
+            tokens = encoding.encode(text)
+            
+            if len(tokens) > MAX_EMBEDDING_TOKENS:
+                # Truncate at token level for precision
+                truncated_tokens = tokens[:MAX_EMBEDDING_TOKENS]
+                text = encoding.decode(truncated_tokens)
+                logging.warning(f"Text truncated from {len(tokens):,} to {len(truncated_tokens):,} tokens for embedding")
+                
+        except ImportError:
+            # Fallback to character-based estimation if tiktoken not available
+            MAX_EMBEDDING_CHARS = 24000  # ~7500 tokens, conservative estimate
+            
+            if len(text) > MAX_EMBEDDING_CHARS:
+                truncated_text = text[:MAX_EMBEDDING_CHARS]
+                logging.warning(f"Text truncated from {len(text):,} to {len(truncated_text):,} characters for embedding (tiktoken not available)")
+                text = truncated_text
+        
+        resp = oai_client.embeddings.create(input=[text], model=deployment)
+        return resp.data[0].embedding
 
 
 def pdf_to_documents(pdf_file, oai_client: AzureOpenAI, embed_deployment: str) -> list[dict]:
@@ -517,7 +560,12 @@ def _chunk_to_docs(
     Fallback to the old base-64 path if that fails – keeps compatibility
     with formats that still expect a string.
     """
-    dc = DocumentChunker()
+    # Enable multimodal processing for supported file types
+    ext = os.path.splitext(file_name)[-1].lower()
+    multimodal_env = os.getenv("MULTIMODAL", "false").lower() in ["true", "1", "yes"]
+    multimodal_enabled = multimodal_env and ext in ('.pdf', '.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.docx', '.pptx')
+    
+    dc = DocumentChunker(multimodal=multimodal_enabled, openai_client=oai_client if multimodal_enabled else None)
 
     ext = os.path.splitext(file_name)[-1].lower()
     # ── EARLY BYPASS for known troublesome formats ────────────────
@@ -529,6 +577,17 @@ def _chunk_to_docs(
     # ------------------------------------------------------------------
 
     def _call_chunker(doc_bytes):
+        # DEBUG: Log file size before calling chunker
+        if isinstance(doc_bytes, bytes):
+            file_size = len(doc_bytes)
+            logging.info(f"[_chunk_to_docs][{file_name}] Calling chunker with BYTES: {file_size:,} bytes")
+            if file_name.endswith('.pdf') and file_size < 1000:
+                logging.error(f"[_chunk_to_docs][{file_name}] ⚠️ SUSPICIOUS: PDF only {file_size} bytes!")
+        elif isinstance(doc_bytes, str):
+            logging.info(f"[_chunk_to_docs][{file_name}] Calling chunker with STRING: {len(doc_bytes):,} chars")
+        else:
+            logging.warning(f"[_chunk_to_docs][{file_name}] Calling chunker with unknown type: {type(doc_bytes)}")
+            
         data = {
             "fileName": file_name,
             "documentBytes": doc_bytes,
@@ -537,6 +596,21 @@ def _chunk_to_docs(
         return dc.chunk_documents(data)
 
     try:
+        # DEBUG: Log initial file size
+        initial_size = len(file_bytes) if isinstance(file_bytes, bytes) else len(file_bytes) if isinstance(file_bytes, str) else 0
+        logging.info(f"[_chunk_to_docs][{file_name}] ENTRY POINT: {initial_size:,} bytes/chars, type: {type(file_bytes)}")
+
+        # --- Sanity guard for potentially truncated PDFs ---------------------------------
+        if ext == ".pdf":
+            header_ok = file_bytes.startswith(b"%PDF-")
+            if len(file_bytes) < 2048 or not header_ok:
+                logging.warning(
+                    f"[_chunk_to_docs][{file_name}] 🛑 Suspect truncated/corrupted PDF "
+                    f"({len(file_bytes)} bytes, header_ok={header_ok}). "
+                    "Falling back to simple pdf_to_documents() extraction."
+                )
+                raise ValueError("suspect_truncated_pdf")  # triggers fallback section
+
         chunks, _, _ = _call_chunker(file_bytes)          # 1️⃣ raw bytes
     except Exception as first_err:
         try:
@@ -575,6 +649,10 @@ def _chunk_to_docs(
     
     has_figures = False
     
+    # Check if any chunk indicates a corrupted file - REMOVED since we no longer validate PDF headers
+    # Let Document Intelligence handle all format validation
+    
+    
     for i, ch in enumerate(chunks):
         txt = ch.get("page_chunk") or ch.get("chunk") or ch.get("content") or ""
         if not txt:
@@ -583,7 +661,7 @@ def _chunk_to_docs(
             txt = label + txt                 # ← prepend filename
             
         # Check if chunk contains figures (for multimodal processing)
-        if any(key in ch for key in ['figure_urls', 'figure_descriptions', 'combined_caption']):
+        if any(key in ch for key in ['figure_urls', 'figure_descriptions', 'combined_caption', 'relatedImages', 'isMultimodal']):
             has_figures = True
             
         # embedding – reuse if present, else create with safe fallback
@@ -594,11 +672,43 @@ def _chunk_to_docs(
             except Exception as emb_err:
                 logging.error("Embedding failed for %s (chunk %d): %s", file_name, i, emb_err)
                 continue  # skip this chunk
+        
+        # Safe join for image captions - handle case where captions might be dicts instead of strings
+        def _safe_join_captions(captions_list):
+            safe_captions = []
+            if captions_list:
+                for caption in captions_list:
+                    if isinstance(caption, str):
+                        safe_captions.append(caption)
+                    elif isinstance(caption, dict):
+                        # If it's a dict, try to extract meaningful content
+                        if "content" in caption:
+                            safe_captions.append(str(caption["content"]))
+                        else:
+                            safe_captions.append(str(caption))
+                    else:
+                        safe_captions.append(str(caption))
+            return " ".join(safe_captions) if safe_captions else ""
+
+        # Generate caption vector for multimodal content
+        caption_vector = None
+        image_captions = ch.get("imageCaptions", [])
+        if image_captions and isinstance(image_captions, list) and len(image_captions) > 0:
+            # Use safe join to handle mixed types (strings, dicts, etc.)
+            captions_text = _safe_join_captions(image_captions)
+            if captions_text:
+                try:
+                    caption_vector = embed_text(oai_client, embed_deployment, captions_text)
+                except Exception as emb_err:
+                    logging.error("Caption embedding failed for %s (chunk %d): %s", file_name, i, emb_err)
+        
         docs.append(
             {
                 "id": ch.get("id") or hashlib.md5(f"{file_name}_{i}".encode()).hexdigest(),
                 "page_chunk": txt,
                 "page_embedding_text_3_large": vector,
+                "content": ch.get("content", txt),  # Use multimodal content if available, fallback to txt
+                "contentVector": ch.get("contentVector") or vector,  # Use multimodal vector if available
                 "page_number": ch.get("page_number") or i + 1,
                 "source_file": file_name,
                 "source": file_name,
@@ -608,6 +718,12 @@ def _chunk_to_docs(
                 "document_type": document_type, 
                 "has_figures": has_figures,
                 "processing_timestamp": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                # Multimodal fields (if present in chunk)
+                "imageCaptions": _safe_join_captions(image_captions),
+                "captionVector": caption_vector,
+                "relatedImages": ch.get("relatedImages", []),
+                "isMultimodal": ch.get("isMultimodal", bool(image_captions or ch.get("relatedImages"))),
+                "filename": ch.get("filename", file_name),
             }
         )
     return docs
@@ -761,6 +877,22 @@ def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bo
                 SimpleField(name="document_type", type="Edm.String", filterable=True, facetable=True),
                 SimpleField(name="has_figures", type="Edm.Boolean", filterable=True, facetable=True),
                 SimpleField(name="processing_timestamp", type="Edm.DateTimeOffset", filterable=True, sortable=True),
+                # Multimodal fields for image processing
+                SearchableField(name="content", type="Edm.String", analyzer_name="standard.lucene"),
+                SearchField(name="contentVector",
+                           type="Collection(Edm.Single)",
+                           stored=False,
+                           vector_search_dimensions=VECTOR_DIM,
+                           vector_search_profile_name="hnsw_text_3_large"),
+                SimpleField(name="imageCaptions", type="Edm.String", searchable=True, retrievable=True),
+                SearchField(name="captionVector",
+                           type="Collection(Edm.Single)",
+                           stored=False,
+                           vector_search_dimensions=VECTOR_DIM,
+                           vector_search_profile_name="hnsw_text_3_large"),
+                SimpleField(name="relatedImages", type="Collection(Edm.String)", filterable=True, retrievable=True),
+                SimpleField(name="isMultimodal", type="Edm.Boolean", filterable=True, facetable=True),
+                SimpleField(name="filename", type="Edm.String", filterable=True, facetable=True),
             ],
             vector_search = VectorSearch(
                 profiles   = [ VectorSearchProfile(name="hnsw_text_3_large", algorithm_configuration_name="alg",
@@ -1320,7 +1452,13 @@ def run_streamlit_ui() -> None:
 
                     def _on_error(action) -> None:
                         try:
-                            failed_ids.append(action.get("id", "?"))
+                            # IndexAction object doesn't have .get() method, need to access attributes
+                            if hasattr(action, 'id'):
+                                failed_ids.append(action.id)
+                            elif hasattr(action, 'document') and hasattr(action.document, 'get'):
+                                failed_ids.append(action.document.get("id", "?"))
+                            else:
+                                failed_ids.append("?")
                         except Exception as exc:
                             logging.error("⚠️  on_error callback failed to record ID: %s", exc)
                             failed_ids.append("?")
@@ -1336,28 +1474,144 @@ def run_streamlit_ui() -> None:
 
                     embed_deploy = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
                     total_pages = 0
+                    processed_files = []
+                    skipped_files = []
+                    
                     for pf in uploaded:
                         ext = os.path.splitext(pf.name)[-1].lower()
                         docs = []
 
-                        if ext == ".pdf":
-                            # --- PDF path -------------------------------------------------
-                            docs = pdf_to_documents(pf, oai_client, embed_deploy)
-                        else:
-                            # --- ALL other files – use DocumentChunker --------------------
-                            try:
-                                docs = _chunk_to_docs(
-                                    pf.name,
-                                    bytes(pf.getbuffer()),
-                                    "",          # no public URL for local upload
-                                    oai_client,
-                                    embed_deploy,
-                                )
-                            except Exception as docerr:
-                                logging.error("DocumentChunker failed for %s: %s", pf.name, docerr)
-                                docs = []
+                        # --- Use DocumentChunker for ALL files including PDFs for multimodal support ---
+                        error_message = None
+                        
+                        # DEBUG: Check file size at the very beginning
+                        original_file_size = len(bytes(pf.getbuffer()))
+                        logging.info(f"[Streamlit Upload][{pf.name}] ORIGINAL FILE SIZE: {original_file_size:,} bytes")
+                        
+                        # Also check the Streamlit file object properties
+                        logging.info(f"[Streamlit Upload][{pf.name}] File object type: {type(pf)}")
+                        logging.info(f"[Streamlit Upload][{pf.name}] File object size property: {getattr(pf, 'size', 'N/A')}")
+                        
+                        try:
+                            docs = _chunk_to_docs(
+                                pf.name,
+                                bytes(pf.getbuffer()),
+                                "",          # no public URL for local upload
+                                oai_client,
+                                embed_deploy,
+                            )
+                            
+                            # Check if file was processed successfully
+                            if not docs:
+                                # Check if the original chunker returned any useful error information
+                                multimodal_enabled = os.getenv("MULTIMODAL", "false").lower() in ["true", "1", "yes"] and ext in ('.pdf', '.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.docx', '.pptx')
+                                dc = DocumentChunker(multimodal=multimodal_enabled, openai_client=oai_client if multimodal_enabled else None)
+                                data = {
+                                    "fileName": pf.name,
+                                    "documentBytes": base64.b64encode(bytes(pf.getbuffer())).decode("utf-8"),
+                                    "documentUrl": "",
+                                }
+                                chunks, errors, warnings = dc.chunk_documents(data)
+                                
+                                if errors:
+                                    error_message = f"Processing failed: {errors[0] if errors else 'Unknown error'}"
+                                else:
+                                    error_message = "No content could be extracted from this file"
+                                    
+                        except Exception as docerr:
+                            error_message = str(docerr)
+                            logging.error("DocumentChunker failed for %s: %s", pf.name, docerr)
+                            
+                            # Try fallback for PDFs only
+                            if ext == ".pdf":
+                                try:
+                                    docs = pdf_to_documents(pf, oai_client, embed_deploy)
+                                    error_message = None  # Clear error if fallback succeeded
+                                    logging.info("Fallback to simple PDF processing for %s", pf.name)
+                                except Exception as pdf_err:
+                                    logging.error("PDF fallback also failed for %s: %s", pf.name, pdf_err)
+                                    error_message = f"PDF processing failed: {str(docerr)[:200]}... (Fallback also failed: {str(pdf_err)[:100]}...)"
+                            else:
+                                # For non-PDF files, keep the original error
+                                error_message = f"Failed to process {ext} file: {str(docerr)[:300]}..."
+                        
+                        # Handle errors - show in UI and track for summary
+                        if error_message or not docs:
+                            # Enhanced error message based on common issues
+                            file_size = len(bytes(pf.getbuffer()))
+                            enhanced_error = error_message or "Unknown processing error"
+                            
+                            # Provide specific guidance for common issues
+                            guidance = ""
+                            if file_size < 1000:
+                                guidance = """
+                                **This file is very small ({} bytes) which suggests it may be:**
+                                - Corrupted or incomplete
+                                - An empty file
+                                - A file that failed to upload properly
+                                
+                                **Try:**
+                                - Re-downloading the original file
+                                - Checking if it opens properly in its native application
+                                - Using a different version of the file
+                                """.format(file_size)
+                            elif "Document Intelligence" in enhanced_error and "UnsupportedContent" in enhanced_error:
+                                guidance = """
+                                **Document Intelligence couldn't process this file because:**
+                                - The file may be corrupted or have invalid internal structure
+                                - It might be password-protected
+                                - The format may not be fully compatible
+                                
+                                **Try:**
+                                - Opening and re-saving the file in its native application
+                                - Converting to a different format (e.g., PDF → DOCX)
+                                - Ensuring the file isn't password-protected
+                                """
+                            elif ext == ".pdf":
+                                guidance = """
+                                **PDF processing failed. Common causes:**
+                                - Corrupted PDF file
+                                - Password-protected PDF
+                                - Non-standard PDF encoding
+                                - Scanned PDF without OCR text layer
+                                
+                                **Try:**
+                                - Re-saving the PDF from its source application
+                                - Using a PDF repair tool
+                                - Converting to Word format first
+                                """
+                            
+                            st.error(f"""
+                            **❌ Processing Failed: {pf.name}**
+                            
+                            {enhanced_error}
+                            
+                            **File details:**
+                            - Size: {file_size} bytes  
+                            - Type: {ext}
+                            
+                            {guidance}
+                            
+                            **What you can try:**
+                            - Check if the file opens correctly in its native application
+                            - Try re-saving or converting the file to a different format
+                            - For PDFs: ensure they're not password-protected
+                            - For images: ensure they're in a standard format
+                            """)
+                            
+                            skipped_files.append({
+                                "name": pf.name,
+                                "size": len(bytes(pf.getbuffer())),
+                                "reason": error_message or "Processing failed"
+                            })
+                            continue
 
                         if not docs:
+                            skipped_files.append({
+                                "name": pf.name,
+                                "size": len(bytes(pf.getbuffer())),
+                                "reason": "Corrupted or unsupported file"
+                            })
                             continue
                             
                         # Show processing information to user
@@ -1385,6 +1639,20 @@ def run_streamlit_ui() -> None:
                                 processing_info.append(f"📄 **{pf.name}** ({doc_type})")
                                 processing_info.append("🔗 **Processing Tool:** LangChain document loader")
                                 processing_info.append("⚡ **Capabilities:** Smart text chunking")
+                                # Check if this was a fallback from multimodal/Document Intelligence
+                                if ext in ('.pdf', '.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.docx', '.pptx'):
+                                    processing_info.append("⚠️ **Note:** Fell back to basic text extraction (Document Intelligence unavailable or file unsupported)")
+                            else:
+                                # Unknown method - show basic info
+                                processing_info.append(f"📄 **{pf.name}** ({doc_type})")
+                                processing_info.append(f"🔧 **Processing Tool:** {method}")
+                        
+                        # Add multimodal status info
+                        multimodal_docs = [doc for doc in docs if doc.get("isMultimodal", False)]
+                        if multimodal_docs:
+                            processing_info.append(f"🎨 **Multimodal Content:** {len(multimodal_docs)} chunks contain images/figures")
+                        elif ext in ('.pdf', '.png', '.jpeg', '.jpg', '.bmp', '.tiff') and os.getenv("MULTIMODAL", "false").lower() in ["true", "1", "yes"]:
+                            processing_info.append("ℹ️ **Multimodal Status:** No images detected or multimodal processing failed")
                         
                         if processing_info:
                             with st.expander(f"ℹ️ Processing Details for {pf.name}", expanded=False):
@@ -1394,6 +1662,11 @@ def run_streamlit_ui() -> None:
                         
                         sender.upload_documents(documents=docs)
                         total_pages += len(docs)
+                        processed_files.append({
+                            "name": pf.name,
+                            "chunks": len(docs),
+                            "method": docs[0].get("extraction_method", "unknown") if docs else "unknown"
+                        })
 
                     sender.close()
 
@@ -1411,6 +1684,21 @@ def run_streamlit_ui() -> None:
                         st.error(f"❌ {len(failed_ids)} pages failed to index – see logs for details.")
                     if success_pages:
                         st.success(f"✅ Indexed {success_pages} pages into **{st.session_state.selected_index}**.")
+                    
+                    # Show processing summary
+                    if processed_files or skipped_files:
+                        st.markdown("### 📊 Processing Summary")
+                        
+                        if processed_files:
+                            st.markdown(f"**✅ Successfully Processed ({len(processed_files)} files):**")
+                            for file_info in processed_files:
+                                st.markdown(f"   • {file_info['name']} - {file_info['chunks']} chunks ({file_info['method']})")
+                        
+                        if skipped_files:
+                            st.markdown(f"**⚠️ Skipped Files ({len(skipped_files)} files):**")
+                            for file_info in skipped_files:
+                                st.markdown(f"   • {file_info['name']} ({file_info['size']} bytes) - {file_info['reason']}")
+                            st.info("💡 **Tip:** Skipped files are usually corrupted, too small, or in an unsupported format. Try re-saving or converting them.")
 
             # --- SharePoint Ingestion Button and Logic ---
             st.markdown("---")
@@ -1489,13 +1777,25 @@ def run_streamlit_ui() -> None:
                             st.info(f"Found {total_files} file(s) in the SharePoint folder.")
                             progress_bar = st.progress(0, text="Starting ingestion...")
                             failed_ids = []
+                            def _sp_on_error(action):
+                                try:
+                                    if hasattr(action, 'id'):
+                                        failed_ids.append(action.id)
+                                    elif hasattr(action, 'document') and hasattr(action.document, 'get'):
+                                        failed_ids.append(action.document.get("id", "?"))
+                                    else:
+                                        failed_ids.append("?")
+                                except Exception as exc:
+                                    logging.error("⚠️  SharePoint on_error callback failed: %s", exc)
+                                    failed_ids.append("?")
+                            
                             sender = SearchIndexingBufferedSender(
                                 endpoint=env("AZURE_SEARCH_ENDPOINT"),
                                 index_name=st.session_state.selected_index,
                                 credential=_search_credential(),
                                 batch_size=100,
                                 auto_flush_interval=5,
-                                on_error=lambda action: failed_ids.append(action.get("id", "?")),
+                                on_error=_sp_on_error,
                             )
                             embed_deploy = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
                             total_pages = 0
