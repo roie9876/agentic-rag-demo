@@ -174,7 +174,7 @@ class DocumentIntelligenceClient:
                 else:
                     logging.warning(f"[docintelligence][{filename}] ⚠️ PDF EOF marker NOT found - file may be truncated")
             else:
-                logging.warning(f"[docintelligence][{filename}] ❌ No PDF header found")
+                logging.warning(f"[docintelligence][{filename}] ❌ No PDF header found - processing as {self._get_file_extension(filename).upper()} file")
                 # Try to detect what type of content it actually is
                 try:
                     text_preview = file_bytes.decode('utf-8', errors='ignore')[:200]
