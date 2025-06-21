@@ -35,7 +35,8 @@ def get_azure_subscription() -> str:
         )
         data = json.loads(out)
         return data.get("id", "")
-    except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError):
+    except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError, subprocess.TimeoutExpired):
+        # Return empty string if Azure CLI fails, times out, or is not available
         return ""
 
 
@@ -209,9 +210,11 @@ def deploy_function_code(
                 "--src", str(zip_path)
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=300)  # 5 minutes for deployment
             return True, "Deployment completed", result.stdout.strip()
             
+    except subprocess.TimeoutExpired:
+        return False, "Deployment timed out after 5 minutes", None
     except subprocess.CalledProcessError as cerr:
         return False, f"az CLI deployment failed: {cerr.stderr}", None
     except Exception as ex:
