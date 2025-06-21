@@ -159,30 +159,36 @@ class HealthChecker:
         """Check if Document Intelligence service is available and responsive."""
         try:
             from tools.document_intelligence_client import DocumentIntelligenceClientWrapper
-            import importlib
             
-            # Force reload the module to pick up our changes
+            # Check for new variable names first, fall back to legacy names
+            endpoint = os.getenv("DOCUMENT_INTEL_ENDPOINT", "").strip()
+            key = os.getenv("DOCUMENT_INTEL_KEY", "").strip()
+            
+            # Fall back to legacy variable names if needed
+            if not endpoint:
+                endpoint = os.getenv("AZURE_FORMREC_SERVICE", "").strip()
+            if not key:
+                key = os.getenv("AZURE_FORMREC_KEY", "").strip()
+                
+            if not endpoint or not key:
+                return False, "Missing Document Intelligence configuration. Set DOCUMENT_INTEL_ENDPOINT/DOCUMENT_INTEL_KEY or the legacy AZURE_FORMREC_SERVICE/AZURE_FORMREC_KEY environment variables."
+            
+            # Force reload the module to pick up env var changes
+            import importlib
             import tools.document_intelligence_client
             importlib.reload(tools.document_intelligence_client)
             from tools.document_intelligence_client import DocumentIntelligenceClientWrapper
             
+            # Initialize client
             docint_wrapper = DocumentIntelligenceClientWrapper()
             
             if not docint_wrapper.client:
-                return False, "❌ Document Intelligence not configured (missing endpoint/key)"
-            
+                return False, f"❌ Failed to initialize Document Intelligence client with endpoint {endpoint}"
+                
             # Get endpoint information
-            endpoint = (
-                os.getenv("DOCUMENT_INTEL_ENDPOINT") or
-                os.getenv("AZURE_FORMREC_SERVICE") or
-                os.getenv("AZURE_FORMRECOGNIZER_ENDPOINT") or
-                "Unknown"
-            )
-            
-            # Try to get API version information
             api_version = "Unknown"
-            if hasattr(docint_wrapper.client, '_config') and hasattr(docint_wrapper.client._config, 'api_version'):
-                api_version = getattr(docint_wrapper.client._config, 'api_version', 'Unknown')
+            if hasattr(docint_wrapper, 'api_version'):
+                api_version = docint_wrapper.api_version
             
             # Check if Document Intelligence 4.0 API is available
             docint_40_status = "✅ Available" if docint_wrapper.docint_40_api else "❌ Not Available"

@@ -46,34 +46,80 @@ class SharePointDataReader:
         self.scope = ["https://graph.microsoft.com/.default"]
         self.access_token = None
 
+        # Add diagnostic logging for authentication variables
+        self._log_auth_diagnostic()
+
     def load_environment_variables_from_env_file(self):
         """
         Loads required SharePoint credentials from environment variables if not already set.
+        Supports both AZURE_* and SHAREPOINT_* prefixed variable naming.
         """
         if not self.tenant_id:
-            self.tenant_id = os.getenv("SHAREPOINT_TENANT_ID")
+            # Try both possible env var names for tenant_id
+            self.tenant_id = os.getenv("AZURE_TENANT_ID") or os.getenv("SHAREPOINT_TENANT_ID")
+            
         if not self.client_id:
-            self.client_id = os.getenv("SHAREPOINT_CLIENT_ID")
-        # Try both possible env var names for client secret
+            # Try both possible env var names for client_id
+            self.client_id = os.getenv("SHAREPOINT_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
+            
+        # Load certificate-based authentication details
+        cert_path = os.getenv("AGENTIC_APP_SPN_CERT_PATH")
+        cert_password = os.getenv("AGENTIC_APP_SPN_CERT_PASSWORD")
+        
+        # Check if certificate exists
+        cert_exists = cert_path and os.path.exists(cert_path)
+        
+        # Set client_secret for certificate-based auth if available
+        if cert_exists and cert_password and not self.client_secret:
+            logging.info("[sharepoint_files_reader] Certificate path exists, using certificate-based authentication")
+            self.client_secret = {"thumbprint": "", "private_key": cert_path, "password": cert_password}
+            
+        # Look for regular client secret if certificate not available
         if not self.client_secret:
             self.client_secret = os.getenv("SHAREPOINT_CLIENT_SECRET") or os.getenv("SHAREPOINT_CLIENT_SECRET_VALUE") or os.getenv("SHAREPOINT_CLIENT_SECRET_NAME")
+            
         if not self.authority:
-            tenant_id = self.tenant_id or os.getenv("SHAREPOINT_TENANT_ID")
+            tenant_id = self.tenant_id
             self.authority = f"https://login.microsoftonline.com/{tenant_id}" if tenant_id else None
-        # Always ensure access_token is set before any API call
-        if (not self.access_token and self.tenant_id and self.client_id and self.client_secret and self.authority):
-            try:
-                token = self._msgraph_auth()
-                if not token:
-                    logging.error("[sharepoint_files_reader] MSAL did not return a valid access token. Check credentials and permissions.")
-            except Exception as e:
-                logging.error(f"[sharepoint_files_reader] Failed to acquire access token: {e}")
-        # If still no access_token, try interactive login as fallback
+            
+        # Try authentication with available credentials
         if not self.access_token:
-            logging.warning("[sharepoint_files_reader] No access token available after Service Principal authentication. Attempting interactive login...")
-            token = self.interactive_login()
-            if not token:
-                logging.error("[sharepoint_files_reader] Interactive login failed. No access token available. Check your credentials and permissions.")
+            if self.tenant_id and self.client_id:
+                logging.info("[sharepoint_files_reader] Attempting authentication with available credentials")
+                
+                # Try certificate-based auth if configured
+                if isinstance(self.client_secret, dict) and cert_exists:
+                    try:
+                        token = self._msgraph_auth()
+                        if token:
+                            logging.info("[sharepoint_files_reader] Successfully authenticated with certificate")
+                            return
+                        else:
+                            logging.warning("[sharepoint_files_reader] Certificate authentication failed")
+                    except Exception as e:
+                        logging.error(f"[sharepoint_files_reader] Certificate authentication error: {e}")
+                
+                # Try regular client secret if available
+                elif isinstance(self.client_secret, str) and self.client_secret:
+                    try:
+                        token = self._msgraph_auth()
+                        if token:
+                            logging.info("[sharepoint_files_reader] Successfully authenticated with client secret")
+                            return
+                        else:
+                            logging.warning("[sharepoint_files_reader] Client secret authentication failed")
+                    except Exception as e:
+                        logging.error(f"[sharepoint_files_reader] Client secret authentication error: {e}")
+                
+                # Fall back to interactive login
+                logging.info("[sharepoint_files_reader] Attempting interactive login as fallback")
+                token = self.interactive_login()
+                if token:
+                    logging.info("[sharepoint_files_reader] Interactive login successful")
+                else:
+                    logging.error("[sharepoint_files_reader] Interactive login failed. Check credentials or network connection.")
+            else:
+                logging.error("[sharepoint_files_reader] Missing tenant_id or client_id for authentication")
 
     def retrieve_sharepoint_files_content(
         self,
@@ -124,19 +170,46 @@ class SharePointDataReader:
     ):
         """
         Authenticate with Microsoft Graph using MSAL for Python.
+        Supports both regular client_secret and certificate-based authentication.
         """
         # Use provided parameters or fall back to instance attributes
         client_id = client_id or self.client_id
         client_secret = client_secret or self.client_secret
         authority = authority or self.authority
-
+        
         # Check if all necessary credentials are provided
         if not all([client_id, client_secret, authority]):
             raise ValueError("Missing required authentication credentials.")
-
-        app = msal.ConfidentialClientApplication(
-            client_id=client_id, authority=authority, client_credential=client_secret
-        )
+            
+        # Handle different types of client_secret for certificate-based auth
+        if isinstance(client_secret, dict):
+            # Certificate-based authentication
+            cert_path = client_secret.get("private_key")
+            password = client_secret.get("password")
+            
+            if not cert_path or not os.path.exists(cert_path):
+                logging.error(f"[sharepoint_files_reader] Certificate file not found: {cert_path}")
+                return None
+                
+            try:
+                with open(cert_path, "rb") as cert_file:
+                    cert_bytes = cert_file.read()
+                    
+                app = msal.ConfidentialClientApplication(
+                    client_id=client_id, 
+                    authority=authority,
+                    client_credential={"certificate": cert_bytes, "password": password}
+                )
+            except Exception as e:
+                logging.error(f"[sharepoint_files_reader] Error loading certificate: {e}")
+                return None
+        else:
+            # Regular client secret authentication
+            app = msal.ConfidentialClientApplication(
+                client_id=client_id, 
+                authority=authority, 
+                client_credential=client_secret
+            )
 
         try:
             # Attempt to acquire token
@@ -146,7 +219,8 @@ class SharePointDataReader:
                 if "access_token" in access_token:
                     logging.debug("[sharepoint_files_reader] New access token retrieved.")
                 else:
-                    logging.error("[sharepoint_files_reader] Error acquiring authorization token.")
+                    error_msg = access_token.get("error_description", "Unknown error")
+                    logging.error(f"[sharepoint_files_reader] Error acquiring authorization token: {error_msg}")
                     return None
             else:
                 logging.debug("[sharepoint_files_reader] Token retrieved from MSAL Cache.")
@@ -157,7 +231,7 @@ class SharePointDataReader:
 
         except Exception as err:
             logging.error(f"[sharepoint_files_reader] Error in msgraph_auth: {err}")
-            raise
+            return None
 
     @staticmethod
     def _format_url(site_id: str, drive_id: str, folder_path: str = None) -> str:
@@ -674,23 +748,78 @@ class SharePointDataReader:
         Sets self.access_token if successful.
         """
         import msal
-        client_id = self.client_id or os.getenv("SHAREPOINT_CLIENT_ID")
-        tenant_id = self.tenant_id or os.getenv("SHAREPOINT_TENANT_ID")
+        # Try both naming conventions for environment variables
+        client_id = self.client_id or os.getenv("SHAREPOINT_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
+        tenant_id = self.tenant_id or os.getenv("AZURE_TENANT_ID") or os.getenv("SHAREPOINT_TENANT_ID")
+        
         authority = f"https://login.microsoftonline.com/{tenant_id}" if tenant_id else None
         scope = ["https://graph.microsoft.com/.default"]
+        
         if not client_id or not tenant_id:
-            logging.error("[sharepoint_files_reader] Missing client_id or tenant_id for interactive login.")
+            logging.error(f"[sharepoint_files_reader] Missing client_id or tenant_id for interactive login. client_id={bool(client_id)}, tenant_id={bool(tenant_id)}")
             return None
+            
+        logging.info(f"[sharepoint_files_reader] Starting interactive login with client_id={client_id[:5]}...")
+        
         app = msal.PublicClientApplication(client_id, authority=authority)
         try:
+            # Try silent token acquisition first
+            accounts = app.get_accounts()
+            if accounts:
+                silent_result = app.acquire_token_silent(scope, account=accounts[0])
+                if silent_result:
+                    logging.info("[sharepoint_files_reader] Token acquired silently from cache")
+                    self.access_token = silent_result["access_token"]
+                    return self.access_token
+                    
+            # No cached token - try interactive login
+            logging.info("[sharepoint_files_reader] No cached token, launching browser for interactive login...")
             result = app.acquire_token_interactive(scopes=scope)
+            
             if "access_token" in result:
                 self.access_token = result["access_token"]
                 logging.info("[sharepoint_files_reader] Interactive login succeeded. Access token acquired.")
                 return self.access_token
             else:
-                logging.error(f"[sharepoint_files_reader] Interactive login failed: {result.get('error_description')}")
+                error_msg = result.get("error_description", "Unknown error")
+                logging.error(f"[sharepoint_files_reader] Interactive login failed: {error_msg}")
                 return None
         except Exception as e:
-            logging.error(f"[sharepoint_files_reader] Exception during interactive login: {e}")
+            logging.error(f"[sharepoint_files_reader] Exception during interactive login: {str(e)}")
             return None
+
+    def _log_auth_diagnostic(self):
+        """Log diagnostic information about authentication configuration."""
+        import os
+        import logging
+        
+        # Print the environment variables related to SharePoint auth
+        auth_vars = {
+            "AZURE_TENANT_ID": os.getenv("AZURE_TENANT_ID", ""),
+            "SHAREPOINT_TENANT_ID": os.getenv("SHAREPOINT_TENANT_ID", ""),
+            "SHAREPOINT_CLIENT_ID": os.getenv("SHAREPOINT_CLIENT_ID", ""),
+            "AZURE_CLIENT_ID": os.getenv("AZURE_CLIENT_ID", ""),
+            "AGENTIC_APP_SPN_CERT_PATH": os.getenv("AGENTIC_APP_SPN_CERT_PATH", ""),
+            "CERT EXISTS": os.path.exists(os.getenv("AGENTIC_APP_SPN_CERT_PATH", "")) if os.getenv("AGENTIC_APP_SPN_CERT_PATH") else False,
+            "SHAREPOINT_SITE_DOMAIN": os.getenv("SHAREPOINT_SITE_DOMAIN", "")
+        }
+        
+        logging.info("SharePoint Authentication Configuration:")
+        for var, value in auth_vars.items():
+            # Mask sensitive values in logs
+            if var != "CERT EXISTS" and value:
+                display_val = value[:5] + "..." if len(value) > 8 else "[SET]"
+                logging.info(f"  {var}: {display_val}")
+            else:
+                logging.info(f"  {var}: {value}")
+        
+        # Log which authentication method will be used
+        cert_path = os.getenv("AGENTIC_APP_SPN_CERT_PATH", "")
+        cert_exists = cert_path and os.path.exists(cert_path)
+        
+        if cert_exists and os.getenv("AGENTIC_APP_SPN_CERT_PASSWORD"):
+            logging.info("Authentication method: Certificate-based service principal")
+        elif os.getenv("SHAREPOINT_CLIENT_SECRET") or os.getenv("SHAREPOINT_CLIENT_SECRET_VALUE"):
+            logging.info("Authentication method: Client secret service principal")
+        else:
+            logging.info("Authentication method: Interactive browser login (fallback)")
