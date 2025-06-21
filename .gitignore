@@ -58,7 +58,7 @@ coverage.xml
 
 # dotenv
 .env
-.env.*
+
 
 # MacOS
 .DS_Store
