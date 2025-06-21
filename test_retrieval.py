@@ -169,184 +169,49 @@ def render_test_retrieval_tab(
 
                 with st.spinner("Retrieving…"):
                     try:
-                        # ---------- SDK call: retrieve chunks --------------------
-                        # Show the full request for debugging
-                        debug_info = {
-                            "agent_name": agent_name,
-                            "endpoint": os.getenv("AZURE_SEARCH_ENDPOINT"),
-                            "credential_type": type(search_credential_fn()).__name__,
-                            "messages": [{"role": m.role, "content": [c.text for c in m.content]} for m in ka_msgs],
-                            "target_index": ka_req.target_index_params[0].index_name if ka_req.target_index_params else "None",
-                            "ka_req_attributes": [attr for attr in dir(ka_req) if not attr.startswith('_')],
-                            "applied_parameters": ka_req_params.keys()
-                        }
+                        # ---------- Direct API call instead of SDK --------------------
+                        from direct_api_retrieval import retrieve_with_direct_api
                         
-                        # Safely add optional parameters if they exist
-                        for param in ["citation_field_name", "response_fields"]:
-                            if hasattr(ka_req, param):
-                                debug_info[param] = getattr(ka_req, param)
-                                
-                        st.expander("Debug Request").write(debug_info)
-                        
-                        result = agent_client.knowledge_retrieval.retrieve(
-                            retrieval_request=ka_req
+                        # Use direct API approach that bypasses SDK issues
+                        api_result = retrieve_with_direct_api(
+                            user_question=user_query,
+                            agent_name=agent_name,
+                            index_name=session_state.selected_index,
+                            reranker_threshold=float(session_state.rerank_thr),
+                            max_output_size=int(session_state.max_output_size),
+                            include_sources=True
                         )
                         
-                        # Debug result structure
-                        debug_info = {
-                            "result_type": type(result).__name__,
-                            "available_attributes": [attr for attr in dir(result) if not attr.startswith('_')],
-                        }
+                        # Extract results
+                        answer = api_result.get("answer", "No answer received")
+                        chunks = api_result.get("chunks", [])
+                        sources = api_result.get("sources", [])
+                        debug_info = api_result.get("debug_info", {})
                         
-                        # Safely add response info if available
-                        if hasattr(result, "response"):
-                            debug_info["response_count"] = len(result.response)
-                            if result.response:
-                                debug_info["first_response_type"] = type(result.response[0]).__name__
-                                debug_info["first_response_attrs"] = [attr for attr in dir(result.response[0]) if not attr.startswith('_')]
+                        # Show debug info
+                        st.expander("Debug API Call").write(debug_info)
                         
-                        # Check for other common attributes
-                        for attr in ["chunks", "raw_response", "references"]:
-                            debug_info[f"has_{attr}"] = hasattr(result, attr)
+                        # Check if we got an error
+                        if answer.startswith("⚠️"):
+                            st.error(f"API call failed: {answer}")
+                            st.stop()
                             
-                        st.expander("Debug Response").write(debug_info)
-                        
                     except Exception as ex:
-                        st.error(f"Retrieval failed: {ex}")
+                        st.error(f"Direct API retrieval failed: {ex}")
                         st.code(traceback.format_exc())
                         st.stop()
 
-                # Build chunks directly from the structured Message → Content objects
-                chunks = []
+                # Sources are already processed by our direct API function
+                sources_data = sources
                 
-                try:
-                    # Extract chunks from response structure if available
-                    if hasattr(result, "chunks"):
-                        # If chunks attribute exists directly, use it
-                        raw_chunks = result.chunks
-                        for c in raw_chunks:
-                            # Convert any objects to dicts by getting their __dict__ if available
-                            chunk_dict = {}
-                            if hasattr(c, "__dict__"):
-                                # Get attributes from object
-                                chunk_dict = {k: v for k, v in c.__dict__.items() if not k.startswith('_')}
-                            elif isinstance(c, dict):
-                                # If it's already a dict, use it directly
-                                chunk_dict = c
-                            else:
-                                # For anything else, try to convert it to a string and use as content
-                                chunk_dict = {"content": str(c), "ref_id": len(chunks)}
-                                
-                            chunks.append(chunk_dict)
-                    
-                    # If no chunks directly available, extract from response
-                    if not chunks and hasattr(result, "response"):
-                        for msg in result.response:
-                            for c in getattr(msg, "content", []):
-                                # Prefer metadata carried inside the underlying Search document
-                                sdoc = getattr(c, "search_document", {}) or {}
-
-                                # Get the doc_key or source_file from the search document
-                                doc_key = sdoc.get("doc_key", "")
-                                source_file = sdoc.get("source_file", "")
-                                
-                                # Extract document name from the content if it's formatted like "[filename] content"
-                                content_text = getattr(c, "text", "")
-                                extracted_filename = ""
-                                if content_text and content_text.startswith("[") and "]" in content_text:
-                                    extracted_filename = content_text.split("]")[0].strip("[")
-                                    # Clean up the content if we found a filename prefix
-                                    content_text = content_text[content_text.find("]")+1:].strip()
-                                
-                                chunk = {
-                                    # ref_id may be missing – fall back to running index
-                                    "ref_id": getattr(c, "ref_id", None) or len(chunks),
-                                    "content": content_text,
-                                    "source_file": source_file or doc_key or extracted_filename,
-                                    "doc_key": doc_key or source_file or extracted_filename,
-                                    "url": sdoc.get("url", "")
-                                }
-                                chunks.append(chunk)
-                                
-                    # If we still don't have chunks, try to extract from raw_response
-                    if not chunks and hasattr(result, "raw_response"):
-                        try:
-                            # Try to parse raw response JSON
-                            if isinstance(result.raw_response, str):
-                                raw_data = local_json.loads(result.raw_response)
-                                if "chunks" in raw_data:
-                                    chunks = raw_data["chunks"]
-                        except:
-                            # Silently continue if parsing fails
-                            pass
-                            
-                    # If still empty, create at least one empty chunk so UI doesn't break
-                    if not chunks:
-                        chunks = [{"ref_id": 0, "content": "No content retrieved", "source_file": "unknown", "doc_key": "", "url": ""}]
-                        
-                except Exception as chunk_ex:
-                    # If anything goes wrong, ensure we have at least one chunk for the UI
-                    st.warning(f"Error parsing chunks: {str(chunk_ex)}")
-                    chunks = [{"ref_id": 0, "content": f"Error parsing retrieval results: {str(chunk_ex)}", "source_file": "error", "doc_key": "", "url": ""}]
-                
-                # Build sources list – keep one entry per source_file but make sure to
-                # capture the first non‑empty URL we encounter.
-                # ------------------ build deduplicated sources list ------------------
-                tmp_sources: Dict[str, dict] = {}
-                for itm in chunks:
-                    # Handle both dictionary and string/JSON formats
-                    if isinstance(itm, str) and itm.startswith('{'):
-                        try:
-                            itm = local_json.loads(itm)
-                        except:
-                            pass  # Keep as is if parsing fails
-                    
-                    # Extract source name from content if needed
-                    content = itm.get("content", "")
-                    extracted_src = ""
-                    if isinstance(content, str) and content.startswith('[') and ']' in content:
-                        extracted_src = content[1:content.find('')]
-                    
-                    # Prefer source_file or doc_key; fall back to extracted name, URL or generic "doc#" label
-                    src_name = (
-                        itm.get("source_file")
-                        or itm.get("doc_key")
-                        or extracted_src
-                        or itm.get("url")
-                        or f"doc{itm.get('ref_id', itm.get('id', '?'))}"
-                    )
-                    src_url = itm.get("url", "")
-                    # First time we see this source → add entry
-                    if src_name not in tmp_sources:
-                        tmp_sources[src_name] = {"source_file": src_name, "url": src_url}
-                    # If we saw this source before but URL was empty, update when we
-                    # finally encounter a non‑empty URL.
-                    elif not tmp_sources[src_name]["url"] and src_url:
-                        tmp_sources[src_name]["url"] = src_url
-
-                sources_data = list(tmp_sources.values())
-                # ---- Best‑effort URL enrichment (if still missing) ----
-                for entry in sources_data:
-                        if entry.get("url"):
-                            continue  # already have one
-                        try:
-                            # Try to fetch first doc whose source_file matches exactly
-                            safe_src = entry["source_file"].replace("'", "''")  # escape single quotes for OData
-                            filt = f"source_file eq '{safe_src}'"
-                            hits = search_client.search(search_text="*", filter=filt, top=1)
-                            for h in hits:
-                                if "url" in h and h["url"]:
-                                    entry["url"] = h["url"]
-                                    break
-                        except Exception:
-                            pass  # silent failure; leave url empty
-
-                # ---------- Generate answer from chunks -------------------------------
+                # ---------- Display the answer -------------------------------
                 # Debug chunk data
                 st.expander("Debug Chunks Data").json(chunks)
                 
                 # Try direct search to check if index has content
+                direct_hits = []
                 try:
+                    search_client, _ = init_search_client(session_state.selected_index)
                     direct_results = search_client.search(search_text=user_query, top=3)
                     direct_hits = [doc for doc in direct_results]
                     st.expander("Direct Search Results").write({
@@ -357,6 +222,31 @@ def render_test_retrieval_tab(
                     })
                 except Exception as ex:
                     st.expander("Direct Search Error").write(f"Error performing direct search: {str(ex)}")
+
+                # Update sidebar diagnostic
+                session_state.dbg_chunks = len(chunks)
+
+                # ---------- Render assistant answer ------------------------------
+                with st.chat_message("assistant"):
+                    # If agent returned no useful answer but we have direct search results, provide fallback
+                    if (not chunks or len(chunks) == 0 or answer == "No relevant information found.") and direct_hits:
+                        st.warning("הסוכן לא מצא תוצאות, אך נמצא תוכן רלוונטי בחיפוש ישיר:")
+                        
+                        # Create a fallback answer from direct search results
+                        fallback_content = []
+                        for hit in direct_hits[:2]:  # Show top 2 results
+                            content = hit.get("content", "")[:500]  # Limit content length
+                            source_file = hit.get("source_file", "מסמך לא ידוע")
+                            if content:
+                                fallback_content.append(f"**[{source_file}]**\n{content}")
+                        
+                        if fallback_content:
+                            st.markdown("\n\n".join(fallback_content))
+                        else:
+                            st.markdown(answer or "*[לא התקבלה תשובה]*", unsafe_allow_html=True)
+                    else:
+                        # Display the formatted answer from our direct API
+                        st.markdown(answer or "*[לא התקבלה תשובה]*", unsafe_allow_html=True)
                 
                 # Format each chunk with its source file for better readability
                 formatted_chunks = []
@@ -685,6 +575,12 @@ def render_test_retrieval_tab(
                                             st.markdown(html_content, unsafe_allow_html=True)
                                         else:
                                             st.write(content)
+                                    
+                                    # Check for and display images from multimodal content
+                                    related_images = parsed_itm.get("relatedImages", [])
+                                    image_captions = parsed_itm.get("imageCaptions", "")
+                                    if related_images:
+                                        display_images_from_blob_storage(related_images, image_captions, env)
                                 except Exception as ex:
                                     st.warning(f"Error parsing content: {str(ex)[:100]}")
                                     st.write(itm)  # Fallback to raw display
@@ -703,6 +599,12 @@ def render_test_retrieval_tab(
                                     st.markdown(html_content, unsafe_allow_html=True)
                                 else:
                                     st.write(content)
+                                
+                                # Check for and display images from multimodal content
+                                related_images = itm.get("relatedImages", [])
+                                image_captions = itm.get("imageCaptions", "")
+                                if related_images:
+                                    display_images_from_blob_storage(related_images, image_captions, env)
                             st.markdown("---")
 
                 # ── Raw payload for debugging ───────────────────────────
@@ -713,3 +615,70 @@ def render_test_retrieval_tab(
                             st.json(json.loads(session_state.raw_index_json))
                         except Exception:
                             st.code(session_state.raw_index_json)
+
+# -------------------------------------------------------------------
+
+def display_images_from_blob_storage(related_images, image_captions, env_fn):
+    """
+    Display images from Azure Blob Storage based on relatedImages field.
+    
+    Parameters:
+    - related_images: List of image identifiers from the relatedImages field
+    - image_captions: String containing image captions
+    - env_fn: Function to get environment variables
+    """
+    if not related_images or len(related_images) == 0:
+        return
+        
+    try:
+        # Get blob storage configuration
+        connection_string = env_fn("AZURE_STORAGE_CONNECTION_STRING")
+        container_name = env_fn("AZURE_STORAGE_CONTAINER")
+        
+        if not connection_string or not container_name:
+            st.warning("🔧 Azure Blob Storage not configured. Cannot display images.")
+            return
+            
+        # Try to import Azure Storage
+        try:
+            from azure.storage.blob import BlobServiceClient
+        except ImportError:
+            st.warning("📦 Azure Storage SDK not available. Cannot display images.")
+            return
+            
+        # Initialize blob service client
+        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+        container_client = blob_service_client.get_container_client(container_name)
+        
+        st.markdown("### 🖼️ Images from Document")
+        
+        if image_captions:
+            st.markdown(f"**Image Captions:** {image_captions}")
+        
+        # Display images in columns for better layout
+        cols = st.columns(min(len(related_images), 3))  # Max 3 columns
+        
+        for i, image_id in enumerate(related_images):
+            with cols[i % 3]:
+                try:
+                    # Check if blob exists
+                    blob_client = container_client.get_blob_client(image_id)
+                    if blob_client.exists():
+                        # Get the blob URL
+                        image_url = blob_client.url
+                        
+                        # Display the image
+                        st.image(image_url, caption=f"Figure {i+1}: {image_id}", use_column_width=True)
+                        
+                        # Add a link to view the image in full size
+                        st.markdown(f"[View Full Size]({image_url})")
+                    else:
+                        st.warning(f"Image not found: {image_id}")
+                        
+                except Exception as img_err:
+                    st.warning(f"Error loading image {image_id}: {str(img_err)}")
+                    
+    except Exception as e:
+        st.error(f"Error accessing blob storage: {str(e)}")
+
+# -------------------------------------------------------------------

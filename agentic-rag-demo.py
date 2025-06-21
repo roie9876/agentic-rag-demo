@@ -691,7 +691,7 @@ def _chunk_to_docs(
             return " ".join(safe_captions) if safe_captions else ""
 
         # Generate caption vector for multimodal content
-        caption_vector = None
+        caption_vector = [0.0] * 3072  # Default to zero vector to avoid null value errors (text-embedding-3-large dims)
         image_captions = ch.get("imageCaptions", [])
         if image_captions and isinstance(image_captions, list) and len(image_captions) > 0:
             # Use safe join to handle mixed types (strings, dicts, etc.)
@@ -701,6 +701,7 @@ def _chunk_to_docs(
                     caption_vector = embed_text(oai_client, embed_deployment, captions_text)
                 except Exception as emb_err:
                     logging.error("Caption embedding failed for %s (chunk %d): %s", file_name, i, emb_err)
+                    # Keep the zero vector as fallback
         
         docs.append(
             {
