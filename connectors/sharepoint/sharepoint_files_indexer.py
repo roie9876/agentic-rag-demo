@@ -1,11 +1,11 @@
 import logging
 import os
 import asyncio
+import time
 from connectors import SharePointDataReader
 from tools import KeyVaultClient
 from tools import AISearchClient
 from typing import Any, Dict, List, Optional
-from chunking import ChunkerFactory
 import base64
 
 class SharepointFilesIndexer:
@@ -31,14 +31,25 @@ class SharepointFilesIndexer:
             # Convert comma-separated string into a list, trimming whitespace
             self.file_formats = [fmt.strip() for fmt in self.file_formats.split(",")]
         else:
-            # By default, handle only PDF files
-            self.file_formats = ["pdf"]
+            # By default, handle common document formats including PPTX
+            self.file_formats = ["pdf", "docx", "pptx", "xlsx", "txt", "md", "json"]
         # When true we skip Document Intelligence and store the whole file as one record
         self.direct_index = os.getenv("SHAREPOINT_INDEX_DIRECT", "false").lower() == "true"
         self.keyvault_client: Optional[KeyVaultClient] = None
         self.client_secret: Optional[str] = None
         self.sharepoint_data_reader: Optional[SharePointDataReader] = None
         self.search_client: Optional[AISearchClient] = None
+        
+        # Processing statistics tracking
+        self.processing_stats = {
+            "processed_files": [],    # List of successfully processed files with details
+            "skipped_files": [],      # List of skipped files with reasons
+            "failed_files": [],       # List of files that failed processing
+            "total_chunks": 0,        # Total number of chunks created
+            "start_time": None,       # Processing start time
+            "end_time": None,         # Processing end time
+            "methods_used": {}        # Track which extraction methods were used
+        }
 
     async def initialize_clients(self) -> bool:
         """Initialize KeyVaultClient, retrieve secrets, and initialize SharePointDataReader and AISearchClient."""
@@ -123,15 +134,23 @@ class SharepointFilesIndexer:
             file_name = file.get("name")
             if not file_name:
                 logging.warning("[sharepoint_files_indexer] File name is missing. Skipping file.")
+                self._track_file_skipped("Unknown", "File name is missing")
                 return
 
             sharepoint_id = file.get("id")
             document_bytes = file.get("content")
             document_url = file.get("source")
             last_modified_datetime = file.get("last_modified_datetime")
-            read_access_entity = file.get("read_access_entity")                  
+            read_access_entity = file.get("read_access_entity")
+            file_size = len(document_bytes) if isinstance(document_bytes, (bytes, bytearray)) else 0
 
             logging.info(f"[sharepoint_files_indexer] Processing File: {file_name}. Last Modified: {last_modified_datetime}")
+
+            # Check if file has content
+            if not document_bytes:
+                self._track_file_skipped(file_name, "No content", file_size)
+                logging.warning(f"[sharepoint_files_indexer] No content for file '{file_name}'. Skipping.")
+                return
 
             data = {
                 "sharepointId": sharepoint_id,
@@ -158,6 +177,7 @@ class SharepointFilesIndexer:
                 )
             except Exception as e:
                 logging.error(f"[sharepoint_files_indexer] Failed to search existing chunks for '{file_name}': {e}")
+                self._track_file_failed(file_name, f"Search failed: {str(e)}", file_size)
                 return
 
             if existing_chunks.get('count', 0) == 0:
@@ -182,6 +202,7 @@ class SharepointFilesIndexer:
                     # Compare modification times
                     if last_modified_datetime <= indexed_last_modified_str:
                         logging.info(f"[sharepoint_files_indexer] '{file_name}' has not been modified since last indexing. Skipping.")
+                        self._track_file_skipped(file_name, "No modifications since last indexing", file_size)
                         return  # Skip indexing as no changes detected
                     else:
                         # If the file has been modified, delete existing chunks and re-index
@@ -232,46 +253,107 @@ class SharepointFilesIndexer:
                     logging.info(
                         f"[sharepoint_files_indexer] Indexed '{file_name}' directly (no Document Intelligence)."
                     )
+                    # Track successful processing (direct mode = 1 chunk)
+                    self._track_file_processed(file_name, 1, "direct_index", file_size, False)
                 except Exception as e:
                     logging.error(
                         f"[sharepoint_files_indexer] Failed to index '{file_name}': {e}"
                     )
+                    self._track_file_failed(file_name, str(e), file_size)
                 return  # skip the chunking path
             # ---------- end direct index path ----------
 
             # ---------- chunk & embed path (non‑direct_index) ----------
-            # For PDF we already had a dedicated chunker in ChunkerFactory;
-            # now we let the factory decide per file extension.
+            # Use DocumentChunker for consistent processing across all file types
             try:
                 ext = os.path.splitext(file_name)[-1].lower()
-                chunker = ChunkerFactory.create(ext)           # returns a BaseChunker
-            except Exception as e:
-                logging.warning(
-                    f"[sharepoint_files_indexer] No chunker for '{file_name}' (ext={ext}). "
-                    f"Skipping file. Error: {e}"
-                )
-                return
-
-            try:
-                chunks = chunker.chunk_document(
-                    content=document_bytes,
-                    file_name=file_name,
-                    url=document_url,
-                )
+                
+                # Enable multimodal processing for supported file types
+                multimodal_env = os.getenv("MULTIMODAL", "false").lower() in ["true", "1", "yes"]
+                multimodal_enabled = multimodal_env and ext in ('.pdf', '.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.docx', '.pptx')
+                
+                # Create DocumentChunker instance
+                from chunking import DocumentChunker
+                dc = DocumentChunker(multimodal=multimodal_enabled, openai_client=None)
+                
+                # Prepare data in the format expected by DocumentChunker
+                data = {
+                    "fileName": file_name,
+                    "documentBytes": base64.b64encode(document_bytes).decode("utf-8") if isinstance(document_bytes, bytes) else document_bytes,
+                    "documentUrl": document_url or "",
+                }
+                
+                # Process the document
+                chunks, errors, warnings = dc.chunk_documents(data)
+                
+                if errors:
+                    logging.error(f"[sharepoint_files_indexer] Chunking errors for '{file_name}': {errors}")
+                if warnings:
+                    logging.warning(f"[sharepoint_files_indexer] Chunking warnings for '{file_name}': {warnings}")
+                    
             except Exception as e:
                 logging.error(
-                    f"[sharepoint_files_indexer] Chunking failed for '{file_name}': {e}"
+                    f"[sharepoint_files_indexer] Failed to create DocumentChunker for '{file_name}' (ext={ext}). "
+                    f"Error: {e}"
                 )
+                self._track_file_failed(file_name, f"DocumentChunker failed: {str(e)}", file_size)
                 return
 
             if not chunks:
                 logging.warning(
                     f"[sharepoint_files_indexer] No chunks produced for '{file_name}'."
                 )
+                self._track_file_skipped(file_name, "No chunks produced", file_size)
                 return
 
-            # enrich each chunk with uniform metadata expected by the index schema
+            # Convert DocumentChunker output to SharePoint index schema format
+            processed_chunks = []
             for i, ch in enumerate(chunks):
+                # Extract text content (DocumentChunker uses different field names)
+                content = ch.get("page_chunk") or ch.get("chunk") or ch.get("content") or ""
+                if not content:
+                    continue
+                    
+                # Create a properly formatted chunk for the SharePoint index
+                processed_chunk = {
+                    "id": ch.get("id") or f"{sharepoint_id}_{i}",
+                    "page_chunk": content,
+                    "page_number": ch.get("page_number") or i + 1,
+                    "source_file": file_name,
+                    "source": file_name,
+                    "url": document_url,
+                    "doc_key": file_name,
+                    # SharePoint-specific metadata
+                    "parent_id": sharepoint_id,
+                    "metadata_storage_path": document_url,
+                    "metadata_storage_name": file_name,
+                    "metadata_storage_last_modified": last_modified_datetime,
+                    "metadata_security_id": read_access_entity,
+                    # Enhanced metadata from DocumentChunker
+                    "extraction_method": ch.get("extraction_method", "document_chunker"),
+                    "document_type": ch.get("document_type", "Unknown"),
+                    "has_figures": ch.get("has_figures", False),
+                    "processing_timestamp": ch.get("processing_timestamp", ""),
+                    # Multimodal fields (if present)
+                    "content": ch.get("content", content),
+                    "imageCaptions": ch.get("imageCaptions", ""),
+                    "relatedImages": ch.get("relatedImages", []),
+                    "isMultimodal": ch.get("isMultimodal", False),
+                    "filename": ch.get("filename", file_name),
+                    # Ensure we have the required embedding field (will be generated during indexing)
+                    "page_embedding_text_3_large": ch.get("page_embedding_text_3_large", []),
+                }
+                
+                # Add vectors if available
+                if ch.get("contentVector"):
+                    processed_chunk["contentVector"] = ch["contentVector"]
+                if ch.get("captionVector"):
+                    processed_chunk["captionVector"] = ch["captionVector"]
+                    
+                processed_chunks.append(processed_chunk)
+
+            # enrich each chunk with uniform metadata expected by the index schema
+            for i, ch in enumerate(processed_chunks):
                 ch.update(
                     {
                         "parent_id": sharepoint_id,
@@ -292,18 +374,171 @@ class SharepointFilesIndexer:
             # upload in bulk
             try:
                 await self.search_client.upload_documents(
-                    index_name=self.index_name, documents=chunks
+                    index_name=self.index_name, documents=processed_chunks
                 )
                 logging.info(
-                    f"[sharepoint_files_indexer] Indexed {len(chunks)} chunks for '{file_name}'."
+                    f"[sharepoint_files_indexer] Indexed {len(processed_chunks)} chunks for '{file_name}' using DocumentChunker."
                 )
+                
+                # Track successful processing with statistics
+                extraction_method = processed_chunks[0].get("extraction_method", "document_chunker") if processed_chunks else "document_chunker"
+                has_multimodal = any(chunk.get("isMultimodal", False) for chunk in processed_chunks)
+                self._track_file_processed(file_name, len(processed_chunks), extraction_method, file_size, has_multimodal)
+                
             except Exception as e:
                 logging.error(
                     f"[sharepoint_files_indexer] Failed to upload chunks for '{file_name}': {e}"
                 )
+                self._track_file_failed(file_name, f"Upload failed: {str(e)}", file_size)
+
+    def _track_file_processed(self, file_name: str, chunks_count: int, extraction_method: str, 
+                             file_size: int = 0, multimodal: bool = False) -> None:
+        """Track a successfully processed file."""
+        file_ext = os.path.splitext(file_name)[-1].lower()
+        self.processing_stats["processed_files"].append({
+            "name": file_name,
+            "extension": file_ext,
+            "chunks": chunks_count,
+            "extraction_method": extraction_method,
+            "file_size": file_size,
+            "multimodal": multimodal
+        })
+        self.processing_stats["total_chunks"] += chunks_count
+        
+        # Track method usage
+        if extraction_method not in self.processing_stats["methods_used"]:
+            self.processing_stats["methods_used"][extraction_method] = 0
+        self.processing_stats["methods_used"][extraction_method] += 1
+
+    def _track_file_skipped(self, file_name: str, reason: str, file_size: int = 0) -> None:
+        """Track a skipped file."""
+        file_ext = os.path.splitext(file_name)[-1].lower()
+        self.processing_stats["skipped_files"].append({
+            "name": file_name,
+            "extension": file_ext,
+            "reason": reason,
+            "file_size": file_size
+        })
+
+    def _track_file_failed(self, file_name: str, error: str, file_size: int = 0) -> None:
+        """Track a failed file."""
+        file_ext = os.path.splitext(file_name)[-1].lower()
+        self.processing_stats["failed_files"].append({
+            "name": file_name,
+            "extension": file_ext,
+            "error": error,
+            "file_size": file_size
+        })
+
+    def generate_processing_report(self) -> Dict[str, Any]:
+        """Generate a comprehensive processing report."""
+        if not self.processing_stats["start_time"] or not self.processing_stats["end_time"]:
+            import time
+            self.processing_stats["end_time"] = time.time()
+            
+        duration = (self.processing_stats["end_time"] - self.processing_stats["start_time"]) if self.processing_stats["start_time"] else 0
+        
+        # Calculate summary statistics
+        total_files = len(self.processing_stats["processed_files"]) + len(self.processing_stats["skipped_files"]) + len(self.processing_stats["failed_files"])
+        success_rate = (len(self.processing_stats["processed_files"]) / total_files * 100) if total_files > 0 else 0
+        
+        # Group by file extension
+        extensions_processed = {}
+        for file_info in self.processing_stats["processed_files"]:
+            ext = file_info["extension"]
+            if ext not in extensions_processed:
+                extensions_processed[ext] = {"count": 0, "chunks": 0, "methods": set()}
+            extensions_processed[ext]["count"] += 1
+            extensions_processed[ext]["chunks"] += file_info["chunks"]
+            extensions_processed[ext]["methods"].add(file_info["extraction_method"])
+        
+        # Convert sets to lists for JSON serialization
+        for ext_info in extensions_processed.values():
+            ext_info["methods"] = list(ext_info["methods"])
+        
+        return {
+            "summary": {
+                "total_files": total_files,
+                "processed_files": len(self.processing_stats["processed_files"]),
+                "skipped_files": len(self.processing_stats["skipped_files"]),
+                "failed_files": len(self.processing_stats["failed_files"]),
+                "total_chunks": self.processing_stats["total_chunks"],
+                "success_rate": round(success_rate, 2),
+                "duration_seconds": round(duration, 2),
+                "index_name": self.index_name,
+                "processing_mode": "direct_index" if self.direct_index else "chunked_processing"
+            },
+            "processing_methods": self.processing_stats["methods_used"],
+            "extensions_processed": extensions_processed,
+            "processed_files": self.processing_stats["processed_files"],
+            "skipped_files": self.processing_stats["skipped_files"],
+            "failed_files": self.processing_stats["failed_files"],
+            "configuration": {
+                "site_domain": self.site_domain,
+                "site_name": self.site_name,
+                "folder_path": self.folder_path,
+                "file_formats": self.file_formats,
+                "direct_index": self.direct_index
+            }
+        }
+
+    def print_processing_report(self) -> None:
+        """Print a formatted processing report to the console."""
+        report = self.generate_processing_report()
+        
+        print("\n" + "="*80)
+        print("📊 SHAREPOINT INDEXING PROCESSING REPORT")
+        print("="*80)
+        
+        # Summary
+        summary = report["summary"]
+        print(f"📋 Summary:")
+        print(f"   • Index: {summary['index_name']}")
+        print(f"   • Processing Mode: {summary['processing_mode']}")
+        print(f"   • Total Files: {summary['total_files']}")
+        print(f"   • Successfully Processed: {summary['processed_files']} ({summary['success_rate']}%)")
+        print(f"   • Skipped: {summary['skipped_files']}")
+        print(f"   • Failed: {summary['failed_files']}")
+        print(f"   • Total Chunks Created: {summary['total_chunks']}")
+        print(f"   • Processing Time: {summary['duration_seconds']} seconds")
+        
+        # Processing methods used
+        if report["processing_methods"]:
+            print(f"\n🔧 Processing Methods Used:")
+            for method, count in report["processing_methods"].items():
+                print(f"   • {method}: {count} files")
+        
+        # Extensions processed
+        if report["extensions_processed"]:
+            print(f"\n📁 File Extensions Processed:")
+            for ext, info in report["extensions_processed"].items():
+                methods_str = ", ".join(info["methods"])
+                print(f"   • {ext}: {info['count']} files, {info['chunks']} chunks ({methods_str})")
+        
+        # Detailed file listings
+        if report["processed_files"]:
+            print(f"\n✅ Successfully Processed Files ({len(report['processed_files'])}):")
+            for file_info in report["processed_files"]:
+                multimodal_indicator = " 🎨" if file_info.get("multimodal", False) else ""
+                print(f"   • {file_info['name']} - {file_info['chunks']} chunks ({file_info['extraction_method']}){multimodal_indicator}")
+        
+        if report["skipped_files"]:
+            print(f"\n⚠️ Skipped Files ({len(report['skipped_files'])}):")
+            for file_info in report["skipped_files"]:
+                print(f"   • {file_info['name']} - {file_info['reason']}")
+        
+        if report["failed_files"]:
+            print(f"\n❌ Failed Files ({len(report['failed_files'])}):")
+            for file_info in report["failed_files"]:
+                print(f"   • {file_info['name']} - {file_info['error']}")
+        
+        print("="*80)
 
     async def run(self) -> None:
         """Main method to run the SharePoint files indexing process."""
+        import time
+        self.processing_stats["start_time"] = time.time()
+        
         logging.info("[sharepoint_files_indexer] Started sharepoint files index run.")
 
         if not self.connector_enabled:
@@ -346,7 +581,16 @@ class SharepointFilesIndexer:
         except Exception as e:
             logging.error(f"[sharepoint_files_indexer] Failed to close AISearchClient: {e}")
 
+        # Mark end time and generate report
+        self.processing_stats["end_time"] = time.time()
+        
         logging.info("[sharepoint_files_indexer] SharePoint connector finished.")
+        
+        # Generate and print the processing report
+        self.print_processing_report()
+        
+        # Also return the report data for programmatic access
+        return self.generate_processing_report()
 
 # Example usage
 # To run the indexer, you would typically do the following in an async context:

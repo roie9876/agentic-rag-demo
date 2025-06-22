@@ -124,15 +124,22 @@ class ChunkerFactory:
     def get_supported_extensions():
         """
         Get a comma-separated list of supported file extensions.
+        Note: This list includes formats with specific chunkers plus all
+        text-based formats supported by LangChainChunker.
 
         Returns:
             str: A comma-separated list of supported file extensions.
         """
         extensions = [
-            'vtt',
-            'xlsx', 'xls',
-            'pdf', 'png', 'jpeg', 'jpg', 'bmp', 'tiff',
-            'docx', 'pptx', 'json'
+            # Specific chunkers
+            'vtt',                                      # TranscriptionChunker
+            'xlsx', 'xls',                             # SpreadsheetChunker  
+            'json',                                    # JSONChunker
+            'pdf', 'png', 'jpeg', 'jpg', 'bmp', 'tiff', # DocAnalysisChunker/MultimodalChunker
+            'docx', 'pptx',                           # DocAnalysisChunker/MultimodalChunker
+            'nl2sql',                                 # NL2SQLChunker
+            # LangChainChunker (handles all text-based formats)
+            'txt', 'md', 'html', 'htm', 'shtml', 'py', 'csv', 'xml'
         ]
         return ', '.join(extensions)
 

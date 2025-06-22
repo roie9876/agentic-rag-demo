@@ -94,8 +94,14 @@ class SpreadsheetChunker(BaseChunker):
                 table_tokens = self.token_estimator.estimate_tokens(table_content)
                 
                 if self.max_chunk_size > 0 and table_tokens > self.max_chunk_size:
-                    logging.info(f"[spreadsheet_chunker][{self.filename}][get_chunks][{sheet['name']}] Table has {table_tokens} tokens. Max tokens is {self.max_chunk_size}. Using summary.")
-                    table_content = sheet["summary"]
+                    logging.info(f"[spreadsheet_chunker][{self.filename}][get_chunks][{sheet['name']}] Table has {table_tokens} tokens. Max tokens is {self.max_chunk_size}. Using summary if available.")
+                    # Use summary if available and shorter than table, otherwise truncate table
+                    if sheet["summary"] and len(sheet["summary"]) < len(table_content):
+                        table_content = sheet["summary"]
+                    else:
+                        # Truncate table content if no summary or summary is not shorter
+                        table_content = table_content[:self.max_chunk_size * 4]  # Rough token-to-char ratio
+                        logging.info(f"[spreadsheet_chunker][{self.filename}][get_chunks][{sheet['name']}] Using truncated table content instead of summary.")
 
                 chunk_dict = self._create_chunk(
                     chunk_id=chunk_id,
@@ -183,10 +189,30 @@ class SpreadsheetChunker(BaseChunker):
             sheet_dict["table"] = table
             
             if not self.chunking_by_row:
-                prompt = f"Summarize the table with data in it, by understanding the information clearly.\n table_data:{table}"
-                summary = self.aoai_client.get_completion(prompt, max_tokens=2048)
-                sheet_dict["summary"] = summary
-                logging.debug(f"[spreadsheet_chunker][{self.filename}][spreadsheet_process][{sheet_dict['name']}] Generated summary.")
+                # Attempt to generate summary using Azure OpenAI
+                summary_generated = False
+                try:
+                    # Check if Azure OpenAI client is properly configured before attempting summarization
+                    if hasattr(self, 'aoai_client') and self.aoai_client is not None:
+                        prompt = f"Summarize the table with data in it, by understanding the information clearly.\n table_data:{table}"
+                        summary = self.aoai_client.get_completion(prompt, max_tokens=2048)
+                        sheet_dict["summary"] = summary
+                        summary_generated = True
+                        logging.debug(f"[spreadsheet_chunker][{self.filename}][spreadsheet_process][{sheet_dict['name']}] Generated summary using Azure OpenAI.")
+                    else:
+                        logging.info(f"[spreadsheet_chunker][{self.filename}][spreadsheet_process][{sheet_dict['name']}] Azure OpenAI client not available, skipping summarization.")
+                except Exception as e:
+                    # Fall back gracefully if Azure OpenAI is not available or configured
+                    logging.warning(f"[spreadsheet_chunker][{self.filename}][spreadsheet_process][{sheet_dict['name']}] Failed to generate summary using Azure OpenAI: {e}. Using table content as summary.")
+                
+                # Use fallback summary if Azure OpenAI summarization failed or was skipped
+                if not summary_generated:
+                    # Create a more informative fallback summary
+                    row_count = len(data)
+                    col_count = len(headers) if headers else 0
+                    table_preview = table[:500] + "..." if len(table) > 500 else table
+                    sheet_dict["summary"] = f"Spreadsheet data with {row_count} rows and {col_count} columns:\n{table_preview}"
+                    logging.debug(f"[spreadsheet_chunker][{self.filename}][spreadsheet_process][{sheet_dict['name']}] Used fallback summary due to Azure OpenAI unavailability.")
             else:
                 sheet_dict["summary"] = ""
                 logging.debug(f"[spreadsheet_chunker][{self.filename}][spreadsheet_process][{sheet_dict['name']}] Skipped summary generation (chunking by row).")

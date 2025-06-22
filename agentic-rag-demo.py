@@ -568,12 +568,9 @@ def _chunk_to_docs(
     dc = DocumentChunker(multimodal=multimodal_enabled, openai_client=oai_client if multimodal_enabled else None)
 
     ext = os.path.splitext(file_name)[-1].lower()
-    # ── EARLY BYPASS for known troublesome formats ────────────────
-    if ext in (".csv", ".xls", ".xlsx"):
-        return _tabular_to_docs(file_name, file_bytes, file_url, oai_client, embed_deployment)
-    # Remove DOCX/PPTX from bypass to allow Document Intelligence processing
-    if ext in (".txt", ".md", ".json"):
-        return _plainfile_to_docs(file_name, file_bytes, file_url, oai_client, embed_deployment)
+    # ── ALL FORMATS NOW USE DOCUMENTCHUNKER FOR CONSISTENCY ────────────────
+    # Removed early bypass logic to ensure all formats are processed consistently
+    # through DocumentChunker, matching the SharePoint upload pipeline.
     # ------------------------------------------------------------------
 
     def _call_chunker(doc_bytes):
@@ -622,29 +619,48 @@ def _chunk_to_docs(
             )
             chunks, _, _ = _call_chunker(b64_str)
         except Exception as second_err:
-            # 3️⃣ tabular fallback for XLS/CSV
-            ext = os.path.splitext(file_name)[-1].lower()
-            if ext in (".csv", ".xlsx", ".xls"):
-                return _tabular_to_docs(file_name, file_bytes, file_url, oai_client, embed_deployment)
+            # 3️⃣ No more fallbacks - all formats handled by DocumentChunker
             # Nothing worked – re-raise original error
             raise first_err from second_err
 
     docs = []
     label = f"[{file_name}] "                 # ← prefix for DocumentChunker path
     
-    # Determine extraction method and document type
-    extraction_method = "document_intelligence" if ext in ('.pdf', '.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.docx', '.pptx', '.xlsx', '.html') else "langchain_chunker"
+    # Determine extraction method based on DocumentChunker's chunker selection
+    extraction_method = {
+        '.vtt': 'transcription_chunker',
+        '.json': 'json_chunker', 
+        '.xlsx': 'spreadsheet_chunker',
+        '.xls': 'spreadsheet_chunker',
+        '.pdf': 'document_intelligence',
+        '.png': 'document_intelligence',
+        '.jpeg': 'document_intelligence', 
+        '.jpg': 'document_intelligence',
+        '.bmp': 'document_intelligence',
+        '.tiff': 'document_intelligence',
+        '.docx': 'document_intelligence',
+        '.pptx': 'document_intelligence',
+        '.nl2sql': 'nl2sql_chunker'
+    }.get(ext, 'langchain_chunker')
+    
     document_type = {
         '.pdf': 'PDF Document',
         '.docx': 'Word Document', 
         '.pptx': 'PowerPoint Presentation',
         '.xlsx': 'Excel Spreadsheet',
+        '.xls': 'Excel Spreadsheet',
+        '.csv': 'CSV Spreadsheet',
         '.png': 'Image',
         '.jpg': 'Image',
         '.jpeg': 'Image',
         '.bmp': 'Image',
         '.tiff': 'Image',
-        '.html': 'HTML Document'
+        '.html': 'HTML Document',
+        '.txt': 'Text Document',
+        '.md': 'Markdown Document',
+        '.json': 'JSON Document',
+        '.vtt': 'Video Transcript',
+        '.nl2sql': 'SQL Schema'
     }.get(ext, 'Text Document')
     
     has_figures = False
@@ -918,7 +934,7 @@ def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bo
             index_client.delete_index(name)
         index_client.create_or_update_index(index_schema)
 
-        # ----------- Knowledge-Agent עם api_key -------
+        # ----------- Knowledge-Agent עם api_key and max_output_size -------
         agent = KnowledgeAgent(
             name = f"{name}-agent",
             models = [
@@ -934,6 +950,9 @@ def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bo
             target_indexes = [
                 KnowledgeAgentTargetIndex(index_name=name, default_reranker_threshold=2.5)
             ],
+            request_limits = KnowledgeAgentRequestLimits(
+                max_output_size = 16000  # Match Azure Function's MAX_OUTPUT_SIZE default
+            ),
         )
         index_client.create_or_update_agent(agent)
         return True
@@ -1381,6 +1400,199 @@ def run_streamlit_ui() -> None:
                 except Exception as ex:
                     st.error(f"Failed to delete index: {ex}")
 
+        st.divider()
+        
+        # =================== AGENT CONFIGURATION SECTION ===================
+        if st.session_state.selected_index:
+            st.subheader("🤖 Knowledge Agent Configuration")
+            agent_name = f"{st.session_state.selected_index}-agent"
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.markdown(f"**Agent Name:** `{agent_name}`")
+                
+                # Check if agent exists and get current configuration
+                agent_exists = False
+                current_config = {}
+                
+                try:
+                    # Try to get current agent configuration
+                    current_agent = root_index_client.get_agent(agent_name)
+                    agent_exists = True
+                    
+                    # Extract current configuration values
+                    current_config = {
+                        "max_output_size": None,
+                        "reranker_threshold": 2.5,  # default
+                        "model_name": "gpt-4.1",    # default
+                    }
+                    
+                    # Try to get max_output_size from request_limits
+                    if hasattr(current_agent, 'request_limits') and current_agent.request_limits:
+                        if hasattr(current_agent.request_limits, 'max_output_size'):
+                            current_config["max_output_size"] = current_agent.request_limits.max_output_size
+                    
+                    # Get reranker threshold from target indexes
+                    if hasattr(current_agent, 'target_indexes') and current_agent.target_indexes:
+                        for target_idx in current_agent.target_indexes:
+                            if hasattr(target_idx, 'default_reranker_threshold'):
+                                current_config["reranker_threshold"] = target_idx.default_reranker_threshold
+                                break
+                    
+                    # Get model name from models
+                    if hasattr(current_agent, 'models') and current_agent.models:
+                        for model in current_agent.models:
+                            if hasattr(model, 'azure_open_ai_parameters') and hasattr(model.azure_open_ai_parameters, 'model_name'):
+                                current_config["model_name"] = model.azure_open_ai_parameters.model_name
+                                break
+                                
+                except Exception as e:
+                    st.info(f"Agent `{agent_name}` doesn't exist yet. You can create it below.")
+                    agent_exists = False
+            
+            with col2:
+                status_icon = "✅" if agent_exists else "❌"
+                st.markdown(f"**Status:** {status_icon} {'Exists' if agent_exists else 'Not Found'}")
+            
+            # Configuration form
+            with st.form("agent_config_form"):
+                st.markdown("#### Agent Parameters")
+                
+                # Max Output Size
+                current_max_output = current_config.get("max_output_size", 16000)
+                if current_max_output is None:
+                    current_max_output = 16000  # Default if not set
+                    
+                new_max_output_size = st.number_input(
+                    "Max Output Size (characters)",
+                    min_value=1000,
+                    max_value=100000,
+                    value=current_max_output,
+                    step=1000,
+                    help="Maximum number of characters the agent can return in a single response"
+                )
+                
+                # Reranker Threshold
+                new_reranker_threshold = st.number_input(
+                    "Reranker Threshold",
+                    min_value=0.0,
+                    max_value=5.0,
+                    value=float(current_config.get("reranker_threshold", 2.5)),
+                    step=0.1,
+                    help="Threshold for semantic reranking (lower = more results, higher = more selective)"
+                )
+                
+                # Model Selection
+                model_options = ["gpt-4.1", "gpt-4o", "gpt-3.5-turbo"]
+                current_model = current_config.get("model_name", "gpt-4.1")
+                try:
+                    model_index = model_options.index(current_model)
+                except ValueError:
+                    model_index = 0
+                    
+                new_model = st.selectbox(
+                    "Model",
+                    options=model_options,
+                    index=model_index,
+                    help="OpenAI model to use for agent responses"
+                )
+                
+                # Form buttons
+                col1, col2 = st.columns(2)
+                with col1:
+                    create_button = st.form_submit_button("🆕 Create Agent" if not agent_exists else "🔄 Update Agent")
+                with col2:
+                    if agent_exists:
+                        delete_agent_button = st.form_submit_button("🗑️ Delete Agent")
+                    else:
+                        delete_agent_button = False
+                
+                # Handle form submission
+                if create_button:
+                    try:
+                        # Get Azure OpenAI configuration
+                        azure_openai_endpoint = env("AZURE_OPENAI_ENDPOINT_41")
+                        openai_api_key = os.getenv("AZURE_OPENAI_KEY_41") or os.getenv("AZURE_OPENAI_KEY") or ""
+                        
+                        # Select deployment based on model
+                        deployment_map = {
+                            "gpt-4.1": "AZURE_OPENAI_DEPLOYMENT_41",
+                            "gpt-4o": "AZURE_OPENAI_DEPLOYMENT_4o", 
+                            "gpt-3.5-turbo": "AZURE_OPENAI_DEPLOYMENT"
+                        }
+                        deployment_env = deployment_map.get(new_model, "AZURE_OPENAI_DEPLOYMENT_41")
+                        deployment_name = os.getenv(deployment_env, "gpt-4.1")
+                        
+                        # Create/update the agent
+                        agent = KnowledgeAgent(
+                            name = agent_name,
+                            models = [
+                                KnowledgeAgentAzureOpenAIModel(
+                                    azure_open_ai_parameters = AzureOpenAIVectorizerParameters(
+                                        resource_url    = azure_openai_endpoint,
+                                        deployment_name = deployment_name,
+                                        model_name      = new_model,
+                                        api_key         = openai_api_key,
+                                    )
+                                )
+                            ],
+                            target_indexes = [
+                                KnowledgeAgentTargetIndex(
+                                    index_name=st.session_state.selected_index, 
+                                    default_reranker_threshold=new_reranker_threshold
+                                )
+                            ],
+                            request_limits = KnowledgeAgentRequestLimits(
+                                max_output_size = int(new_max_output_size)
+                            ),
+                        )
+                        
+                        root_index_client.create_or_update_agent(agent)
+                        
+                        action = "Updated" if agent_exists else "Created"
+                        st.success(f"✅ {action} agent `{agent_name}` successfully!")
+                        st.info(f"📋 Configuration: Max Output: {new_max_output_size}, Reranker: {new_reranker_threshold}, Model: {new_model}")
+                        
+                        # Force a rerun to refresh the current config display
+                        if hasattr(st, "rerun"):
+                            st.rerun()
+                        else:
+                            st.experimental_rerun()
+                            
+                    except Exception as e:
+                        st.error(f"❌ Failed to create/update agent: {str(e)}")
+                        st.code(f"Error details: {e}")
+                
+                if delete_agent_button and agent_exists:
+                    try:
+                        root_index_client.delete_agent(agent_name)
+                        st.success(f"✅ Deleted agent `{agent_name}` successfully!")
+                        
+                        # Force a rerun to refresh the display
+                        if hasattr(st, "rerun"):
+                            st.rerun()
+                        else:
+                            st.experimental_rerun()
+                            
+                    except Exception as e:
+                        st.error(f"❌ Failed to delete agent: {str(e)}")
+            
+            # Show current configuration summary
+            if agent_exists:
+                with st.expander("📋 Current Agent Configuration", expanded=False):
+                    config_data = {
+                        "Parameter": ["Max Output Size", "Reranker Threshold", "Model", "Target Index"],
+                        "Value": [
+                            f"{current_config.get('max_output_size', 'Not Set')} characters",
+                            f"{current_config.get('reranker_threshold', 'Default')}",
+                            current_config.get('model_name', 'Unknown'),
+                            st.session_state.selected_index
+                        ]
+                    }
+                    config_df = pd.DataFrame(config_data)
+                    st.dataframe(config_df, use_container_width=True, hide_index=True)
+        
         st.divider()
         st.subheader("📄 Upload PDFs into Selected Index")
         st.markdown(
