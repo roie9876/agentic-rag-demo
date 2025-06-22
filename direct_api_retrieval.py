@@ -41,7 +41,6 @@ def retrieve_with_direct_api(
     agent_name: str,
     index_name: str,
     reranker_threshold: float = 2.5,
-    max_output_size: int = 16000,
     include_sources: bool = True
 ) -> Dict[str, Any]:
     """
@@ -86,6 +85,7 @@ def retrieve_with_direct_api(
             {
                 "indexName": index_name,
                 "rerankerThreshold": reranker_threshold,
+                "includeReferenceSourceData": True  # Enable full metadata return
             }
         ]
     }
@@ -261,7 +261,64 @@ def retrieve_with_direct_api(
                         chunk["source_file"] = doc["source_file"]
                 except Exception:
                     pass  # Silently ignore lookup errors
-                    
+        
+        # CRITICAL: Enrich chunks with URLs if missing (like function/agent.py)
+        for chunk in chunks:
+            # Skip if already has URL
+            if chunk.get("url", "").startswith(("http://", "https://")):
+                continue
+                
+            # Try to get URL by source_file
+            source_file = chunk.get("source_file", "")
+            if source_file:
+                try:
+                    if search_client is None:
+                        search_client = search_client_helper(index_name)
+                    safe_src = source_file.replace("'", "''")  # escape quotes
+                    search_filter = f"source_file eq '{safe_src}'"
+                    search_results = search_client.search(
+                        search_text="*", 
+                        filter=search_filter, 
+                        top=1,
+                        select=["url", "source_file"]
+                    )
+                    for hit in search_results:
+                        if hit.get("url"):
+                            chunk["url"] = hit["url"]
+                            break
+                except Exception:
+                    pass  # Silently ignore lookup errors
+            
+            # NEW: Extract document name from chunk content when all metadata is missing
+            # Handle cases where agent API returns only ref_id + content (like this debug case)
+            elif not chunk.get("source_file") and not chunk.get("doc_key"):
+                content = chunk.get("content", "")
+                # Look for document name in square brackets at start of content: [filename.ext]
+                if content.startswith("[") and "]" in content[:150]:
+                    try:
+                        doc_name = content[1:content.find("]")]
+                        # Only proceed if it looks like a filename (has extension)
+                        if "." in doc_name and len(doc_name) < 100:
+                            if search_client is None:
+                                search_client = search_client_helper(index_name)
+                            
+                            # Search for URL by document name
+                            safe_doc = doc_name.replace("'", "''")  # escape quotes
+                            search_filter = f"source_file eq '{safe_doc}'"
+                            search_results = search_client.search(
+                                search_text="*", 
+                                filter=search_filter, 
+                                top=1,
+                                select=["url", "source_file"]
+                            )
+                            for hit in search_results:
+                                if hit.get("url"):
+                                    chunk["url"] = hit["url"]
+                                    chunk["source_file"] = doc_name  # Also populate source_file for consistency
+                                    break
+                    except Exception:
+                        pass  # Silently ignore extraction/lookup errors
+        
         # Create a readable answer by combining chunks using improved label logic from agent.py
         def get_chunk_label(chunk: dict) -> str:
             """
@@ -295,11 +352,11 @@ def retrieve_with_direct_api(
             combined_text = " ".join(f"[{get_chunk_label(c)}] {c.get('content', '')}" for c in chunks)
             
             # Try to summarize with LLM if available
-            final_answer = summarize_chunks_with_llm(combined_text, user_question, max_output_size)
+            final_answer = summarize_chunks_with_llm(combined_text, user_question)
         else:
             final_answer = "No relevant information found."
             
-        # Build sources list
+        # Build sources list with URL enrichment (like function/agent.py)
         sources = []
         if include_sources:
             seen_sources = set()
@@ -312,6 +369,42 @@ def retrieve_with_direct_api(
                         "url": chunk.get("url", "")
                     })
                     seen_sources.add(source_file)
+            
+            # URL enrichment: Search index for missing URLs (critical fix!)
+            search_client = search_client_helper(index_name)
+            for entry in sources:
+                if entry.get("url", "").startswith(("http://", "https://")):
+                    continue  # already have a full URL
+                try:
+                    # Search for URL by source_file
+                    safe_src = entry["source_file"].replace("'", "''")  # escape quotes
+                    search_filter = f"source_file eq '{safe_src}'"
+                    search_results = search_client.search(
+                        search_text="*", 
+                        filter=search_filter, 
+                        top=1,
+                        select=["url", "source_file"]
+                    )
+                    for hit in search_results:
+                        if hit.get("url"):
+                            entry["url"] = hit["url"]
+                            break
+                except Exception as e:
+                    # Leave url empty on any failure, but don't break the flow
+                    pass
+        
+        # Format Sources section at end of answer (like function/agent.py + agent foundry)
+        if include_sources and sources:
+            sources_section = "\nSources:\n"
+            for source in sources:
+                source_file = source.get("source_file", "")
+                url = source.get("url", "")
+                if source_file:
+                    if url:
+                        sources_section += f"• {source_file} – {url}\n"
+                    else:
+                        sources_section += f"• {source_file}\n"
+            final_answer += sources_section
         
         return {
             "answer": final_answer,
@@ -328,11 +421,12 @@ def retrieve_with_direct_api(
             "debug_info": {"error": str(e), "endpoint": endpoint}
         }
 
-def summarize_chunks_with_llm(chunks_text: str, user_question: str, max_output_size: int) -> str:
+def summarize_chunks_with_llm(chunks_text: str, user_question: str) -> str:
     """
     Summarize retrieved chunks using Azure OpenAI
     Falls back to truncated chunks if LLM is not available
     """
+    max_output_size = 16000  # Default max output size
     try:
         from openai import AzureOpenAI
         

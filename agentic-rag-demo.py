@@ -1084,8 +1084,8 @@ def agentic_retrieval(agent_name: str, index_name: str, messages: list[dict]) ->
     req_params = {
         "messages": ka_msgs,
         # Only include target_index_params if we actually specified one
-        "target_index_params": target_params,
-        "request_limits": KnowledgeAgentRequestLimits(max_output_size=6000)
+        "target_index_params": target_params
+        # NOTE: Removed request_limits with max_output_size - this parameter is set on the knowledge agent definition, not in retrieve requests
     }
     
     # Try to add optional parameters that might not be supported in all SDK versions
@@ -1283,7 +1283,7 @@ def run_streamlit_ui() -> None:
         oai_client, chat_params = init_openai(model_choice)
 
         st.caption("Change `.env` to add more deployments")
-        auth_mode = "Azure AD" if not os.getenv("AZURE_SEARCH_KEY") else "API Key"
+        auth_mode = "Managed Identity (RBAC)" if not os.getenv("AZURE_SEARCH_KEY") else "API Key"
         st.caption(f"🔑 Search auth: {auth_mode}")
         rbac_flag = _rbac_enabled(env("AZURE_SEARCH_ENDPOINT"))
         st.caption(f"🔒 RBAC: {'🟢 Enabled' if rbac_flag else '🔴 Disabled'}")
@@ -1297,7 +1297,8 @@ def run_streamlit_ui() -> None:
         st.session_state.ctx_size = st.slider("Context chars per chunk", 300, 2000, 600, 50)
         st.session_state.top_k = st.slider("TOP‑K per query", 1, 200, 5, 1)
         st.session_state.rerank_thr = st.slider("Reranker threshold", 0.0, 4.0, 2.0, 0.1)
-        st.session_state.max_output_size = st.slider("Knowledge‑agent maxOutputSize", 1000, 16000, 5000, 500)
+        # NOTE: max_output_size is set on the knowledge agent definition, not in retrieve requests - commenting out
+        # st.session_state.max_output_size = st.slider("Knowledge‑agent maxOutputSize", 1000, 16000, 5000, 500)
         st.session_state.max_tokens = st.slider("Max completion tokens", 256, 32768, 32768, 256)
 
         chunks_placeholder = st.empty()
@@ -1800,6 +1801,9 @@ def run_streamlit_ui() -> None:
                             )
                             embed_deploy = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
                             total_pages = 0
+                            processed_files = []
+                            skipped_files = []
+                            
                             for idx, file in enumerate(sp_files):
                                 file_bytes = file.get("content")
                                 fname = file.get("name")
@@ -1807,28 +1811,62 @@ def run_streamlit_ui() -> None:
                                 st.info(f"Processing file {idx+1}/{total_files}: {fname}")
                                 if not file_bytes or not fname:
                                     progress_bar.progress((idx + 1) / total_files, text=f"Skipped file {idx+1}/{total_files}")
+                                    skipped_files.append({
+                                        "name": fname or "Unknown",
+                                        "size": len(file_bytes) if file_bytes else 0,
+                                        "reason": "No content or filename"
+                                    })
                                     continue
                                 
-                                # If it's a PDF file
-                                if fname.lower().endswith('.pdf'):
-                                    pdf_file = io.BytesIO(file_bytes)
-                                    pdf_file.name = fname
-                                    docs = pdf_to_documents(pdf_file, oai_client, embed_deploy)
-                                    # Patch each doc's url to SharePoint webUrl
-                                    for d in docs:
-                                        d["url"] = file_url
-                                else:
-                                    try:
-                                        docs = _chunk_to_docs(
-                                            fname,
-                                            file_bytes,
-                                            file_url,
-                                            oai_client,
-                                            embed_deploy,
-                                        )
-                                    except Exception as derr:
-                                        logging.error("Chunker failed for %s: %s", fname, derr)
+                                # Use the same advanced processing for ALL files (including PDFs)
+                                try:
+                                    docs = _chunk_to_docs(
+                                        fname,
+                                        file_bytes,
+                                        file_url,
+                                        oai_client,
+                                        embed_deploy,
+                                    )
+                                except Exception as derr:
+                                    logging.error("Chunker failed for %s: %s", fname, derr)
+                                    # Fallback to simple PDF processing only for PDFs if advanced processing fails
+                                    if fname.lower().endswith('.pdf'):
+                                        try:
+                                            pdf_file = io.BytesIO(file_bytes)
+                                            pdf_file.name = fname
+                                            docs = pdf_to_documents(pdf_file, oai_client, embed_deploy)
+                                            # Patch each doc's url to SharePoint webUrl
+                                            for d in docs:
+                                                d["url"] = file_url
+                                            logging.info("Fallback to simple PDF processing for %s", fname)
+                                        except Exception as pdf_err:
+                                            logging.error("PDF fallback also failed for %s: %s", fname, pdf_err)
+                                            docs = []
+                                    else:
                                         docs = []
+                                
+                                # Track processing results
+                                if docs:
+                                    processed_files.append({
+                                        "name": fname,
+                                        "chunks": len(docs),
+                                        "method": docs[0].get("extraction_method", "unknown") if docs else "unknown",
+                                        "multimodal": any(doc.get("isMultimodal", False) for doc in docs)
+                                    })
+                                    
+                                    # Show processing info for SharePoint files too
+                                    multimodal_docs = [doc for doc in docs if doc.get("isMultimodal", False)]
+                                    if multimodal_docs:
+                                        st.info(f"📄 {fname}: {len(docs)} chunks created, {len(multimodal_docs)} with images/figures")
+                                    else:
+                                        st.info(f"📄 {fname}: {len(docs)} chunks created")
+                                else:
+                                    skipped_files.append({
+                                        "name": fname,
+                                        "size": len(file_bytes),
+                                        "reason": "Processing failed"
+                                    })
+                                    
                                 sender.upload_documents(documents=docs)
                                 total_pages += len(docs)
                                 progress_bar.progress((idx + 1) / total_files, text=f"Processed {idx+1}/{total_files} files")
@@ -1846,6 +1884,22 @@ def run_streamlit_ui() -> None:
                                 st.error(f"❌ {len(failed_ids)} pages failed to index – see logs for details.")
                             if success_pages:
                                 st.success(f"✅ Indexed {success_pages} pages from SharePoint into **{st.session_state.selected_index}**.")
+                            
+                            # Show SharePoint processing summary
+                            if processed_files or skipped_files:
+                                st.markdown("### 📊 SharePoint Processing Summary")
+                                
+                                if processed_files:
+                                    st.markdown(f"**✅ Successfully Processed ({len(processed_files)} files):**")
+                                    for file_info in processed_files:
+                                        multimodal_icon = "🎨" if file_info.get("multimodal", False) else ""
+                                        st.markdown(f"   • {file_info['name']} - {file_info['chunks']} chunks ({file_info['method']}) {multimodal_icon}")
+                                
+                                if skipped_files:
+                                    st.markdown(f"**⚠️ Skipped Files ({len(skipped_files)} files):**")
+                                    for file_info in skipped_files:
+                                        st.markdown(f"   • {file_info['name']} ({file_info['size']} bytes) - {file_info['reason']}")
+                                    st.info("💡 **Tip:** Skipped files are usually corrupted, too small, or in an unsupported format.")
                     except Exception as ex:
                         st.error(f"SharePoint ingestion failed: {ex}")
 

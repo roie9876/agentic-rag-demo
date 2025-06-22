@@ -26,7 +26,21 @@ At minimum, these variables are required:
 
 - **Azure AI Search**:
   - `AZURE_SEARCH_ENDPOINT` - Endpoint URL of your Azure AI Search service
-  - `AZURE_SEARCH_KEY` - API key for your Azure AI Search service
+  - `AZURE_SEARCH_KEY` - API key for your Azure AI Search service (optional if using managed identity)
+
+### Authentication Options
+
+#### Azure AI Search Authentication
+
+You can authenticate with Azure AI Search using one of two methods:
+
+**Option 1: API Key Authentication**
+- Set `AZURE_SEARCH_KEY` environment variable with your Azure AI Search admin key
+
+**Option 2: Managed Identity (RBAC) Authentication**
+- Omit the `AZURE_SEARCH_KEY` environment variable 
+- Ensure your application has the "Search Index Data Reader" and "Search Service Contributor" roles assigned on the Azure AI Search service
+- This is the recommended approach for production deployments as it eliminates the need to manage API keys
 
 ### SharePoint Integration
 
