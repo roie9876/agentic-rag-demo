@@ -154,7 +154,7 @@ def summarize_with_llm(chunks_text: str, user_q: str) -> str:
         return chunks_text[:MAX_OUTPUT_SIZE]
 
     system_msg = (
-        "ענה בקצרה ובבהירות בעברית. הסתמך אך ורק על המידע המופיע ב‑chunks "
+        "ענה בקצרה ובבהירות . הסתמך אך ורק על המידע המופיע ב‑chunks "
         "והצג סימוכין בסוגריים מרובעות—for example [my_document.pdf]. "
         "אם אין מידע, השב \"אין לי מידע\"."
     )
@@ -250,7 +250,7 @@ def answer_question(
     if use_responses:
         body["citationFieldName"] = "source_file"
         body["responseFields"] = ["text", "doc_key", "source_file", "url"]
-        body["requestLimits"] = {"maxOutputSize": int(max_out)}
+        # NOTE: maxOutputSize is not a valid parameter for /retrieve API - it's set on the knowledge agent definition
 
     resp = requests.post(endpoint, headers=headers, json=body, timeout=60)
 
@@ -349,7 +349,29 @@ def answer_question(
 
         # Summarise the retrieved information with the LLM so we get a
         # coherent answer even when multiple questions are asked together.
-        final_answer = summarize_with_llm(raw_chunks, user_question)[:MAX_OUTPUT_SIZE]
+        base_answer = summarize_with_llm(raw_chunks, user_question)[:MAX_OUTPUT_SIZE]
+        
+        # Generate enhanced answer with rich metadata (like Streamlit app)
+        if include_sources:
+            # Build preliminary sources for enhancement
+            preliminary_sources = []
+            for c in chunks:
+                src_name = (
+                    c.get("source_file")
+                    or c.get("source")
+                    or c.get("url")
+                    or _label(c)
+                )
+                if src_name:
+                    preliminary_sources.append({
+                        "source_file": src_name,
+                        "url": c.get("url", "") if c.get("url", "").startswith(("http://", "https://")) else ""
+                    })
+            
+            # Generate enhanced answer with page numbers, figures, and clickable links
+            final_answer = generate_enhanced_answer(base_answer, chunks, preliminary_sources)
+        else:
+            final_answer = base_answer
 
         if include_sources:
             # Collect doc_keys from chunks (retrieve) or references (responses)
@@ -450,6 +472,19 @@ def answer_question(
                 except Exception:
                     pass  # leave url empty on error
 
+            # ── NEW: Add Sources section at end of answer (like Streamlit app) ──────
+            if sources:
+                sources_section = "\nSources:\n"
+                for source in sources:
+                    source_file = source.get("source_file", "")
+                    url = source.get("url", "")
+                    if source_file:
+                        if url:
+                            sources_section += f"• {source_file} – {url}\n"
+                        else:
+                            sources_section += f"• {source_file}\n"
+                final_answer += sources_section
+            
             # ←── return JSON object instead of plain text
             return {"answer": final_answer, "sources": sources}
 
@@ -459,3 +494,156 @@ def answer_question(
     except Exception as exc:
         # Gracefully handle any unexpected issues during extraction or summarization
         return f"⚠️  Unexpected processing error: {exc}"
+
+
+def extract_enhanced_citations(chunks):
+    """
+    Extract enhanced citation information from chunks to suggest improved answer format
+    Similar to test_retrieval.py functionality
+    """
+    citations = []
+    
+    if not chunks:
+        return citations
+    
+    # Group chunks by document
+    doc_chunks = {}
+    for chunk in chunks:
+        if isinstance(chunk, dict):
+            # Try to get document name from various fields
+            doc_name = ""
+            content = chunk.get("content", "")
+            
+            # First try direct metadata fields
+            if chunk.get("source_file"):
+                doc_name = chunk["source_file"]
+            elif chunk.get("filename"):
+                doc_name = chunk["filename"]
+            elif chunk.get("source"):
+                doc_name = chunk["source"]
+            # Extract from content if starts with [filename]
+            elif content.startswith("[") and "]" in content[:150]:
+                doc_name = content[1:content.find("]")]
+            
+            if doc_name:
+                if doc_name not in doc_chunks:
+                    doc_chunks[doc_name] = []
+                doc_chunks[doc_name].append(chunk)
+    
+    # Extract metadata for each document
+    for doc_name, chunks_list in doc_chunks.items():
+        pages = set()
+        figures = []
+        
+        for chunk in chunks_list:
+            content = chunk.get("content", "")
+            
+            # Extract page numbers from various patterns
+            import re
+            
+            # Pattern 1: <!-- PageNumber="X" -->
+            page_matches = re.findall(r'<!-- PageNumber="(\d+)" -->', content)
+            for match in page_matches:
+                try:
+                    pages.add(int(match))
+                except ValueError:
+                    pass
+            
+            # Pattern 2: Page X, pp. X, עמ' X
+            page_patterns = [
+                r'(?:Page|pp?\.|עמ\')\s*(\d+)',
+                r'(?:page|עמוד)\s+(\d+)',
+                r'\bp\.\s*(\d+)\b',
+                r'עמ\'\s*(\d+)'
+            ]
+            
+            for pattern in page_patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                for match in matches:
+                    try:
+                        pages.add(int(match))
+                    except ValueError:
+                        pass
+            
+            # Extract figures and tables
+            figure_patterns = [
+                r'Figure\s+\d+[^\n]*',
+                r'Table\s+\d+[^\n]*',
+                r'<figcaption>([^<]+)</figcaption>',
+                r'איור\s+\d+[^\n]*',
+                r'טבלה\s+\d+[^\n]*'
+            ]
+            
+            for pattern in figure_patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                figures.extend(matches)
+        
+        if pages or figures:
+            citations.append({
+                "document": doc_name,
+                "pages": sorted(list(pages)),
+                "figures": figures[:10]  # Limit to first 10 figures
+            })
+    
+    return citations
+
+def generate_enhanced_answer(original_answer, chunks, sources):
+    """
+    Generate enhanced answer with page numbers, figures, and clickable links
+    Similar to test_retrieval.py generate_improved_answer_suggestion
+    """
+    enhanced_citations = extract_enhanced_citations(chunks)
+    
+    if not enhanced_citations:
+        return original_answer
+    
+    # Start with original answer
+    enhanced_answer = original_answer.rstrip()
+    
+    # Add period if missing
+    if not enhanced_answer.endswith('.'):
+        enhanced_answer += '.'
+    
+    # Add citation details for the main document
+    main_citation = enhanced_citations[0]
+    doc_name = main_citation["document"]
+    pages = main_citation["pages"]
+    figures = main_citation["figures"]
+    
+    # Get document URL from sources
+    doc_url = None
+    for source in sources:
+        if source.get("source_file") == doc_name and source.get("url"):
+            doc_url = source["url"]
+            break
+    
+    # Create citation suffix
+    citation_parts = []
+    if pages:
+        page_list = ", ".join(map(str, pages))
+        citation_parts.append(f"עמ' {page_list}")
+    
+    if figures:
+        fig_count = len([f for f in figures if "Figure" in f or "Table" in f])
+        if fig_count > 0:
+            citation_parts.append(f"כולל {fig_count} איורים")
+    
+    citation_suffix = f" ({', '.join(citation_parts)}, {doc_name})" if citation_parts else f" ({doc_name})"
+    
+    # Add clickable URL if available
+    if doc_url:
+        citation_suffix += f" - 📖 פתח מסמך"
+    
+    enhanced_answer += citation_suffix
+    
+    # Add figure details if available
+    if figures:
+        enhanced_answer += "\n\nאיורים וטבלאות:\n"
+        for i, fig in enumerate(figures[:5], 1):  # Limit to first 5 figures
+            enhanced_answer += f"• {fig}\n"
+            
+        if len(figures) > 5:
+            remaining = len(figures) - 5
+            enhanced_answer += f"• ועוד {remaining} איורים נוספים\n"
+    
+    return enhanced_answer

@@ -31,7 +31,7 @@ def get_azure_subscription() -> str:
         out = subprocess.check_output(
             ["az", "account", "show", "-o", "json"], 
             text=True, 
-            timeout=10
+            timeout=3
         )
         data = json.loads(out)
         return data.get("id", "")
@@ -217,5 +217,7 @@ def deploy_function_code(
         return False, "Deployment timed out after 5 minutes", None
     except subprocess.CalledProcessError as cerr:
         return False, f"az CLI deployment failed: {cerr.stderr}", None
+    except subprocess.TimeoutExpired:
+        return False, "Deployment timed out after 5 minutes", None
     except Exception as ex:
         return False, f"Failed to deploy: {ex}", None

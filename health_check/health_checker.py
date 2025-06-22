@@ -147,7 +147,7 @@ class HealthChecker:
             indexes = list(client.list_indexes())
             index_count = len(indexes)
             
-            auth_mode = "Azure AD" if not os.getenv("AZURE_SEARCH_KEY") else "API Key"
+            auth_mode = "Managed Identity (RBAC)" if not os.getenv("AZURE_SEARCH_KEY") else "API Key"
             rbac_status = "🟢 Enabled" if self._rbac_enabled(search_endpoint) else "🔴 Disabled"
             
             return True, f"✅ Connected successfully. Found {index_count} indexes. Auth: {auth_mode}, RBAC: {rbac_status}"

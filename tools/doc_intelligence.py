@@ -136,7 +136,7 @@ class DocumentIntelligenceClient:
         }
         return extensions.get(file_ext, "application/octet-stream")
 
-    def analyze_document_from_bytes(self, file_bytes: bytes, filename: str, model='prebuilt-layout'):
+    def analyze_document_from_bytes(self, file_bytes: bytes, filename: str, model='prebuilt-layout', content_type=None, use_multipart=False):
         """
         Analyzes a document using the specified model, with input as bytes.
 
@@ -144,6 +144,8 @@ class DocumentIntelligenceClient:
             file_bytes (bytes): The bytes of the document to be analyzed.
             filename (str): The name of the document file.
             model (str): The model to use for document analysis.
+            content_type (str, optional): Override content-type for the request. If None, will be determined from filename.
+            use_multipart (bool): Whether to use multipart/form-data upload (like portal UI) instead of raw binary upload.
 
         Returns:
             tuple: A tuple containing the analysis result and any errors encountered.
@@ -152,16 +154,47 @@ class DocumentIntelligenceClient:
         errors = []
         result_id = None
 
+        # DEBUG: Add detailed file size and content analysis
+        file_size = len(file_bytes)
+        logging.info(f"[docintelligence][{filename}] RECEIVED FILE SIZE: {file_size:,} bytes")
+        
+        # Log first and last 50 bytes to help diagnose truncation
+        if file_size > 0:
+            first_50 = file_bytes[:50]
+            last_50 = file_bytes[-50:] if file_size >= 50 else file_bytes
+            logging.info(f"[docintelligence][{filename}] First 50 bytes: {repr(first_50)}")
+            logging.info(f"[docintelligence][{filename}] Last 50 bytes: {repr(last_50)}")
+            
+            # Check if it's actually a PDF
+            if file_bytes.startswith(b'%PDF-'):
+                logging.info(f"[docintelligence][{filename}] ✅ Valid PDF header detected")
+                # Look for EOF marker
+                if b'%%EOF' in file_bytes[-100:]:
+                    logging.info(f"[docintelligence][{filename}] ✅ PDF EOF marker found")
+                else:
+                    logging.warning(f"[docintelligence][{filename}] ⚠️ PDF EOF marker NOT found - file may be truncated")
+            else:
+                logging.warning(f"[docintelligence][{filename}] ❌ No PDF header found - processing as {self._get_file_extension(filename).upper()} file")
+                # Try to detect what type of content it actually is
+                try:
+                    text_preview = file_bytes.decode('utf-8', errors='ignore')[:200]
+                    logging.info(f"[docintelligence][{filename}] Content as text: {repr(text_preview)}")
+                except:
+                    pass
+        
         # Get the file extension from the filename
         file_ext = self._get_file_extension(filename)
 
-        if file_ext not in self.file_extensions:
-            error_message = f"File extension '{file_ext}' is not supported."
-            logging.error(f"[docintelligence][{filename}] {error_message}")
-            errors.append(error_message)
-            return result, errors
-
-        content_type = self._get_content_type(file_ext)
+        # Use provided content_type or determine from file extension
+        if content_type:
+            logging.info(f"[docintelligence][{filename}] Using provided content-type: {content_type}")
+        else:
+            if file_ext not in self.file_extensions:
+                error_message = f"File extension '{file_ext}' is not supported."
+                logging.error(f"[docintelligence][{filename}] {error_message}")
+                errors.append(error_message)
+                return result, errors
+            content_type = self._get_content_type(file_ext)
 
         if file_ext == "pdf":
             self.docint_features = "ocr.highResolution"
@@ -175,11 +208,27 @@ class DocumentIntelligenceClient:
         if self.analyze_output_options:
             request_endpoint += f"&output={self.analyze_output_options}"
 
-        # Set request headers
-        headers = {
-            "Content-Type": content_type,
-            "x-ms-useragent": "gpt-rag/1.0.0"
-        }
+        # Set request headers and data based on upload method
+        if use_multipart:
+            # Use multipart/form-data upload (like Azure portal UI)
+            headers = {
+                "x-ms-useragent": "gpt-rag/1.0.0"
+                # Don't set Content-Type - let requests handle multipart boundary
+            }
+            files = {
+                'file': (filename, file_bytes, content_type)
+            }
+            data = None
+            logging.info(f"[docintelligence][{filename}] Using multipart/form-data upload")
+        else:
+            # Use raw binary upload (current method)
+            headers = {
+                "Content-Type": content_type,
+                "x-ms-useragent": "gpt-rag/1.0.0"
+            }
+            files = None
+            data = file_bytes
+            logging.info(f"[docintelligence][{filename}] Using raw binary upload")
         
         try:
             # Use API key if available, otherwise fall back to token authentication
@@ -202,7 +251,10 @@ class DocumentIntelligenceClient:
             return result, errors
 
         try:
-            response = requests.post(request_endpoint, headers=headers, data=file_bytes)
+            if use_multipart:
+                response = requests.post(request_endpoint, headers=headers, files=files)
+            else:
+                response = requests.post(request_endpoint, headers=headers, data=data)
             logging.info(f"[docintelligence][{filename}] Sent analysis request.")
         except Exception as e:
             error_message = f"Error when sending request to Document Intelligence API: {e}"
@@ -219,6 +271,9 @@ class DocumentIntelligenceClient:
                 f"Document Intelligence request error, code {response.status_code}: {response.text}"
             )
             logging.error(f"[docintelligence][{filename}] {error_message}")
+            logging.error(f"[docintelligence][{filename}] Request URL: {request_endpoint}")
+            logging.error(f"[docintelligence][{filename}] Content-Type: {content_type}")
+            logging.error(f"[docintelligence][{filename}] File size: {len(file_bytes)} bytes")
             errors.append(error_message)
             return result, errors
 

@@ -1,6 +1,16 @@
 # Agentic RAG Demo
 
-A demonstration of Agentic Retrieval-Augmented Generation on Azure using Azure OpenAI and Azure AI Search.
+A comprehensive demonstration of Agentic Retrieval-Augmented Generation on Azure using Azure OpenAI, Azure AI Search, and SharePoint integration with advanced document processing capabilities.
+
+## ✨ Key Features
+
+- **🤖 Agentic RAG**: Advanced retrieval-augmented generation with Azure AI Search knowledge agents
+- **📄 Multi-format Document Processing**: Support for PDF, DOCX, PPTX, XLSX, CSV, TXT, MD, JSON with unified processing pipeline
+- **🖼️ Multimodal Processing**: Advanced image and figure extraction from documents using Azure Document Intelligence
+- **📊 SharePoint Integration**: Automated indexing and synchronization with SharePoint Online
+- **🔒 Secure Authentication**: Multiple authentication methods including client secrets, certificates, and Azure Key Vault
+- **⚡ Real-time Processing**: Streamlit web interface with live document upload and processing
+- **📈 Advanced Analytics**: Comprehensive reporting and monitoring of document processing
 
 ## Environment Setup
 
@@ -21,12 +31,31 @@ At minimum, these variables are required:
   - `AZURE_OPENAI_ENDPOINT` - Endpoint URL of your Azure OpenAI service
   - `AZURE_OPENAI_KEY` - API key for your Azure OpenAI service
   - `AZURE_OPENAI_API_VERSION` - API version (e.g., "2025-01-01-preview")
-  - `AZURE_OPENAI_DEPLOYMENT` - Name of your deployment model
-  - `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` - Name of your embedding model deployment
+  - `AZURE_OPENAI_DEPLOYMENT` - Name of your deployment model (e.g., "gpt-4.1")
+  - `AZURE_OPENAI_CHATGPT_DEPLOYMENT` - **Must match your actual deployment name** (e.g., "gpt-4.1")
+  - `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` - Name of your embedding model deployment (e.g., "text-embedding-3-large")
 
 - **Azure AI Search**:
   - `AZURE_SEARCH_ENDPOINT` - Endpoint URL of your Azure AI Search service
-  - `AZURE_SEARCH_KEY` - API key for your Azure AI Search service
+  - `AZURE_SEARCH_KEY` - API key for your Azure AI Search service (optional if using managed identity)
+
+- **Azure Document Intelligence**:
+  - `DOCUMENT_INTEL_ENDPOINT` - Endpoint URL of your Azure Document Intelligence service
+  - `DOCUMENT_INTEL_KEY` - API key for your Azure Document Intelligence service
+
+### Authentication Options
+
+#### Azure AI Search Authentication
+
+You can authenticate with Azure AI Search using one of two methods:
+
+**Option 1: API Key Authentication**
+- Set `AZURE_SEARCH_KEY` environment variable with your Azure AI Search admin key
+
+**Option 2: Managed Identity (RBAC) Authentication**
+- Omit the `AZURE_SEARCH_KEY` environment variable 
+- Ensure your application has the "Search Index Data Reader" and "Search Service Contributor" roles assigned on the Azure AI Search service
+- This is the recommended approach for production deployments as it eliminates the need to manage API keys
 
 ### SharePoint Integration
 
@@ -41,7 +70,9 @@ The application can connect to SharePoint to retrieve documents. You can use one
    - `SHAREPOINT_TENANT_ID` - Your SharePoint tenant ID
    - `SHAREPOINT_CLIENT_ID` - Application (client) ID of your Azure AD app
    - `SHAREPOINT_CLIENT_SECRET` - Client secret of your Azure AD app
-   - `SHAREPOINT_SITE_URL` - URL of the SharePoint site to connect to
+   - `SHAREPOINT_SITE_DOMAIN` - SharePoint site domain (e.g., "yourtenant.sharepoint.com")
+   - `SHAREPOINT_SITE_NAME` - SharePoint site name (leave blank for root site)
+   - `SHAREPOINT_SITE_FOLDER` - SharePoint folder path (e.g., "/Documents")
 
 #### Option 2: Certificate Authentication
 
@@ -51,11 +82,27 @@ The application can connect to SharePoint to retrieve documents. You can use one
 4. Configure the following environment variables:
    - `SHAREPOINT_TENANT_ID` - Your SharePoint tenant ID
    - `SHAREPOINT_CLIENT_ID` - Application (client) ID of your Azure AD app
-   - `SHAREPOINT_CERTIFICATE_PATH` - Path to the certificate file (PEM or PFX)
-   - `SHAREPOINT_CERTIFICATE_PASSWORD` - Password for the certificate (if applicable)
-   - `SHAREPOINT_SITE_URL` - URL of the SharePoint site to connect to
+   - `AGENTIC_APP_SPN_CERT_PATH` - Path to the certificate file (PEM or PFX)
+   - `AGENTIC_APP_SPN_CERT_PASSWORD` - Password for the certificate (if applicable)
+   - `SHAREPOINT_SITE_DOMAIN` - SharePoint site domain
 
-> Note: For development, you can use the `localhost` SharePoint site URL: `https://localhost/sites/yoursitename`. Ensure your Azure AD app is configured to allow this URL.
+#### Option 3: Azure Key Vault for Secrets (Recommended for Production)
+
+For enhanced security, store your SharePoint client secret in Azure Key Vault:
+1. Create an Azure Key Vault and store your SharePoint client secret
+2. Configure the following environment variables:
+   - `AZURE_KEY_VAULT_NAME` - Name of your Azure Key Vault
+   - `AZURE_KEY_VAULT_ENDPOINT` - Endpoint URL of your Azure Key Vault
+   - `SHAREPOINT_CLIENT_SECRET_NAME` - Name of the secret in Key Vault (default: "sharepointClientSecret")
+
+### Multimodal Processing
+
+The application supports advanced multimodal processing for extracting and analyzing images within documents:
+
+- **Enable Multimodal**: Set `MULTIMODAL=true` in your `.env` file
+- **Azure Storage**: Configure `AZURE_STORAGE_CONNECTION_STRING` and `AZURE_STORAGE_CONTAINER` for image storage
+- **Supported Formats**: PDF, DOCX, PPTX with embedded images and figures
+- **AI-Powered Analysis**: Automatic image captioning and content understanding
 
 ---
 
@@ -67,9 +114,35 @@ cd agentic-rag-demo
 python -m venv venv
 source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.template .env             # fill with your own values
+cp .env.example .env              # fill with your own values
 streamlit run agentic-rag-demo.py
 ```
+
+---
+
+## Application Features
+
+### 📄 Document Processing Pipeline
+- **Unified Processing**: All document formats use the same DocumentChunker for consistency
+- **Format Support**: PDF, DOCX, PPTX, XLSX, CSV, TXT, MD, JSON with specialized chunkers for each format
+- **Azure Document Intelligence**: Advanced OCR and layout analysis for complex documents
+- **Metadata Extraction**: Comprehensive metadata including extraction methods, document types, and processing timestamps
+
+### 🔍 Search and Retrieval
+- **Hybrid Search**: Combines BM25 keyword search with vector similarity search
+- **Agentic RAG**: Knowledge agents provide context-aware responses with proper citations
+- **Test Retrieval**: Interactive testing interface for query optimization
+
+### 📊 SharePoint Integration
+- **Automated Indexing**: Scheduled processing of SharePoint documents
+- **Real-time Sync**: Detection and processing of modified files
+- **Comprehensive Reporting**: Detailed processing statistics and success/failure tracking
+- **Batch Processing**: Configurable batch sizes and processing schedules
+
+### ⚙️ Configuration Management
+- **Function Deployment**: Automated Azure Function deployment and configuration
+- **Environment Sync**: Push configuration changes to Azure Functions
+- **Health Monitoring**: Built-in health checks and diagnostics
 
 ---
 
@@ -77,60 +150,63 @@ streamlit run agentic-rag-demo.py
 
 Below are the main environment variables used by this project. **Do not use real secrets in documentation or commits.**
 
+### Core Azure Services
 | Key | Example value (fake) | Description |
 |-----|----------------------|-------------|
-| `AZURE_OPENAI_ENDPOINT_41` | `https://my-openai-eastus.openai.azure.com/` | Azure OpenAI endpoint for GPT-4.1 |
-| `AZURE_OPENAI_KEY_41` | `YOUR-OPENAI-KEY` | Azure OpenAI API key for GPT-4.1 |
-| `AZURE_OPENAI_API_VERSION_41` | `2025-01-01-preview` | API version for GPT-4.1 deployment |
-| `AZURE_OPENAI_DEPLOYMENT_41` | `gpt-4.1` | Model deployment name for GPT-4.1 |
-| `AZURE_OPENAI_ENDPOINT` | `https://my-openai.openai.azure.com/` | Default Azure OpenAI endpoint |
-| `AZURE_OPENAI_KEY` | `YOUR-OPENAI-KEY` | Default Azure OpenAI API key |
-| `AZURE_OPENAI_API_VERSION` | `2025-01-01-preview` | Default OpenAI API version |
-| `AZURE_OPENAI_SERVICE_NAME` | `my-openai` | Azure OpenAI resource name |
-| `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | `text-embedding-3-large` | Embedding model deployment name |
-| `AZURE_OPENAI_CHATGPT_DEPLOYMENT` | `chat` | ChatGPT deployment name |
-| `AGENT_FUNC_KEY` | `YOUR-FUNCTION-HOST-KEY` | Azure Function host key |
-| `AZURE_SEARCH_ENDPOINT` | `https://my-search-eastus.search.windows.net` | Azure Cognitive Search endpoint |
-| `AZURE_SEARCH_SERVICE` | `my-search-eastus` | Azure Cognitive Search service name |
-| `SERVICE_NAME` | `my-search-eastus` | Search service name (used by Function) |
-| `PROJECT_ENDPOINT` | `https://my-aoai-resource.services.azure.com/api/projects/my-project` | AI Studio project endpoint (optional) |
-| `MODEL_DEPLOYMENT_NAME` | `gpt-4.1` | Model deployment name (optional) |
-| `API_VERSION` | `2025-05-01-preview` | API version for search runtime |
-| `MAX_OUTPUT_SIZE` | `16000` | Max output token size |
-| `OPENAI_ENDPOINT` | `https://my-openai.openai.azure.com` | OpenAI endpoint for Function calls |
-| `OPENAI_KEY` | `YOUR-OPENAI-KEY` | OpenAI key for Function calls |
-| `OPENAI_DEPLOYMENT` | `gpt-4.1` | Model deployment for Function calls |
-| `RERANKER_THRESHOLD` | `1` | Reranker cut-off threshold |
-| `includesrc` | `true` | Return raw chunks in results |
-| `debug` | `false` | Enable extra logging |
-| `TOP_K` | `5` | Default number of top results |
-| `PDF_BASE_URL` | `https://my-storage.blob.core.windows.net/docs/` | (Optional) Base URL for PDF links |
-| `AZURE_KEY_VAULT_NAME` | `my-keyvault` | Azure Key Vault name |
-| `AZURE_KEY_VAULT_ENDPOINT` | `https://my-keyvault.vault.azure.net/` | Azure Key Vault endpoint |
-| `AZURE_FORMREC_SERVICE` | `my-formrec-service` | Azure Document Intelligence service name |
-| `AZURE_FORMREC_KEY` | `YOUR-FORMREC-KEY` | Azure Document Intelligence API key |
-| `AZURE_FORMREC_ENDPOINT` | `https://my-formrec.cognitiveservices.azure.com` | (Optional) Document Intelligence endpoint |
-| `SHAREPOINT_TENANT_ID` | `00000000-0000-0000-0000-000000000000` | SharePoint tenant ID |
-| `SHAREPOINT_SITE_DOMAIN` | `mytenant.sharepoint.com` | SharePoint site domain |
-| `SHAREPOINT_SITE_NAME` | `mysite` | SharePoint site name |
-| `SHAREPOINT_DRIVE_NAME` | `Documents` | SharePoint drive name |
-| `SHAREPOINT_SITE_FOLDER` | `/MyFolder` | SharePoint folder path |
-| `SHAREPOINT_CONNECTOR_ENABLED` | `true` | Enable SharePoint connector |
-| `SHAREPOINT_INDEX_DIRECT` | `true` | Directly index SharePoint files |
-| `AZURE_SEARCH_SHAREPOINT_INDEX_NAME` | `my-index` | Search index for SharePoint files |
-| `AGENTIC_APP_SPN_CLIENTID` | `00000000-0000-0000-0000-000000000000` | App registration client ID for SharePoint |
-| `AGENTIC_APP_SPN_CERT_PATH` | `/path/to/cert.pfx` | Path to app registration certificate |
-| `AGENTIC_APP_SPN_CERT_PASSWORD` | `your-cert-password` | Password for app registration certificate |
-| `AZURE_TENANT_ID` | `00000000-0000-0000-0000-000000000000` | Azure tenant ID |
+| `AZURE_OPENAI_ENDPOINT` | `https://my-openai.openai.azure.com/` | Azure OpenAI endpoint |
+| `AZURE_OPENAI_KEY` | `YOUR-OPENAI-KEY` | Azure OpenAI API key |
+| `AZURE_OPENAI_API_VERSION` | `2025-01-01-preview` | OpenAI API version |
+| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4.1` | Chat model deployment name |
+| `AZURE_OPENAI_CHATGPT_DEPLOYMENT` | `gpt-4.1` | **Must match actual deployment** |
+| `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | `text-embedding-3-large` | Embedding model deployment |
+| `AZURE_SEARCH_ENDPOINT` | `https://my-search.search.windows.net` | Azure AI Search endpoint |
+| `DOCUMENT_INTEL_ENDPOINT` | `https://my-formrec.cognitiveservices.azure.com` | Document Intelligence endpoint |
+| `DOCUMENT_INTEL_KEY` | `YOUR-DOC-INTEL-KEY` | Document Intelligence API key |
 
-### Chunking/Tokenization
+### SharePoint Configuration
 | Key | Example value | Description |
 |-----|---------------|-------------|
-| `NUM_TOKENS` | `2048` | Max tokens per chunk |
-| `TOKEN_OVERLAP` | `100` | Overlap between chunks |
-| `MIN_CHUNK_SIZE` | `100` | Minimum chunk size |
+| `SHAREPOINT_TENANT_ID` | `00000000-0000-0000-0000-000000000000` | SharePoint tenant ID |
+| `SHAREPOINT_CLIENT_ID` | `00000000-0000-0000-0000-000000000000` | App registration client ID |
+| `SHAREPOINT_CLIENT_SECRET` | `YOUR-SECRET` | App registration client secret |
+| `SHAREPOINT_SITE_DOMAIN` | `mytenant.sharepoint.com` | SharePoint site domain |
+| `SHAREPOINT_SITE_NAME` | `mysite` | SharePoint site name (blank for root) |
+| `SHAREPOINT_SITE_FOLDER` | `/Documents` | SharePoint folder path |
+| `SHAREPOINT_CONNECTOR_ENABLED` | `true` | Enable SharePoint connector |
 
-> Fill these once in `.env`. The **Function Config** tab can push them to the Function automatically.
+### Azure Key Vault (Optional)
+| Key | Example value | Description |
+|-----|---------------|-------------|
+| `AZURE_KEY_VAULT_NAME` | `my-keyvault` | Azure Key Vault name |
+| `AZURE_KEY_VAULT_ENDPOINT` | `https://my-keyvault.vault.azure.net/` | Key Vault endpoint |
+| `SHAREPOINT_CLIENT_SECRET_NAME` | `sharepointClientSecret` | Secret name in Key Vault |
+
+### Multimodal Processing
+| Key | Example value | Description |
+|-----|---------------|-------------|
+| `MULTIMODAL` | `true` | Enable multimodal processing |
+| `AZURE_STORAGE_CONNECTION_STRING` | `DefaultEndpointsProtocol=https;...` | Storage for images |
+| `AZURE_STORAGE_CONTAINER` | `images` | Storage container name |
+
+### Function Configuration
+| Key | Example value | Description |
+|-----|---------------|-------------|
+| `AGENT_FUNC_KEY` | `YOUR-FUNCTION-KEY` | Azure Function host key |
+| `PROJECT_ENDPOINT` | `https://my-project.services.ai.azure.com/...` | AI Studio project endpoint |
+| `API_VERSION` | `2025-05-01-preview` | API version for search runtime |
+| `MAX_OUTPUT_SIZE` | `16000` | Max output token size |
+| `TOP_K` | `5` | Default number of top results |
+
+### SharePoint Functions
+| Key | Example value | Description |
+|-----|---------------|-------------|
+| `SHAREPOINT_INDEXER_FUNCTION_APP` | `sharepoint-indexer` | Indexer function app name |
+| `SHAREPOINT_PURGER_FUNCTION_APP` | `sharepoint-purger` | Purger function app name |
+| `SP_INDEXER_SCHEDULE` | `0 */15 * * * *` | Indexer schedule (every 15 min) |
+| `SP_PURGER_SCHEDULE` | `0 0 2 * * *` | Purger schedule (daily at 2 AM) |
+| `SHAREPOINT_FILES_FORMAT` | `pdf,docx,pptx,xlsx,txt,md,json` | Supported file formats |
+
+> Fill these once in `.env`. The **Function Config** tab can push them to Azure Functions automatically.
 
 ---
 
@@ -138,21 +214,61 @@ Below are the main environment variables used by this project. **Do not use real
 
 | Tool | Purpose | Install |
 |------|---------|---------|
-| **Python 3.9+** | runs Streamlit UI | `pyenv`, Homebrew, Windows installer |
-| **Azure CLI (`az`)** | deploy code / update app settings | <https://aka.ms/azure-cli> |
+| **Python 3.9+** | runs Streamlit UI | `pyenv`, Homebrew, Windows installer |
+| **Azure CLI (`az`)** | deploy code / update app settings | <https://aka.ms/azure-cli> |
 | **Git** | version control | <https://git-scm.com> |
-| *(optional)* VS Code + Python ext. | editing & debugging | <https://code.visualstudio.com> |
+| *(optional)* VS Code + Python ext. | editing & debugging | <https://code.visualstudio.com> |
 
 Sign in: `az login` targeting the subscription that owns your Search, OpenAI and Function resources.
 
 ---
 
-## Architecture
+## Application Architecture
 
-1. **Create Index** – chunk, embed and upload docs to a hybrid index  
-2. **Test Retrieval** – BM25 + vector → GPT with inline citations  
-3. **Function Config** – read/update app‑settings and zip‑deploy `/function/*`  
-4. **AI Foundry Agent** – generates OpenAPI schema pointing at `https://<FUNCTION>.azurewebsites.net/api`
+### Core Components
+1. **📄 Document Ingestion** – Upload files via web UI or SharePoint sync with unified processing pipeline
+2. **🔍 Hybrid Search** – BM25 + vector search with Azure AI Search for optimal retrieval
+3. **🤖 Agentic RAG** – Knowledge agents provide contextual answers with proper citations
+4. **📊 SharePoint Sync** – Automated document processing and real-time synchronization
+5. **⚙️ Function Management** – Deploy and configure Azure Functions for batch processing
+
+### Processing Pipeline
+```
+Document Upload → DocumentChunker → Format-Specific Processor → 
+Azure Document Intelligence → Embedding Generation → Index Storage → 
+Knowledge Agent Retrieval → Contextual Response
+```
+
+### Supported Document Formats
+- **PDF**: Advanced OCR and layout analysis
+- **DOCX/PPTX**: Native Office document processing
+- **XLSX/CSV**: Intelligent spreadsheet summarization
+- **TXT/MD/JSON**: Text-based format processing
+- **Images**: Multimodal analysis with AI-powered captioning
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+**XLSX Processing Failures**
+- Ensure `AZURE_OPENAI_CHATGPT_DEPLOYMENT` matches your actual deployment name
+- Check that your Azure OpenAI deployment is accessible
+
+**SharePoint Authentication**
+- Verify tenant ID, client ID, and secret/certificate configuration
+- Ensure proper SharePoint permissions are granted to your app registration
+
+**Multimodal Processing**
+- Configure Azure Storage connection string and container
+- Verify Document Intelligence service is properly configured
+
+### Error Handling
+The application includes comprehensive error handling and fallback mechanisms:
+- Graceful degradation when Azure OpenAI is unavailable
+- Automatic retry logic for transient failures  
+- Detailed logging and error reporting
 
 ---
 
