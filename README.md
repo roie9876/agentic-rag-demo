@@ -12,6 +12,12 @@ A comprehensive demonstration of Agentic Retrieval-Augmented Generation on Azure
 - **⚡ Real-time Processing**: Streamlit web interface with live document upload and processing
 - **📈 Advanced Analytics**: Comprehensive reporting and monitoring of document processing
 
+## 📖 Documentation
+
+- **[Complete Documentation](docs/)** - Comprehensive project documentation including architecture, features, and optimization history
+- **[Project Structure Guide](docs/PROJECT_STRUCTURE.md)** - Detailed codebase overview and development guidelines  
+- **[Performance Optimizations](docs/ULTRA_FAST_UI_PERFORMANCE_FINAL.md)** - Ultra-fast UI implementation details
+
 ## Environment Setup
 
 The application uses environment variables for configuration. Follow these steps to set up your environment:

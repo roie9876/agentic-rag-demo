@@ -1,0 +1,443 @@
+---
+mode: agent
+---
+
+# Agentic RAG Demo - Project Context Instructions
+
+You are working with the **Agentic RAG Demo** project - a comprehensive Azure-based RAG system with SharePoint integration and multimodal document processing. Use this context to understand the codebase when helping with development tasks.
+
+## 🎯 **Quick Project Summary**
+
+**Tech Stack**: Streamlit UI + Azure Functions + Azure OpenAI + Azure AI Search + SharePoint integration
+**Main File**: `agentic-rag-demo.py` (2400+ lines) - Primary Streamlit app with tabbed interface
+**Key Purpose**: Enterprise document ingestion, processing, and intelligent retrieval from SharePoint and uploads
+
+## 📁 **Key Directory Structure**
+
+```
+agentic-rag-demo/
+├── agentic-rag-demo.py          # Main Streamlit app (PRIMARY FILE)
+├── agent_foundry.py             # AI Foundry agent management
+├── azure_function_helper.py     # Azure Function deployment
+├── sharepoint_index_manager.py  # SharePoint indexing with dynamic index selection
+├── sharepoint_scheduler.py      # SharePoint parallel processing & reporting
+├── sharepoint_reports.py        # SharePoint processing reports
+├── chunking/                    # Document processing modules
+│   ├── document_chunking.py     # Main DocumentChunker class
+│   ├── chunker_factory.py       # Chunker selection logic
+│   └── chunkers/               # Format-specific processors
+├── connectors/sharepoint/       # SharePoint integration
+│   ├── sharepoint_data_reader.py    # Main SharePoint client & file access
+│   └── sharepoint_files_indexer.py  # Document processor (legacy)
+├── tools/                      # Azure service clients
+├── health_check/              # Health monitoring
+├── function/                  # Azure Function code
+└── app/                      # Modular components
+```
+
+## 🔧 **Core Components**
+
+### Main Application (`agentic-rag-demo.py`)
+**7 Tabs:**
+1. 🩺 Health Check - Service monitoring
+2. 1️⃣ Create Index - New search index
+3. 2️⃣ Manage Index - Index management + agent config
+4. 3️⃣ Test Retrieval - Query testing
+5. 📁 SharePoint Index - Dynamic SharePoint folder indexing with index selection
+6. ⚙️ Function Config - Azure Function deployment
+7. 🤖 AI Foundry Agent - Agent creation
+
+**Key Functions:**
+- `run_streamlit_ui()` - Main UI orchestrator
+- `_chunk_to_docs()` - Document processing pipeline (shared by all tabs)
+- `init_openai()` - OpenAI client setup
+- `init_search_client()` - Azure AI Search setup
+- Dynamic index selection available across all tabs
+
+### Document Processing Pipeline
+```
+File Upload/SharePoint → DocumentChunker → Format-Specific Processor → 
+Azure Document Intelligence → Embedding Generation → Index Storage
+```
+
+**Chunker Types by Format:**
+- `.pdf/.docx/.pptx` → Azure Document Intelligence (OCR, layout, tables)
+- `.xlsx/.csv` → Pandas parser (structured data)
+- `.txt/.md/.json` → Simple text parser
+- Fallback → LangChain chunker
+
+### SharePoint Integration Flow
+```
+SharePoint Config → Authentication → Site/Drive Resolution → 
+File Discovery → Content Download → Document Processing → Index Upload
+```
+
+**Key Files:**
+- `sharepoint_data_reader.py` - Microsoft Graph API client
+- `sharepoint_index_manager.py` - Main SharePoint processing orchestrator with dynamic index selection
+- `sharepoint_scheduler.py` - Parallel processing and report management
+- `sharepoint_reports.py` - Processing status and error reporting
+
+**Authentication Priority:**
+1. Certificate-based (`AGENTIC_APP_SPN_CERT_PATH`)
+2. Client Secret (`SHAREPOINT_CLIENT_SECRET`)
+3. Interactive login (fallback)
+
+**Dynamic Index Selection:**
+- Users can select target index in UI for all operations
+- Both `INDEX_NAME` and `AZURE_SEARCH_SHAREPOINT_INDEX_NAME` environment variables supported
+- SharePoint indexing uses same document schema as main app for compatibility
+
+## 🔄 **Complete SharePoint Pipeline Flow (UI to Index)**
+
+### **Step 1: User Interface Configuration & Trigger**
+**Location**: `agentic-rag-demo.py` SharePoint Index tab
+**User Actions:**
+1. User selects target Azure AI Search index from dropdown (dynamic list from Azure)
+2. User fills SharePoint settings in UI:
+   - **Site Domain** (e.g., `tenant.sharepoint.com`)
+   - **Site Name** (blank = root site)
+   - **Drive Name** (e.g., `Documents`)
+   - **Folder Path** (e.g., `/Reports/Q1`)
+   - **File Types** (comma-separated: `pdf,docx,xlsx`)
+3. User clicks **"🔗 Ingest from SharePoint"** button
+
+### **Step 2: SharePoint Authentication & Connection**
+**Location**: `connectors/sharepoint/sharepoint_data_reader.py`
+**Process:**
+1. **Environment Variables Check**: Validates `SHAREPOINT_TENANT_ID`, `SHAREPOINT_CLIENT_ID`, `SHAREPOINT_CLIENT_SECRET`
+2. **Microsoft Graph Authentication**: Acquires Bearer token using client credentials flow
+3. **API Endpoint**: `https://graph.microsoft.com/v1.0/`
+
+### **Step 3: SharePoint File Discovery & Processing Coordination**
+**Location**: `sharepoint_index_manager.py`
+**Process:**
+1. **Dynamic Index Selection**: Uses user-selected index from UI (not just env variables)
+2. **Parallel Processing Setup**: Configures scheduler for concurrent file processing
+3. **File Discovery**: Calls SharePoint data reader to enumerate files
+4. **Progress Tracking**: Real-time UI updates with processing status
+### **Step 4: SharePoint File Enumeration**
+**Location**: `sharepoint_data_reader.retrieve_sharepoint_files_content()`
+**API Flow:**
+```
+GET /sites/{site-domain}:{site-name} → Site ID
+GET /sites/{site-id}/drives → Drive ID (or default drive)
+GET /sites/{site-id}/drives/{drive-id}/root:/{folder-path}:/children → File List
+GET /sites/{site-id}/drives/{drive-id}/items/{file-id}/content → File Content
+```
+
+**Processing:**
+1. **Site Resolution**: Convert domain + site name to Graph API Site ID
+2. **Drive Resolution**: Find target drive (Documents, or custom drive)
+3. **Folder Navigation**: Navigate to specified folder path
+4. **File Enumeration**: List all files in folder (with recursion)
+5. **Format Filtering**: Filter by user-specified file extensions
+6. **Content Download**: Download binary content for each file
+7. **Metadata Extraction**: Get file properties, permissions, timestamps
+
+### **Step 5: Document Processing Pipeline**
+**Location**: `sharepoint_index_manager.py` + main app's `_chunk_to_docs()` function
+**Process Flow:**
+```
+SharePoint File → _chunk_to_docs() → DocumentChunker → Format-Specific Processor → 
+Embedding Generation → Index-Ready Chunks
+```
+
+**Critical Fix (2024)**: SharePoint indexing now uses the same `_chunk_to_docs()` function as the main app to ensure document schema compatibility and prevent silent upload failures.
+
+**Detailed Steps:**
+1. **File Processing Loop**: Process each SharePoint file individually using parallel workers
+2. **Content Validation**: Check if file has content (skip empty files)
+3. **Shared Processing**: Call main app's `_chunk_to_docs(filename, file_bytes, file_url, oai_client, embed_deploy)`
+4. **Format Detection**: Auto-detect processor based on file extension:
+   - `.pdf/.docx/.pptx` → **Azure Document Intelligence** (OCR, layout, tables, figures)
+   - `.xlsx/.csv` → **Pandas Parser** (structured data extraction)
+   - `.txt/.md/.json` → **Simple Text Parser**
+   - **Fallback** → LangChain Chunker
+
+### **Step 6: Advanced Document Intelligence Processing**
+**Location**: `chunking/chunkers/azure_document_intelligence_chunker.py`
+**For PDF/DOCX/PPTX files:**
+1. **Azure Document Intelligence API Call**: Submit document to AI Document Intelligence service
+2. **OCR & Layout Analysis**: Extract text with position information
+3. **Table Extraction**: Identify and extract tabular data
+4. **Figure Detection**: Locate images and figures within document
+5. **Structured Output**: Get JSON with text chunks, page numbers, and layout info
+
+**For XLSX/CSV files:**
+1. **Pandas Processing**: Load spreadsheet data
+2. **Sheet Analysis**: Process each worksheet
+3. **Data Chunking**: Create chunks from rows/tables
+4. **Metadata Extraction**: Include sheet names, column headers
+
+### **Step 7: Multimodal Enhancement (Optional)**
+**Location**: `chunking/multimodal_processor.py`
+**When `MULTIMODAL=true`:**
+1. **Image Extraction**: Extract images from documents
+2. **Azure Storage Upload**: Store images in Azure Blob Storage
+3. **Image Captioning**: Generate AI captions using Azure OpenAI Vision
+4. **Chunk Association**: Link images to relevant text chunks
+
+### **Step 8: Embedding Generation**
+**Location**: Document processing pipeline
+**Process:**
+1. **Text Extraction**: Get clean text from each chunk
+2. **Azure OpenAI API Call**: Submit to `text-embedding-3-large` model
+3. **Vector Generation**: Create 3072-dimensional embeddings
+4. **Batch Processing**: Process multiple chunks simultaneously for efficiency
+
+### **Step 9: Index Schema Transformation & Upload**
+**Location**: Main app's `_chunk_to_docs()` function (shared by SharePoint and Manage Index)
+**Critical Schema Compliance**: SharePoint indexing now uses the exact same document transformation logic as the main app to prevent upload failures.
+
+**Field Mapping:**
+```json
+{
+  "id": "unique_chunk_identifier",
+  "page_chunk": "extracted_text_content", 
+  "page_number": 1,
+  "source_file": "document.pdf",
+  "parent_id": "sharepoint_document_id",
+  "url": "https://tenant.sharepoint.com/path/to/file",
+  "page_embedding_text_3_large": [3072_dimensional_vector],
+  
+  "metadata_storage_path": "sharepoint_web_url",
+  "metadata_storage_name": "filename.pdf", 
+  "metadata_storage_last_modified": "2024-01-15T10:30:00Z",
+  "metadata_security_id": "user_permissions",
+  "source": "sharepoint",
+  
+  "extraction_method": "document_intelligence|pandas_parser|simple_parser",
+  "document_type": "PDF|DOCX|XLSX",
+  "isMultimodal": true,
+  "imageCaptions": "AI-generated descriptions",
+  "relatedImages": ["blob_urls"]
+}
+```
+
+### **Step 10: Azure AI Search Upload**
+**Location**: Main app's upload logic (shared by SharePoint and Manage Index)
+**Process:**
+1. **Dynamic Index Selection**: Uses user-selected index from UI dropdown
+2. **SearchIndexingBufferedSender**: Uses batched upload for efficiency
+3. **Batch Size**: 100 documents per batch
+4. **Auto-flush**: 5-second intervals for real-time updates
+5. **Error Handling**: Failed uploads tracked and reported to user
+6. **Progress Tracking**: Real-time UI progress bar updates
+
+### **Step 11: Index Storage & Verification**
+**Location**: Azure AI Search Service
+**Final Storage:**
+1. **Hybrid Index**: Both vector embeddings and keyword search fields
+2. **Faceted Search**: Metadata fields for filtering
+3. **Security Integration**: User permission metadata for access control
+4. **Document Count Verification**: Poll index to confirm successful upload
+5. **Cross-Tab Compatibility**: SharePoint-indexed files appear in all search interfaces
+
+### **Step 12: UI Feedback & Reporting**
+**Location**: `sharepoint_reports.py` + UI display
+**User Feedback:**
+```
+✅ Successfully Processed (5 files):
+   • Report_Q1.pdf - 12 chunks (document_intelligence) 🎨
+   • Data_Analysis.xlsx - 3 chunks (pandas_parser)
+   • Meeting_Notes.docx - 8 chunks (document_intelligence)
+
+⚠️ Skipped Files (2 files):
+   • Empty_File.pdf (0 bytes) - No content
+   • Corrupted_Doc.docx - Processing failed
+
+📊 Index: sharepoint-index-2 (Total: 23 new chunks)
+```
+
+### **Error Handling & Recovery**
+**Throughout Pipeline:**
+1. **Authentication Failures**: Retry with different auth methods
+2. **API Rate Limits**: Automatic retry with exponential backoff
+3. **Processing Errors**: Continue with next file, log failures
+4. **Upload Failures**: Track failed chunks, allow partial success
+5. **Duplicate Detection**: Skip unchanged files based on modification timestamp
+6. **Schema Validation**: Ensure all documents match index schema before upload
+7. **Index Selection Validation**: Verify selected index exists and is accessible
+
+### **Performance Optimizations**
+1. **Parallel Processing**: Multiple files processed simultaneously via `sharepoint_scheduler.py`
+2. **Batch Uploads**: Efficient bulk index operations
+3. **Content Caching**: Avoid re-processing unchanged files
+4. **Memory Management**: Process large files in chunks
+5. **Connection Pooling**: Reuse HTTP connections
+6. **Shared Processing Pipeline**: Single codebase for all document ingestion to reduce bugs
+
+**Key Architectural Fix (2024)**: SharePoint indexing now uses the same document processing pipeline as the main app, eliminating schema mismatches and ensuring consistent behavior across all tabs.
+
+## ⚙️ **Critical Environment Variables**
+
+```bash
+# Azure OpenAI
+AZURE_OPENAI_ENDPOINT=https://your-openai.openai.azure.com/
+AZURE_OPENAI_KEY=your-key
+AZURE_OPENAI_DEPLOYMENT=gpt-4.1
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-large
+
+# Azure AI Search
+AZURE_SEARCH_ENDPOINT=https://your-search.search.windows.net
+AZURE_SEARCH_KEY=your-key  # Optional with managed identity
+INDEX_NAME=your-default-index  # Default index for main app
+AZURE_SEARCH_SHAREPOINT_INDEX_NAME=your-sharepoint-index  # SharePoint-specific index (optional)
+
+# SharePoint
+SHAREPOINT_TENANT_ID=your-tenant-id
+SHAREPOINT_CLIENT_ID=your-app-id
+SHAREPOINT_CLIENT_SECRET=your-secret
+SHAREPOINT_SITE_DOMAIN=tenant.sharepoint.com
+SHAREPOINT_SITE_FOLDER=/Documents/YourFolder
+
+# Document Intelligence
+DOCUMENT_INTEL_ENDPOINT=https://your-docint.cognitiveservices.azure.com/
+DOCUMENT_INTEL_KEY=your-key
+
+# Optional: Multimodal
+MULTIMODAL=true
+AZURE_STORAGE_CONNECTION_STRING=your-storage
+```
+
+## 🚀 **Common Development Tasks**
+
+### Adding New Document Formats
+1. Create chunker in `chunking/chunkers/`
+2. Register in `ChunkerFactory`
+3. Update UI file type filters in main app
+4. Add processing tests
+
+### SharePoint Issues
+- Check authentication in `sharepoint_data_reader.py`
+- Verify environment variables (both `INDEX_NAME` and `AZURE_SEARCH_SHAREPOINT_INDEX_NAME`)
+- Test Graph API permissions
+- Review processing logs in `sharepoint_index_manager.py`
+- Verify SharePoint indexing uses same schema as main app
+- Check dynamic index selection in UI
+
+### Index Management
+- Use "Manage Index" tab for CRUD operations
+- Agent configuration in same tab
+- Knowledge agents for retrieval
+- Dynamic index selection available across all tabs
+- SharePoint-indexed files appear in selected index immediately
+
+### Azure Function Deployment
+- Use "Function Config" tab
+- Deploys `function/` directory
+- Updates app settings automatically
+
+## 🔍 **Troubleshooting Patterns**
+
+### Health Check Failures
+- Check `health_check/health_checker.py`
+- Verify service endpoints and keys
+- Test network connectivity
+
+### Document Processing Issues
+- Check `DocumentChunker` in `chunking/document_chunking.py`
+- Review format-specific chunkers
+- Verify Azure Document Intelligence API
+
+### SharePoint Connection Problems
+- Authentication order: Certificate → Secret → Interactive
+- Check Graph API permissions
+- Verify site/drive configuration
+
+## 💡 **Development Guidelines**
+
+- **Modular Design**: Each module has specific responsibility
+- **Configuration-Driven**: Environment variables control behavior
+- **Error Handling**: Comprehensive with fallbacks
+- **Security**: No hardcoded secrets, proper credential management
+
+## 📝 **CRITICAL: Maintaining This File**
+
+### **⚠️ UPDATE REQUIREMENT**
+**This prompt instruction file MUST be updated whenever there are major project changes:**
+
+### **When to Update:**
+1. **Project Structure Changes**:
+   - New directories or modules added
+   - File relocations or renames
+   - Core architecture modifications
+
+2. **New Features Added**:
+   - Additional document formats supported
+   - New Azure services integrated
+   - UI tabs or major functionality changes
+
+3. **Process Flow Changes**:
+   - SharePoint pipeline modifications
+   - Document processing workflow updates
+   - Authentication method changes
+
+4. **Environment Variable Changes**:
+   - New required environment variables
+   - Changed variable names or formats
+   - New service endpoints
+
+5. **Key Function Changes**:
+   - Main function signatures modified
+   - Critical API changes
+   - New integration points
+
+6. **Bug Fixes & Schema Changes**:
+   - Document schema compatibility issues
+   - Index upload pipeline modifications
+   - Cross-tab functionality fixes
+
+### **How to Update:**
+1. **Read this entire file** to understand current state
+2. **Identify what changed** in the project
+3. **Update relevant sections**:
+   - Directory structure (if changed)
+   - Flow diagrams (if process changed)
+   - Environment variables (if added/modified)
+   - Function references (if signatures changed)
+   - File locations (if moved/renamed)
+
+### **Sections to Review for Updates:**
+- **📁 Key Directory Structure** - Add/remove/relocate directories
+- **🔄 Complete SharePoint Pipeline Flow** - Update process steps
+- **⚙️ Critical Environment Variables** - Add new variables
+- **🚀 Common Development Tasks** - Update procedures
+- **🔍 Troubleshooting Patterns** - Add new common issues
+
+### **Version Control:**
+- **Always test** the updated instructions with agent mode
+- **Verify** all file paths and line numbers are accurate
+- **Update** the reference to main PROJECT_STRUCTURE.md if needed
+
+### **Example Update Scenarios:**
+```
+✅ Added new Azure Service Bus integration
+→ Update: Environment variables, troubleshooting, directory structure
+
+✅ Modified SharePoint authentication to use Managed Identity
+→ Update: SharePoint pipeline flow, authentication priority, env vars
+
+✅ Added new document format (.epub support)
+→ Update: Chunker types, document processing pipeline, dev tasks
+
+✅ Restructured /app directory with new modules
+→ Update: Directory structure, file locations, key components
+
+✅ Fixed SharePoint indexing schema compatibility (2024)
+→ Update: SharePoint pipeline flow, error handling, architecture fixes
+
+✅ Added dynamic index selection across all tabs
+→ Update: Main application tabs, environment variables, troubleshooting
+```
+
+**🎯 Goal**: Keep this file as the single source of truth for understanding the current project state in agent mode.
+
+This complete flow transforms SharePoint documents into searchable, AI-ready chunks in Azure AI Search, enabling sophisticated retrieval-augmented generation with full metadata preservation, security context, and cross-tab compatibility.
+
+---
+
+**Reference**: Full details in `/PROJECT_STRUCTURE.md` in project root
+
+if you create test file , dont put secret inside them, delete them after finish

@@ -1,0 +1,33 @@
+{
+  "id": "report_20250624_002133_scheduled",
+  "start_time": "2025-06-24T00:21:33.929762",
+  "end_time": "2025-06-24T00:22:41.393737",
+  "type": "scheduled",
+  "folders": [
+    "mngenvmcap623661.sharepoint.com||Documents|/ppt"
+  ],
+  "files_processed": 1,
+  "files_successful": 1,
+  "files_failed": 0,
+  "chunks_created": 6,
+  "errors": [],
+  "processing_details": [
+    {
+      "file": "04. UltraDisk new features.pptx",
+      "status": "success",
+      "chunks": 6,
+      "method": "document_intelligence"
+    }
+  ],
+  "status": "completed",
+  "auto_purge_enabled": true,
+  "purge_results": {
+    "success": true,
+    "message": "Successfully purged 4 orphaned document chunks from 1 deleted files",
+    "documents_checked": 10,
+    "documents_deleted": 4,
+    "files_checked": 2,
+    "files_not_found": 1,
+    "errors": []
+  }
+}

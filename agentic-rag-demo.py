@@ -22,11 +22,19 @@ import tempfile
 import subprocess
 import time  # Added to support sleep in polling after ingestion
 import base64  # Added to encode document bytes for _chunk_to_docs
+from datetime import datetime, timedelta  # Added for scheduler functionality
 
 from pathlib import Path
 from typing import List, Tuple, Dict
 
 import pandas as pd           # ← ADD THIS LINE
+
+# Import SharePoint components
+from ui_sharepoint import SharePointIndexUI
+from sharepoint_scheduler import SharePointScheduler
+from sharepoint_index_manager import SharePointIndexManager
+from sharepoint_reports import SharePointReports
+
 # ---------------------------------------------------------------------------
 # Streamlit Data‑Editor helper (works on both old & new versions)
 # ---------------------------------------------------------------------------
@@ -887,7 +895,7 @@ def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bo
                 SimpleField(name="page_number",  type="Edm.Int32",  filterable=True, sortable=True, facetable=True),
                 SimpleField(name="source_file",  type="Edm.String", filterable=True, facetable=True),
                 SimpleField(name="source",       type="Edm.String", filterable=True, facetable=True),
-                SimpleField(name="url",          type="Edm.String"),
+                SimpleField(name="url",          type="Edm.String", filterable=True, searchable=True),
                 SimpleField(name="doc_key",      type="Edm.String", filterable=True), # Added for proper document referencing
                 # Enhanced metadata fields for Document Intelligence processing
                 SimpleField(name="extraction_method", type="Edm.String", filterable=True, facetable=True),
@@ -1330,11 +1338,12 @@ def run_streamlit_ui() -> None:
     # Initialize search client for index management
     _, root_index_client = init_search_client()
     
-    tab_health, tab_create, tab_manage, tab_test, tab_cfg, tab_ai = st.tabs([
+    tab_health, tab_create, tab_manage, tab_sharepoint, tab_test, tab_cfg, tab_ai = st.tabs([
         "🩺 Health Check",
-        "1️⃣ Create Index",
-        "2️⃣ Manage Index",
-        "3️⃣ Test Retrieval",
+        "1️⃣ Create Index",
+        "2️⃣ Manage Index",
+        "📁 SharePoint Index",
+        "3️⃣ Test Retrieval",
         "⚙️ Function Config",
         "🤖 AI Foundry Agent"
     ])
@@ -1775,7 +1784,7 @@ def run_streamlit_ui() -> None:
                                 - The file may be corrupted or have invalid internal structure
                                 - It might be password-protected
                                 - The format may not be fully compatible
-                                
+
                                 **Try:**
                                 - Opening and re-saving the file in its native application
                                 - Converting to a different format (e.g., PDF → DOCX)
@@ -1912,232 +1921,1087 @@ def run_streamlit_ui() -> None:
                             st.markdown(f"**⚠️ Skipped Files ({len(skipped_files)} files):**")
                             for file_info in skipped_files:
                                 st.markdown(f"   • {file_info['name']} ({file_info['size']} bytes) - {file_info['reason']}")
-                            st.info("💡 **Tip:** Skipped files are usually corrupted, too small, or in an unsupported format. Try re-saving or converting them.")
+                            st.info("💡 **Tip:** Skipped files are usually corrupted, too small, or in an unsupported format.")
 
-            # --- SharePoint Ingestion Button and Logic ---
-            st.markdown("---")
-            st.subheader("📁 Ingest files from SharePoint Folder (any type)")
-            st.caption(
-                "פורמטים מומלצים: **PDF, DOCX, PPTX, XLSX/CSV, TXT, MD, JSON**.  "
-                "תוכל להזין ב‑תיבה למטה את סיומות קבצים מופרדות בפסיקים, או להשאיר ריק ל‑“הכול”."
-            )
-
-            # --- SharePoint config UI ---
-            def _get_env_or_default(key, default=None):
-                v = os.getenv(key)
-                return v if v is not None and v != "" else default
-
-            if "sp_site_domain" not in st.session_state:
-                st.session_state.sp_site_domain = _get_env_or_default("SHAREPOINT_SITE_DOMAIN", "")
-            if "sp_site_name" not in st.session_state:
-                st.session_state.sp_site_name = _get_env_or_default("SHAREPOINT_SITE_NAME", "")
-            if "sp_drive_name" not in st.session_state:
-                st.session_state.sp_drive_name = _get_env_or_default("SHAREPOINT_DRIVE_NAME", "")
-            if "sp_folder_path" not in st.session_state:
-                st.session_state.sp_folder_path = _get_env_or_default("SHAREPOINT_SITE_FOLDER", "/")
-
-            st.text("Current SharePoint settings:")
-            st.session_state.sp_site_domain = st.text_input(
-                "SharePoint Site Domain (e.g. mngenvmcap623661.sharepoint.com)",
-                value=st.session_state.sp_site_domain or "",
-                key="sp_site_domain_input"
-            )
-            st.session_state.sp_site_name = st.text_input(
-                "SharePoint Site Name (blank or 'root' for root site)",
-                value=st.session_state.sp_site_name or "",
-                key="sp_site_name_input"
-            )
-            st.session_state.sp_drive_name = st.text_input(
-                "SharePoint Drive Name (e.g. Documents)",
-                value=st.session_state.sp_drive_name or "",
-                key="sp_drive_name_input"
-            )
-            st.session_state.sp_folder_path = st.text_input(
-                "SharePoint Folder Path (e.g. /ASKMANHAR)",
-                value=st.session_state.sp_folder_path or "/",
-                key="sp_folder_path_input"
-            )
-
-            file_type_input = st.text_input(
-                "File types to ingest (comma-separated, e.g. pdf,docx,xlsx,txt). Leave blank for all:",
-                value="pdf"
-            )
-            file_types = [ft.strip() for ft in file_type_input.split(",") if ft.strip()] if file_type_input else None
-            if st.button("🔗 Ingest from SharePoint"):
-                with st.spinner("Fetching and ingesting files from SharePoint…"):
-                    # Initialize processing status display
-                    status_container = st.empty()
+    # ─────────────────── Tab 4 – SharePoint Index ────────────────────────
+    with tab_sharepoint:
+        health_block()
+        st.header("📁 SharePoint Index Management")
+        
+        try:
+            from sharepoint_index_manager import SharePointIndexManager
+            sp_manager = SharePointIndexManager()
+            
+            # Check SharePoint authentication
+            auth_status = sp_manager.get_sharepoint_auth_status()
+            
+            if not auth_status['authenticated']:
+                st.error(f"❌ SharePoint Authentication Failed: {auth_status['error']}")
+                st.markdown("""
+                **To fix this, please ensure:**
+                1. Your `.env` file contains the required SharePoint credentials:
+                   - `SHAREPOINT_TENANT_ID`
+                   - `SHAREPOINT_CLIENT_ID`
+                   - `SHAREPOINT_CLIENT_SECRET`
+                2. The SharePoint app has proper permissions
+                3. The credentials are valid and not expired
+                """)
+                st.stop()
+            
+            st.success("✅ SharePoint Authentication Successful")
+            st.caption(f"Tenant ID: {auth_status['tenant_id']}")
+            
+            # SharePoint Configuration
+            st.subheader("🔧 SharePoint Configuration")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                site_domain = st.text_input(
+                    "Site Domain", 
+                    value=os.getenv("SHAREPOINT_SITE_DOMAIN", ""),
+                    placeholder="e.g., contoso.sharepoint.com"
+                )
+                site_name = st.text_input(
+                    "Site Name", 
+                    value=os.getenv("SHAREPOINT_SITE_NAME", ""),
+                    placeholder="e.g., MyTeamSite"
+                )
+            
+            with col2:
+                drive_name = st.text_input(
+                    "Drive/Library Name", 
+                    value=os.getenv("SHAREPOINT_DRIVE_NAME", ""),
+                    placeholder="e.g., Documents (leave blank for default)"
+                )
+                file_types = st.text_input(
+                    "File Types (comma-separated)",
+                    value="pdf,docx,pptx,xlsx",
+                    placeholder="pdf,docx,pptx,xlsx"
+                )
+            
+            # Target Index Selection (SharePoint-specific)
+            st.subheader("🎯 Target Index Selection")
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                # Get available indexes for SharePoint
+                if "sp_available_indexes" not in st.session_state:
+                    st.session_state.sp_available_indexes = []
+                
+                try:
+                    # Get available indexes from session state (populated in main initialization)
+                    indexes_list = st.session_state.get('available_indexes', [])
+                    st.session_state.sp_available_indexes = indexes_list
                     
-                    try:
-                        from connectors.sharepoint.sharepoint_data_reader import SharePointDataReader
-                        import io
-                        sharepoint_reader = SharePointDataReader()
-                        # Use user-specified values, fallback to env if blank
-                        site_domain = st.session_state.sp_site_domain or _get_env_or_default("SHAREPOINT_SITE_DOMAIN", "")
-                        site_name = st.session_state.sp_site_name or _get_env_or_default("SHAREPOINT_SITE_NAME", "")
-                        folder_path = st.session_state.sp_folder_path or _get_env_or_default("SHAREPOINT_SITE_FOLDER", "/")
-                        drive_name = st.session_state.sp_drive_name or _get_env_or_default("SHAREPOINT_DRIVE_NAME", "")
-                        sp_files = sharepoint_reader.retrieve_sharepoint_files_content(
-                            site_domain=site_domain,
-                            site_name=site_name,
-                            folder_path=folder_path,
-                            file_formats=file_types,
-                            drive_name=drive_name
-                        )
-                        if not sp_files:
-                            st.warning("No files found in the SharePoint folder.")
-                        else:
-                            total_files = len(sp_files)
-                            st.info(f"Found {total_files} file(s) in the SharePoint folder.")
-                            progress_bar = st.progress(0, text="Starting ingestion...")
-                            failed_ids = []
-                            def _sp_on_error(action):
-                                try:
-                                    if hasattr(action, 'id'):
-                                        failed_ids.append(action.id)
-                                    elif hasattr(action, 'document') and hasattr(action.document, 'get'):
-                                        failed_ids.append(action.document.get("id", "?"))
-                                    else:
-                                        failed_ids.append("?")
-                                except Exception as exc:
-                                    logging.error("⚠️  SharePoint on_error callback failed: %s", exc)
-                                    failed_ids.append("?")
+                    # Index selection dropdown
+                    index_options = ["Select an index..."] + indexes_list
+                    
+                    # Get current selection (prioritize SharePoint-specific selection over global)
+                    current_sp_index = getattr(st.session_state, 'sp_target_index', None)
+                    if not current_sp_index:
+                        current_sp_index = st.session_state.get('selected_index', None)
+                    
+                    # Find current index in options
+                    current_index = 0
+                    if current_sp_index and current_sp_index in indexes_list:
+                        current_index = indexes_list.index(current_sp_index) + 1
+                    
+                    selected_index_display = st.selectbox(
+                        "Select Target Index for SharePoint",
+                        options=index_options,
+                        index=current_index,
+                        help="Choose the search index where SharePoint documents will be stored"
+                    )
+                    
+                    # Update SharePoint-specific index selection
+                    if selected_index_display != "Select an index...":
+                        st.session_state.sp_target_index = selected_index_display
+                        # Also update global selection if not set
+                        if not st.session_state.selected_index:
+                            st.session_state.selected_index = selected_index_display
+                    else:
+                        st.session_state.sp_target_index = None
+                    
+                except Exception as e:
+                    st.error(f"Error loading indexes: {str(e)}")
+                    st.session_state.sp_target_index = None
+            
+            with col2:
+                # Index status and actions
+                if hasattr(st.session_state, 'sp_target_index') and st.session_state.sp_target_index:
+                    st.success(f"✅ Target Index")
+                    st.caption(f"**{st.session_state.sp_target_index}**")
+                    
+                    # Quick action to sync with global selection
+                    if st.button("🔄 Set as Global Index", help="Make this the global selected index for all tabs"):
+                        st.session_state.selected_index = st.session_state.sp_target_index
+                        st.success(f"Global index updated to: {st.session_state.sp_target_index}")
+                        st.rerun()
+                else:
+                    st.warning("⚠️ No Index Selected")
+                    if st.session_state.selected_index:
+                        st.caption(f"Global: {st.session_state.selected_index}")
+                        if st.button("📥 Use Global Index", help="Use the globally selected index for SharePoint"):
+                            st.session_state.sp_target_index = st.session_state.selected_index
+                            st.rerun()
+            
+            if not site_domain:
+                st.warning("Please enter Site Domain to continue.")
+                st.stop()
+            
+            # Note: site_name can be empty for root site
+            
+            # Get available drives
+            st.subheader("📂 Available Document Libraries")
+            drives = sp_manager.get_sharepoint_drives(site_domain, site_name)
+            
+            if not drives:
+                st.error("No drives/libraries found. Please check your site configuration.")
+                st.stop()
+            
+            # Display drives
+            drive_options = [""] + [f"{drive['name']} ({drive['driveType']})" for drive in drives]
+            selected_drive_display = st.selectbox("Select Document Library", drive_options)
+            
+            if selected_drive_display:
+                selected_drive = selected_drive_display.split(" (")[0]
+            else:
+                selected_drive = drive_name
+            
+            # Folder Tree Selection
+            if selected_drive:
+                st.subheader("📁 Select Folders to Index")
+                
+                # Performance controls
+                col1, col2, col3 = st.columns([2, 1, 1])
+                with col1:
+                    st.markdown("*Click 📁 to expand folders, ☑️ to select for indexing*")
+                with col2:
+                    if st.button("🔄 Refresh Cache", help="Clear cache and reload folder structure"):
+                        sp_manager.clear_cache()
+                        # Clear session state
+                        for key in list(st.session_state.keys()):
+                            if key.startswith("sp_folders_loaded_") or key.startswith("sp_expanded_"):
+                                del st.session_state[key]
+                        st.rerun()
+                with col3:
+                    cache_stats = sp_manager.get_cache_stats()
+                    st.caption(f"Cache: {cache_stats['cached_folders']} folders")
+                
+                # Initialize selected folders in session state
+                if "sp_selected_folders" not in st.session_state:
+                    st.session_state.sp_selected_folders = []
+                
+                # Add performance tips
+                with st.expander("💡 Performance Tips", expanded=False):
+                    st.markdown("""
+                    - **Lazy Loading**: Folders load only when expanded to improve speed
+                    - **Caching**: Folder structures are cached to reduce API calls
+                    - **Depth Limit**: Deep folder structures are limited to prevent slowdown
+                    - **Click 📁/📂**: Click folder icons to expand/collapse subfolders
+                    - **Batch Selection**: Select multiple folders for efficient indexing
+                    - **Refresh Cache**: Use the refresh button if folders don't appear up-to-date
+                    """)
+                
+                # Render folder tree with loading indicator
+                with st.container():
+                    st.markdown("**Available Folders:**")
+                    
+                    # Show loading spinner for initial load
+                    if f"sp_folders_loaded_{selected_drive}" not in st.session_state:
+                        with st.spinner("Loading folder structure..."):
+                            # Preload for better performance
+                            sp_manager.preload_folder_structure(site_domain, site_name, selected_drive, max_depth=2)
                             
-                            sender = SearchIndexingBufferedSender(
-                                endpoint=env("AZURE_SEARCH_ENDPOINT"),
-                                index_name=st.session_state.selected_index,
-                                credential=_search_credential(),
-                                batch_size=100,
-                                auto_flush_interval=5,
-                                on_error=_sp_on_error,
+                            updated_selection = sp_manager.render_folder_tree(
+                                site_domain, 
+                                site_name, 
+                                selected_drive,
+                                st.session_state.sp_selected_folders
                             )
-                            embed_deploy = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
-                            total_pages = 0
-                            processed_files = []
-                            skipped_files = []
+                            st.session_state.sp_selected_folders = updated_selection
+                            st.session_state[f"sp_folders_loaded_{selected_drive}"] = True
+                    else:
+                        # Subsequent renders without spinner
+                        updated_selection = sp_manager.render_folder_tree(
+                            site_domain, 
+                            site_name, 
+                            selected_drive,
+                            st.session_state.sp_selected_folders
+                        )
+                        st.session_state.sp_selected_folders = updated_selection
+                
+                # Show selected folders summary
+                if st.session_state.sp_selected_folders:
+                    st.subheader("✅ Selected Folders")
+                    
+                    # Get folder info with caching
+                    try:
+                        folder_info = sp_manager.get_selected_folder_info(st.session_state.sp_selected_folders)
+                        
+                        if folder_info:
+                            # Display in a more compact format
+                            col1, col2 = st.columns([3, 1])
+                            with col1:
+                                for folder in folder_info:
+                                    st.write(f"📁 {folder['display_name']}")
+                            with col2:
+                                st.metric("Selected", len(folder_info))
+                        else:
+                            st.info("No folders selected for indexing")
+                    except Exception as e:
+                        st.error(f"Error loading selected folders: {str(e)}")
+                        # Clear selection on error
+                        st.session_state.sp_selected_folders = []
+                    
+                    # Index Selection and Scheduler
+                    # Determine target index (SharePoint-specific or global)
+                    target_index = getattr(st.session_state, 'sp_target_index', None) or st.session_state.selected_index
+                    
+                    if not target_index:
+                        st.warning("⚠️ Please select a target index above to continue with indexing operations.")
+                        st.info("💡 You can select an index specifically for SharePoint operations, or use the global index from the 'Manage Index' tab.")
+                    else:
+                        st.subheader("🚀 Indexing Operations")
+                        
+                        # Show which index will be used
+                        index_source = "SharePoint-specific" if hasattr(st.session_state, 'sp_target_index') and st.session_state.sp_target_index else "Global"
+                        st.info(f"Will index into: **{target_index}** ({index_source} selection)")
+                        
+                        # Parse file types
+                        file_type_list = [ft.strip() for ft in file_types.split(",") if ft.strip()] if file_types else None
+                        
+                        # Create tabs for Manual and Scheduled operations
+                        manual_tab, scheduler_tab, reports_tab = st.tabs(["Manual Index", "Scheduler", "Reports"])
+                        
+                        with manual_tab:
+                            st.markdown("### � Manual Indexing")
                             
-                            for idx, file in enumerate(sp_files):
-                                file_bytes = file.get("content")
-                                fname = file.get("name")
-                                file_url = file.get("source") or file.get("webUrl")
-                                st.info(f"Processing file {idx+1}/{total_files}: {fname}")
-                                if not file_bytes or not fname:
-                                    progress_bar.progress((idx + 1) / total_files, text=f"Skipped file {idx+1}/{total_files}")
-                                    skipped_files.append({
-                                        "name": fname or "Unknown",
-                                        "size": len(file_bytes) if file_bytes else 0,
-                                        "reason": "No content or filename"
-                                    })
-                                    continue
-                                
-                                # Use the same advanced processing for ALL files (including PDFs)
-                                try:
-                                    docs = _chunk_to_docs(
-                                        fname,
-                                        file_bytes,
-                                        file_url,
-                                        oai_client,
-                                        embed_deploy,
-                                    )
-                                except Exception as derr:
-                                    logging.error("Chunker failed for %s: %s", fname, derr)
-                                    # Fallback to simple PDF processing only for PDFs if advanced processing fails
-                                    if fname.lower().endswith('.pdf'):
-                                        try:
-                                            pdf_file = io.BytesIO(file_bytes)
-                                            pdf_file.name = fname
-                                            docs = pdf_to_documents(pdf_file, oai_client, embed_deploy)
-                                            # Patch each doc's url to SharePoint webUrl
-                                            for d in docs:
-                                                d["url"] = file_url
-                                            logging.info("Fallback to simple PDF processing for %s", fname)
-                                        except Exception as pdf_err:
-                                            logging.error("PDF fallback also failed for %s: %s", fname, pdf_err)
-                                            docs = []
-                                    else:
-                                        docs = []
-                                
-                                # Track processing results
-                                if docs:
-                                    processed_files.append({
-                                        "name": fname,
-                                        "chunks": len(docs),
-                                        "method": docs[0].get("extraction_method", "unknown") if docs else "unknown",
-                                        "multimodal": any(doc.get("isMultimodal", False) for doc in docs)
-                                    })
-                                    
-                                    # Show processing info for SharePoint files too
-                                    multimodal_docs = [doc for doc in docs if doc.get("isMultimodal", False)]
-                                    if multimodal_docs:
-                                        st.info(f"📄 {fname}: {len(docs)} chunks created, {len(multimodal_docs)} with images/figures")
-                                    else:
-                                        st.info(f"📄 {fname}: {len(docs)} chunks created")
-                                else:
-                                    skipped_files.append({
-                                        "name": fname,
-                                        "size": len(file_bytes),
-                                        "reason": "Processing failed"
-                                    })
-                                    
-                                sender.upload_documents(documents=docs)
-                                total_pages += len(docs)
-                                progress_bar.progress((idx + 1) / total_files, text=f"Processed {idx+1}/{total_files} files")
-                            sender.close()
+                            col1, col2 = st.columns([2, 1])
+                            with col1:
+                                st.markdown("Run indexing operation immediately on selected folders")
+                            with col2:
+                                parallel_files = st.select_slider(
+                                    "Parallel Files",
+                                    options=[1, 2, 3, 4, 5],
+                                    value=3,
+                                    help="Number of files to process in parallel (1-5)"
+                                )
+                            
+                            if st.button("🔗 Run Index Now", type="primary"):
+                                with st.spinner("Indexing SharePoint folders..."):
+                                    try:
+                                        # Initialize scheduler for parallel processing
+                                        from sharepoint_scheduler import SharePointScheduler
+                                        scheduler = SharePointScheduler()
+                                        
+                                        # Run indexing with parallel processing
+                                        result = scheduler.run_now(
+                                            selected_folders=st.session_state.sp_selected_folders,
+                                            config={
+                                                'index_name': target_index,
+                                                'file_types': file_type_list,
+                                                'max_parallel_files': parallel_files
+                                            }
+                                        )
+                                        
+                                        if result['success']:
+                                            st.success(f"✅ {result['message']}")
+                                            if 'files_successful' in result:
+                                                col1, col2, col3 = st.columns(3)
+                                                with col1:
+                                                    st.metric("Files Processed", result['files_successful'])
+                                                with col2:
+                                                    st.metric("Files Failed", result['files_failed'])
+                                                with col3:
+                                                    st.metric("Chunks Created", result['chunks_created'])
+                                        else:
+                                            st.error(f"❌ {result['message']}")
+                                            
+                                    except Exception as e:
+                                        st.error(f"❌ Manual indexing failed: {str(e)}")
+                        
+                        with scheduler_tab:
+                            st.markdown("### ⏰ Scheduled Indexing")
+                            
+                            # Initialize scheduler (using singleton pattern)
                             try:
-                                search_client, _ = init_search_client(st.session_state.selected_index)
-                                for _ in range(30):
-                                    if search_client.get_document_count() > 0:
-                                        break
-                                    time.sleep(1)
-                            except Exception as probe_err:
-                                logging.warning("Search probe failed: %s", probe_err)
-                            success_pages = total_pages - len(failed_ids)
-                            if failed_ids:
-                                st.error(f"❌ {len(failed_ids)} pages failed to index – see logs for details.")
-                            if success_pages:
-                                st.success(f"✅ Indexed {success_pages} pages from SharePoint into **{st.session_state.selected_index}**.")
+                                from sharepoint_scheduler import SharePointScheduler
+                                scheduler = SharePointScheduler.get_instance()
+                                
+                                # Scheduler controls
+                                col1, col2 = st.columns([2, 1])
+                                
+                                with col1:
+                                    st.markdown("**Schedule Configuration**")
+                                    
+                                    # Interval selection (1 min to 24 hours = 1440 minutes)
+                                    interval_minutes = st.select_slider(
+                                        "Indexing Interval",
+                                        options=[1, 5, 10, 15, 30, 60, 120, 240, 480, 720, 1440],
+                                        value=5,
+                                        format_func=lambda x: f"{x} min" if x < 60 else f"{x//60} hour{'s' if x//60 > 1 else ''}",
+                                        help="How often to run automatic indexing"
+                                    )
+                                    
+                                    parallel_files_scheduler = st.select_slider(
+                                        "Parallel Files (Scheduler)",
+                                        options=[1, 2, 3, 4, 5],
+                                        value=3,
+                                        help="Number of files to process in parallel during scheduled runs"
+                                    )
+                                    
+                                    # Auto-purge configuration
+                                    auto_purge_enabled = st.checkbox(
+                                        "🗑️ Auto-purge after indexing",
+                                        value=True,
+                                        help="Automatically run purge to remove orphaned files after each indexing job"
+                                    )
+                                
+                                with col2:
+                                    st.markdown("**Status**")
+                                    
+                                    # Always get fresh status from scheduler
+                                    status = scheduler.get_status()
+                                    st.session_state.scheduler_status = status
+                                    
+                                    if status['is_running']:
+                                        st.success("🟢 Running")
+                                        if status['next_run']:
+                                            next_run = datetime.fromisoformat(status['next_run'])
+                                            now = datetime.now()
+                                            time_until = (next_run - now).total_seconds()
+                                            if time_until > 0:
+                                                minutes = int(time_until // 60)
+                                                seconds = int(time_until % 60)
+                                                st.caption(f"Next: {next_run.strftime('%H:%M:%S')} (in {minutes}m {seconds}s)")
+                                            else:
+                                                st.caption(f"Next: {next_run.strftime('%H:%M:%S')} (overdue)")
+                                    else:
+                                        st.info("🔴 Stopped")
+                                    
+                                    st.metric("Interval", f"{status['interval_minutes']} min")
+                                    st.metric("Selected Folders", status['selected_folders_count'])
+                                    st.metric("Last Job", status.get('last_job_status', 'No jobs yet'))
+                                    
+                                    # Show recent job history
+                                    if status.get('recent_reports'):
+                                        with st.expander("📈 Recent Jobs", expanded=False):
+                                            for report in status['recent_reports']:
+                                                report_status = report.get('status', 'unknown')
+                                                report_type = report.get('type', 'unknown')
+                                                start_time = report.get('start_time', '')
+                                                if start_time:
+                                                    try:
+                                                        dt = datetime.fromisoformat(start_time)
+                                                        time_str = dt.strftime('%H:%M:%S')
+                                                    except:
+                                                        time_str = start_time
+                                                else:
+                                                    time_str = 'Unknown'
+                                                
+                                                status_icon = "✅" if report_status == "completed" else "❌" if report_status == "failed" else "🔄"
+                                                st.caption(f"{status_icon} {report_type.title()} at {time_str}")
+                                
+                                # Control buttons
+                                st.markdown("**Controls**")
+                                button_col1, button_col2 = st.columns(2)
+                                
+                                with button_col1:
+                                    if st.button("▶️ Start Scheduler", disabled=status['is_running']):
+                                        config = {
+                                            'index_name': target_index,
+                                            'file_types': file_type_list,
+                                            'max_parallel_files': parallel_files_scheduler,
+                                            'auto_purge_enabled': auto_purge_enabled
+                                        }
+                                        scheduler.set_interval(interval_minutes)
+                                        result = scheduler.start_scheduler(st.session_state.sp_selected_folders, config)
+                                        
+                                        if result['success']:
+                                            st.success(result['message'])
+                                        else:
+                                            st.error(result['message'])
+                                        
+                                        time.sleep(0.5)  # Brief pause for state to update
+                                        st.rerun()
+                                
+                                with button_col2:
+                                    if st.button("⏹️ Stop Scheduler", disabled=not status['is_running']):
+                                        result = scheduler.stop_scheduler()
+                                        
+                                        if result['success']:
+                                            st.success(result['message'])
+                                        else:
+                                            st.error(result['message'])
+                                        
+                                        time.sleep(0.5)  # Brief pause for state to update
+                                        st.rerun()
+                                
+                                # Note about manual indexing
+                                st.info("� **Tip**: Use the 'Manual Indexing' section in the SharePoint tab to run indexing immediately.")
+                                
+                                # Auto-refresh every 30 seconds (status is now always fresh)
+                                st.markdown("*Status updates automatically every page refresh*")
+                                
+                                # Performance info
+                                with st.expander("📊 Performance Features", expanded=False):
+                                    st.markdown("""
+                                    **Parallel Processing:**
+                                    - Process up to 5 files simultaneously
+                                    - Configurable per operation
+                                    - Reduces overall indexing time
+                                    
+                                    **Intelligent Scheduling:**
+                                    - Flexible intervals (1 min to 24 hours)
+                                    - Background processing
+                                    - Automatic error handling and retry
+                                    
+                                    **Resource Management:**
+                                    - Memory-efficient processing
+                                    - Graceful shutdown capability
+                                    - Thread safety and cleanup
+                                    """)
+                                
+                            except ImportError:
+                                st.error("❌ Scheduler module not available")
+                            except Exception as e:
+                                st.error(f"❌ Scheduler error: {str(e)}")
+                        
+                        with reports_tab:
+                            st.markdown("### 📊 Indexing Reports")
                             
-                            # Show SharePoint processing summary
-                            if processed_files or skipped_files:
-                                st.markdown("### 📊 SharePoint Processing Summary")
+                            try:
+                                from sharepoint_scheduler import SharePointScheduler
+                                scheduler = SharePointScheduler()
                                 
-                                if processed_files:
-                                    st.markdown(f"**✅ Successfully Processed ({len(processed_files)} files):**")
-                                    for file_info in processed_files:
-                                        multimodal_icon = "🎨" if file_info.get("multimodal", False) else ""
-                                        st.markdown(f"   • {file_info['name']} - {file_info['chunks']} chunks ({file_info['method']}) {multimodal_icon}")
+                                # Report management buttons
+                                report_mgmt_col1, report_mgmt_col2, report_mgmt_col3 = st.columns([2, 1, 1])
                                 
-                                if skipped_files:
-                                    st.markdown(f"**⚠️ Skipped Files ({len(skipped_files)} files):**")
-                                    for file_info in skipped_files:
-                                        st.markdown(f"   • {file_info['name']} ({file_info['size']} bytes) - {file_info['reason']}")
-                                    st.info("💡 **Tip:** Skipped files are usually corrupted, too small, or in an unsupported format.")
-                    except Exception as ex:
-                        st.error(f"SharePoint ingestion failed: {ex}")
+                                with report_mgmt_col1:
+                                    st.markdown("**Report Management**")
+                                
+                                with report_mgmt_col2:
+                                    if st.button("🔄 Refresh Reports"):
+                                        # Use session state to trigger reports refresh without full page reload
+                                        if "reports_refresh_counter" not in st.session_state:
+                                            st.session_state.reports_refresh_counter = 0
+                                        st.session_state.reports_refresh_counter += 1
+                                        st.success("Reports refreshed!", icon="✅")
+                                
+                                with report_mgmt_col3:
+                                    # Initialize delete confirmation state
+                                    if "delete_all_reports_confirm" not in st.session_state:
+                                        st.session_state.delete_all_reports_confirm = False
+                                    
+                                    if not st.session_state.delete_all_reports_confirm:
+                                        if st.button("🗑️ Delete All Reports"):
+                                            st.session_state.delete_all_reports_confirm = True
+                                    else:
+                                        col_a, col_b = st.columns(2)
+                                        with col_a:
+                                            if st.button("✅ Confirm", type="primary"):
+                                                result = scheduler.delete_all_reports()
+                                                if result["success"]:
+                                                    st.success(f"✅ {result['message']}")
+                                                    st.balloons()
+                                                    st.session_state.delete_all_reports_confirm = False
+                                                    # Invalidate reports cache
+                                                    st.session_state.reports_data = None
+                                                    time.sleep(1)
+                                                    # Increment refresh counter to trigger reload
+                                                    if "reports_refresh_counter" not in st.session_state:
+                                                        st.session_state.reports_refresh_counter = 0
+                                                    st.session_state.reports_refresh_counter += 1
+                                                else:
+                                                    st.error(f"❌ {result['message']}")
+                                                    st.session_state.delete_all_reports_confirm = False
+                                        with col_b:
+                                            if st.button("❌ Cancel"):
+                                                st.session_state.delete_all_reports_confirm = False
+                                
+                                st.divider()
+                                
+                                # Initialize reports refresh system
+                                if "reports_data" not in st.session_state:
+                                    st.session_state.reports_data = None
+                                    st.session_state.reports_last_refresh = 0
+                                
+                                # Check if we need to refresh reports data
+                                current_refresh_counter = st.session_state.get("reports_refresh_counter", 0)
+                                if (st.session_state.reports_data is None or 
+                                    current_refresh_counter > st.session_state.reports_last_refresh):
+                                    # Load fresh reports data
+                                    st.session_state.reports_data = scheduler.get_reports()
+                                    st.session_state.reports_last_refresh = current_refresh_counter
+                                
+                                # Use cached reports data
+                                reports = st.session_state.reports_data
+                                
+                                if not reports:
+                                    st.info("No indexing reports available yet. Run some indexing operations to see reports here.")
+                                else:
+                                    # Reports summary
+                                    col1, col2, col3, col4 = st.columns(4)
+                                    
+                                    successful_reports = [r for r in reports if r.get('status') == 'completed']
+                                    failed_reports = [r for r in reports if r.get('status') == 'error']
+                                    running_reports = [r for r in reports if r.get('status') == 'running']
+                                    
+                                    with col1:
+                                        st.metric("Total Reports", len(reports))
+                                    with col2:
+                                        st.metric("Successful", len(successful_reports))
+                                    with col3:
+                                        st.metric("Failed", len(failed_reports))
+                                    with col4:
+                                        st.metric("Running", len(running_reports))
+                                    
+                                    # Reports list
+                                    st.markdown("**Report History**")
+                                    
+                                    for report in reports[:10]:  # Show last 10 reports
+                                        with st.container():
+                                            report_col1, report_col2, report_col3 = st.columns([3, 1, 1])
+                                            
+                                            with report_col1:
+                                                start_time = datetime.fromisoformat(report['start_time'])
+                                                status_icon = {
+                                                    'completed': '✅',
+                                                    'error': '❌',
+                                                    'running': '🔄'
+                                                }.get(report.get('status', 'unknown'), '❓')
+                                                
+                                                st.write(f"{status_icon} {start_time.strftime('%Y-%m-%d %H:%M:%S')} - {report.get('type', 'unknown').title()}")
+                                                if report.get('status') == 'completed':
+                                                    caption_text = f"Files: {report.get('files_successful', 0)}/{report.get('files_processed', 0)} | Chunks: {report.get('chunks_created', 0)}"
+                                                    
+                                                    # Add purge info if available
+                                                    if report.get('purge_results'):
+                                                        purge_deleted = report['purge_results'].get('documents_deleted', 0)
+                                                        if purge_deleted > 0:
+                                                            caption_text += f" | Purged: {purge_deleted} docs"
+                                                        else:
+                                                            caption_text += " | Purged: none"
+                                                    elif report.get('auto_purge_enabled'):
+                                                        caption_text += " | Auto-purge: enabled"
+                                                    
+                                                    st.caption(caption_text)
+                                            
+                                            with report_col2:
+                                                # View report details
+                                                if st.button("👁️ View", key=f"view_{report['id']}"):
+                                                    st.session_state[f"show_report_{report['id']}"] = True
+                                            
+                                            with report_col3:
+                                                # Delete report
+                                                if st.button("🗑️ Delete", key=f"delete_{report['id']}"):
+                                                    result = scheduler.delete_report(report['id'])
+                                                    if result['success']:
+                                                        st.success(f"Report deleted: {report['id']}")
+                                                        # Invalidate reports cache
+                                                        st.session_state.reports_data = None
+                                                        # Increment refresh counter to trigger reload
+                                                        if "reports_refresh_counter" not in st.session_state:
+                                                            st.session_state.reports_refresh_counter = 0
+                                                        st.session_state.reports_refresh_counter += 1
+                                                    else:
+                                                        st.error(result['message'])
+                                        
+                                        # Show report details if requested
+                                        if st.session_state.get(f"show_report_{report['id']}", False):
+                                            with st.expander(f"📋 Report Details - {report['id']}", expanded=True):
+                                                
+                                                # Close button
+                                                if st.button("❌ Close", key=f"close_{report['id']}"):
+                                                    st.session_state[f"show_report_{report['id']}"] = False
+                                                    st.rerun()
+                                                
+                                                # Report details
+                                                detail_col1, detail_col2 = st.columns(2)
+                                                
+                                                with detail_col1:
+                                                    st.markdown("**General Info**")
+                                                    st.write(f"**Report ID:** {report['id']}")
+                                                    st.write(f"**Type:** {report.get('type', 'unknown').title()}")
+                                                    st.write(f"**Status:** {report.get('status', 'unknown').title()}")
+                                                    st.write(f"**Start Time:** {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                                                    
+                                                    if report.get('end_time'):
+                                                        end_time = datetime.fromisoformat(report['end_time'])
+                                                        duration = (end_time - start_time).total_seconds()
+                                                        st.write(f"**Duration:** {duration:.1f} seconds")
+                                                
+                                                with detail_col2:
+                                                    st.markdown("**Processing Summary**")
+                                                    st.write(f"**Files Processed:** {report.get('files_processed', 0)}")
+                                                    st.write(f"**Files Successful:** {report.get('files_successful', 0)}")
+                                                    st.write(f"**Files Failed:** {report.get('files_failed', 0)}")
+                                                    st.write(f"**Chunks Created:** {report.get('chunks_created', 0)}")
+                                                
+                                                # Folders
+                                                if report.get('folders'):
+                                                    st.markdown("**Folders Processed**")
+                                                    for folder in report['folders']:
+                                                        st.write(f"📁 {folder}")
+                                                
+                                                # Processing details
+                                                if report.get('processing_details'):
+                                                    st.markdown("**File Processing Details**")
+                                                    for detail in report['processing_details']:
+                                                        if detail.get('status') == 'success':
+                                                            st.write(f"✅ {detail['file']} - {detail.get('chunks', 0)} chunks ({detail.get('method', 'unknown')})")
+                                                        else:
+                                                            st.write(f"❌ {detail['file']} - {detail.get('error', 'Unknown error')}")
+                                                
+                                                # Errors
+                                                if report.get('errors'):
+                                                    st.markdown("**Errors**")
+                                                    for error in report['errors']:
+                                                        st.error(error)
+                                                
+                                                # Auto-purge results
+                                                if report.get('purge_results'):
+                                                    st.markdown("**🗑️ Auto-Purge Results**")
+                                                    purge_results = report['purge_results']
+                                                    
+                                                    purge_col1, purge_col2 = st.columns(2)
+                                                    
+                                                    with purge_col1:
+                                                        st.write(f"**Purge Success:** {'✅ Yes' if purge_results.get('success') else '❌ No'}")
+                                                        st.write(f"**Documents Checked:** {purge_results.get('documents_checked', 0)}")
+                                                        st.write(f"**Files Checked:** {purge_results.get('files_checked', 0)}")
+                                                    
+                                                    with purge_col2:
+                                                        st.write(f"**Files Not Found:** {purge_results.get('files_not_found', 0)}")
+                                                        st.write(f"**Documents Deleted:** {purge_results.get('documents_deleted', 0)}")
+                                                        st.write(f"**Purge Message:** {purge_results.get('message', 'No message')}")
+                                                    
+                                                    if purge_results.get('errors'):
+                                                        st.markdown("**Purge Errors**")
+                                                        for error in purge_results['errors']:
+                                                            st.error(f"Purge: {error}")
+                                                elif report.get('auto_purge_enabled'):
+                                                    st.info("🗑️ Auto-purge was enabled but no purge results available (likely due to indexing failure)")
+                                                else:
+                                                    st.info("🗑️ Auto-purge was disabled for this operation")
+                                        
+                                        st.divider()
+                            
+                            except ImportError:
+                                st.error("❌ Reports module not available")
+                            except Exception as e:
+                                st.error(f"❌ Reports error: {str(e)}")
+                        
+                        # Add Purge Deleted Files section
+                        st.divider()
+                        st.subheader("🗑️ Purge Deleted Files")
+                        
+                        with st.expander("💡 About File Deletion Purging", expanded=False):
+                            st.markdown("""
+                            **What this does:**
+                            - Scans your Azure Search index for SharePoint documents
+                            - Checks if each file still exists in SharePoint
+                            - Removes orphaned documents (files that were deleted from SharePoint but still exist in the index)
+                            
+                            **When to use:**
+                            - After deleting files from SharePoint
+                            - When you notice search results showing files that no longer exist
+                            - As periodic maintenance to keep the index clean
+                            
+                            **How it works:**
+                            - Uses Microsoft Graph API to verify file existence
+                            - Processes files in batches for efficiency
+                            - Provides detailed logging of deletion operations
+                            """)
+                        
+                        # Purge controls
+                        purge_col1, purge_col2 = st.columns([2, 1])
+                        
+                        with purge_col1:
+                            st.markdown("**Run deletion purge for the current index:**")
+                            st.info(f"🎯 Target index: **{target_index}**")
+                            
+                            # Show which folder will be used for folder-specific purging
+                            if hasattr(st.session_state, 'sp_selected_folders') and st.session_state.sp_selected_folders:
+                                raw_folder = st.session_state.sp_selected_folders[0]
+                                # Parse folder path to extract just the folder part
+                                if '|' in raw_folder:
+                                    target_folder = raw_folder.split('|')[-1]
+                                else:
+                                    target_folder = raw_folder
+                                st.info(f"📁 Target folder: **{target_folder}** (folder-specific purging)")
+                                st.caption("Only files missing from this specific folder will be considered orphaned")
+                            else:
+                                st.info(f"📁 Target folder: **/ppt** (default folder-specific purging)")
+                                st.caption("Only files missing from the /ppt folder will be considered orphaned")
+                            
+                            # Show warning about the operation
+                            st.warning("⚠️ This will permanently delete orphaned documents from the search index. Make sure you have backups if needed.")
+                            
+                            # Purge options
+                            show_preview = st.checkbox("Preview orphaned files before deletion", value=True)
+                            
+                        with purge_col2:
+                            st.markdown("**Purge Status**")
+                            
+                            # Initialize purge status in session state
+                            if "purge_status" not in st.session_state:
+                                st.session_state.purge_status = {
+                                    "is_running": False,
+                                    "last_run": None,
+                                    "last_result": None
+                                }
+                            
+                            status = st.session_state.purge_status
+                            
+                            if status["is_running"]:
+                                st.info("🔄 Purge Running...")
+                            elif status["last_run"]:
+                                st.success("✅ Last Run Complete")
+                                st.caption(f"Time: {status['last_run']}")
+                            else:
+                                st.info("🟡 Ready to Run")
+                        
+                        # Purge action buttons
+                        st.markdown("---")
+                        purge_action_col1, purge_action_col2 = st.columns(2)
+                        
+                        with purge_action_col1:
+                            if st.button("🔍 Preview Orphaned Files", disabled=status["is_running"]):
+                                with st.spinner("Scanning for orphaned files..."):
+                                    try:
+                                        # Import and use the purger for preview
+                                        import asyncio
+                                        from connectors.sharepoint.sharepoint_deleted_files_purger import SharepointDeletedFilesPurger
+                                        
+                                        # Get the target folder path from session state or use /ppt as default
+                                        target_folder_path = None
+                                        if hasattr(st.session_state, 'sp_selected_folders') and st.session_state.sp_selected_folders:
+                                            # Parse the first selected folder path to extract just the folder part
+                                            raw_folder = st.session_state.sp_selected_folders[0]
+                                            # Format: domain||site|folder_path - extract just the folder_path
+                                            if '|' in raw_folder:
+                                                target_folder_path = raw_folder.split('|')[-1]  # Get the last part
+                                            else:
+                                                target_folder_path = raw_folder
+                                        else:
+                                            # Default to /ppt folder for folder-specific purging
+                                            target_folder_path = "/ppt"
+                                        
+                                        # Initialize and run the purger in preview mode with UI-selected index and folder
+                                        purger = SharepointDeletedFilesPurger(index_name=target_index, target_folder_path=target_folder_path)
+                                        
+                                        # Run the async preview operation
+                                        async def run_preview():
+                                            return await purger.preview_deleted_files()
+                                        
+                                        # Execute the preview and get results
+                                        preview_result = asyncio.run(run_preview())
+                                        
+                                        if preview_result["success"]:
+                                            st.success("✅ Preview completed successfully!")
+                                            
+                                            # Show preview results
+                                            col1, col2, col3 = st.columns(3)
+                                            with col1:
+                                                st.metric("Files Checked", preview_result["files_checked"])
+                                            with col2:
+                                                st.metric("Orphaned Files", preview_result["files_not_found"])
+                                            with col3:
+                                                st.metric("Chunks to Delete", preview_result["would_delete_count"])
+                                            
+                                            st.info(f"� {preview_result['message']}")
+                                            
+                                            # Show orphaned files details if any
+                                            if preview_result["orphaned_files"]:
+                                                st.markdown("**🗑️ Orphaned Files (would be deleted):**")
+                                                
+                                                for i, file_info in enumerate(preview_result["orphaned_files"][:10]):  # Show max 10
+                                                    with st.expander(f"📄 {file_info['file_name']} ({file_info['chunk_count']} chunks)", expanded=False):
+                                                        st.write(f"**File:** {file_info['file_name']}")
+                                                        st.write(f"**Path:** {file_info['file_path']}")
+                                                        st.write(f"**Parent ID:** {file_info['parent_id']}")
+                                                        st.write(f"**Chunks:** {file_info['chunk_count']}")
+                                                        st.caption("This file no longer exists in SharePoint but has indexed chunks in the search index.")
+                                                
+                                                if len(preview_result["orphaned_files"]) > 10:
+                                                    st.caption(f"... and {len(preview_result['orphaned_files']) - 10} more files")
+                                                
+                                                st.warning("⚠️ These files would be permanently deleted from the search index if you run the purge.")
+                                            else:
+                                                st.success("🎉 No orphaned files found! Your index is clean.")
+                                        else:
+                                            st.error(f"❌ Preview failed: {preview_result['message']}")
+                                            
+                                            # Show error details
+                                            if preview_result.get("errors"):
+                                                st.markdown("**Error Details:**")
+                                                for error in preview_result["errors"]:
+                                                    st.error(f"• {error}")
+                                        
+                                    except Exception as e:
+                                        st.error(f"❌ Preview failed: {str(e)}")
+                                        st.markdown("""
+                                        **Troubleshooting:**
+                                        - Check SharePoint authentication credentials in `.env` file:
+                                          - `SHAREPOINT_CONNECTOR_ENABLED=true`
+                                          - `SHAREPOINT_TENANT_ID=your-tenant-id`
+                                          - `SHAREPOINT_CLIENT_ID=your-client-id`
+                                          - `SHAREPOINT_CLIENT_SECRET=your-client-secret`
+                                          - `SHAREPOINT_SITE_DOMAIN=your-domain.sharepoint.com`
+                                          - `SHAREPOINT_SITE_NAME=your-site-name` (optional for root site)
+                                        - Verify Azure Search index permissions
+                                        - Verify the search index contains SharePoint documents with `source='sharepoint'`
+                                        - Index name is taken from UI selection: **{}**
+                                        """.format(target_index))
+                        
+                        with purge_action_col2:
+                            if st.button("🗑️ Run Purge Now", type="primary", disabled=status["is_running"]):
+                                print("🚀 [UI DEBUG] PURGE BUTTON CLICKED! Starting purge directly...")
+                                
+                                # Show warning but proceed directly
+                                if show_preview:
+                                    st.warning("⚠️ Running purge - this will delete orphaned files from the search index.")
+                                
+                                # Run the actual purge
+                                print("🚀 [UI DEBUG] Setting purge_status is_running = True")
+                                st.session_state.purge_status["is_running"] = True
+                                
+                                with st.spinner("🗑️ Running deletion purge... This may take a few minutes."):
+                                    try:
+                                        import asyncio
+                                        from connectors.sharepoint.sharepoint_deleted_files_purger import SharepointDeletedFilesPurger
+                                        
+                                        # Get the target folder path from session state or use /ppt as default
+                                        target_folder_path = None
+                                        if hasattr(st.session_state, 'sp_selected_folders') and st.session_state.sp_selected_folders:
+                                            # Parse the first selected folder path to extract just the folder part
+                                            raw_folder = st.session_state.sp_selected_folders[0]
+                                            # Format: domain||site|folder_path - extract just the folder_path
+                                            if '|' in raw_folder:
+                                                target_folder_path = raw_folder.split('|')[-1]  # Get the last part
+                                            else:
+                                                target_folder_path = raw_folder
+                                        else:
+                                            # Default to /ppt folder for folder-specific purging
+                                            target_folder_path = "/ppt"
+                                        
+                                        # Initialize and run the purger with UI-selected index and folder
+                                        print(f"🚀 [UI DEBUG] STARTING PURGE FROM UI:")
+                                        print(f"🚀 [UI DEBUG] Target index: {target_index}")
+                                        print(f"🚀 [UI DEBUG] Target folder: {target_folder_path}")
+                                        print(f"🚀 [UI DEBUG] Creating SharepointDeletedFilesPurger...")
+                                        
+                                        purger = SharepointDeletedFilesPurger(index_name=target_index, target_folder_path=target_folder_path)
+                                        
+                                        # Run the async purge operation and capture result
+                                        async def run_purge():
+                                            print(f"🚀 [UI DEBUG] About to call purge_deleted_files()...")
+                                            result = await purger.purge_deleted_files()
+                                            print(f"🚀 [UI DEBUG] Purge operation returned: {result}")
+                                            return result
+                                        
+                                        # Execute the purge and get results
+                                        print(f"🚀 [UI DEBUG] Running asyncio.run(run_purge())...")
+                                        purge_result = asyncio.run(run_purge())
+                                        print(f"🚀 [UI DEBUG] Purge completed, result: {purge_result}")
+                                        
+                                        # Update status based on result
+                                        if purge_result["success"]:
+                                            st.session_state.purge_status.update({
+                                                "is_running": False,
+                                                "last_run": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                                "last_result": "success"
+                                            })
+                                            
+                                            # Store detailed results for history display
+                                            st.session_state.last_purge_details = {
+                                                'files_checked': purge_result["files_checked"],
+                                                'files_not_found': purge_result["files_not_found"],
+                                                'documents_deleted': purge_result["documents_deleted"],
+                                                'documents_checked': purge_result["documents_checked"]
+                                            }
+                                            
+                                            st.success("✅ Purge completed successfully!")
+                                            
+                                            # Show detailed results
+                                            col1, col2, col3, col4 = st.columns(4)
+                                            with col1:
+                                                st.metric("Documents Checked", purge_result["documents_checked"])
+                                            with col2:
+                                                st.metric("Files Checked", purge_result["files_checked"])
+                                            with col3:
+                                                st.metric("Files Not Found", purge_result["files_not_found"])
+                                            with col4:
+                                                st.metric("Chunks Deleted", purge_result["documents_deleted"])
+                                            
+                                            st.info(f"📊 {purge_result['message']}")
+                                            
+                                            # Show next steps
+                                            st.markdown("""
+                                            **What happened:**
+                                            - Scanned SharePoint documents in the search index
+                                            - Checked each file's existence in SharePoint using Microsoft Graph API
+                                            - Removed orphaned documents from the search index
+                                            
+                                            **Next steps:**
+                                            - Run a test search to verify cleanup
+                                            - Monitor your search index size for space savings
+                                            """)
+                                        else:
+                                            # Handle failure case
+                                            st.session_state.purge_status.update({
+                                                "is_running": False,
+                                                "last_run": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                                "last_result": f"error: {purge_result['message']}"
+                                            })
+                                            
+                                            st.error(f"❌ Purge failed: {purge_result['message']}")
+                                            
+                                            # Show error details
+                                            if purge_result.get("errors"):
+                                                st.markdown("**Error Details:**")
+                                                for error in purge_result["errors"]:
+                                                    st.error(f"• {error}")
+                                        
+                                    except Exception as e:
+                                        # Update status with error
+                                        st.session_state.purge_status.update({
+                                            "is_running": False,
+                                            "last_run": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                            "last_result": f"error: {str(e)}"
+                                        })
+                                        
+                                        st.error(f"❌ Purge failed: {str(e)}")
+                                        
+                                        # Show troubleshooting tips
+                                        st.markdown("""
+                                        **Troubleshooting:**
+                                        - Check SharePoint authentication credentials in `.env` file:
+                                          - `SHAREPOINT_CONNECTOR_ENABLED=true`
+                                          - `SHAREPOINT_TENANT_ID=your-tenant-id`
+                                          - `SHAREPOINT_CLIENT_ID=your-client-id`
+                                          - `SHAREPOINT_CLIENT_SECRET=your-client-secret`
+                                          - `SHAREPOINT_SITE_DOMAIN=your-domain.sharepoint.com`
+                                          - `SHAREPOINT_SITE_NAME=your-site-name` (optional for root site)
+                                        - Verify Azure Search index permissions
+                                        - Verify the search index contains SharePoint documents with `source='sharepoint'`
+                                        - Index name is taken from UI selection: **{}**
+                                        """.format(target_index))
+                                
+                                st.rerun()
+                        
+                        # Show purge history if available
+                        if status["last_result"]:
+                            with st.expander("📊 Purge History", expanded=False):
+                                if status["last_result"] == "success":
+                                    st.success(f"✅ Last purge successful at {status['last_run']}")
+                                    
+                                    # Try to show additional details if they exist in session state
+                                    if hasattr(st.session_state, 'last_purge_details'):
+                                        details = st.session_state.last_purge_details
+                                        col1, col2, col3 = st.columns(3)
+                                        with col1:
+                                            st.metric("Files Checked", details.get('files_checked', 'N/A'))
+                                        with col2:
+                                            st.metric("Files Deleted", details.get('files_not_found', 'N/A'))
+                                        with col3:
+                                            st.metric("Chunks Removed", details.get('documents_deleted', 'N/A'))
+                                else:
+                                    st.error(f"❌ Last purge failed at {status['last_run']}")
+                                    st.error(f"Error: {status['last_result']}")
+                                
+                                st.markdown("""
+                                **For detailed purge logs:**
+                                - Check the application console output
+                                - Look for `[sharepoint_purge_deleted_files]` log entries
+                                - Monitor Azure Search index size before/after purge
+                                
+                                **Understanding the results:**
+                                - **Files Checked**: Number of unique SharePoint files found in the index
+                                - **Files Deleted**: Number of files that no longer exist in SharePoint
+                                - **Chunks Removed**: Number of document chunks purged from the search index
+                                """)
+                
+                else:
+                    st.info("Select folders to index using the checkboxes above.")
+        
+        except ImportError:
+            st.error("❌ SharePoint connector not available. Please install required dependencies.")
+            st.markdown("""
+            **Missing Dependencies:**
+            - SharePoint Index Manager
+            - SharePoint Data Reader
+            - SharePoint Deleted Files Purger
+            
+            **To install:**
+            ```bash
+            pip install -r requirements.txt
+            ```
+            """)
 
-    # ─────────────────── Tab 3 – Test Retrieval ──────────────────────────
+    # ─────────────────── Tab 5 – Test Retrieval ──────────────────────────
     with tab_test:
-        render_test_retrieval_tab(
-            tab_test, 
-            health_block, 
-            st.session_state, 
-            init_agent_client, 
-            init_search_client, 
-            env, 
-            _search_credential
-        )
+        health_block()
+        st.header("🔍 Test Retrieval")
+        
+        # Test retrieval functionality
+        if not st.session_state.selected_index:
+            st.warning("Please select an index first in the 'Manage Index' tab.")
+        else:
+            st.success(f"Testing retrieval from index: **{st.session_state.selected_index}**")
+            
+            test_query = st.text_input("Test Query", placeholder="Enter a search query to test retrieval")
+            
+            if test_query and st.button("🔍 Test Search"):
+                with st.spinner("Searching..."):
+                    try:
+                        # Test the search functionality
+                        search_client, _ = init_search_client()
+                        results = search_client.search(
+                            search_text=test_query,
+                            top=st.session_state.get('top_k', 5),
+                            include_total_count=True
+                        )
+                        
+                        search_results = list(results)
+                        
+                        if search_results:
+                            st.success(f"Found {len(search_results)} results")
+                            
+                            for i, result in enumerate(search_results):
+                                with st.expander(f"Result {i+1}: {result.get('source_file', 'Unknown')} (Score: {result['@search.score']:.3f})"):
+                                    st.write(f"**Content:** {result.get('content', result.get('page_chunk', 'No content'))[:500]}...")
+                                    st.write(f"**Source:** {result.get('source_file', 'Unknown')}")
+                                    st.write(f"**URL:** {result.get('url', 'No URL')}")
+                                    st.write(f"**Page:** {result.get('page_number', 'Unknown')}")
+                        else:
+                            st.info("No results found for this query.")
+                            
+                    except Exception as e:
+                        st.error(f"Search failed: {str(e)}")
 
-    # ─────────────────── Tab 5 – Function Config ──────────────────────────
+    # ─────────────────── Tab 6 – Function Config ─────────────────────────
     with tab_cfg:
-        st.header("⚙️ Configure Azure Function")
+        health_block()
+        st.header("⚙️ Azure Function Configuration")
+        
+        # Load environment variables
+        env_vars = {}
+        for key in [
+            "INDEX_NAME", "AGENT_NAME", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_KEY",
+            "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_CHAT_DEPLOYMENT",
+            "AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "AZURE_SEARCH_ENDPOINT",
+            "AZURE_SEARCH_KEY"
+        ]:
+            env_vars[key] = os.getenv(key, "")
 
-        # Load .env once for this tab
-        env_vars = load_env_vars()
+        st.markdown("Configure environment variables for Azure Function deployment.")
 
-        # Runtime parameters – choose index from dropdown
-        st.markdown("##### Runtime parameters")
-
-        # Populate from earlier tabs (Manage/Create) – falls back to manual
+        # Index selection for function config
         index_options = st.session_state.get("available_indexes", [])
         if index_options:
             # Pre‑select value from .env if present

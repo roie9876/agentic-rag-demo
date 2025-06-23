@@ -482,6 +482,7 @@ class SharePointDataReader:
         folder_path: Optional[str],
         file_name: str,
         access_token: Optional[str] = None,
+        file_id: Optional[str] = None,
     ) -> Optional[bytes]:
         """
         Retrieve the content of a file as bytes from a specific site drive.
@@ -491,30 +492,69 @@ class SharePointDataReader:
         :param folder_path: Path to the folder within the drive, can include subfolders.
         :param file_name: The name of the file.
         :param access_token: The access token for Microsoft Graph API authentication.
+        :param file_id: Optional file ID for direct access.
         :return: Bytes content of the file or None if there's an error.
         """
         if access_token is None:
             access_token = self.access_token
 
-        folder_path_formatted = folder_path.rstrip("/") if folder_path else ""
-        endpoint = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives/{drive_id}/root:{folder_path_formatted}/{file_name}:/content"
+        headers = {"Authorization": "Bearer " + access_token}
 
-        try:
-            response = requests.get(
-                endpoint, headers={"Authorization": "Bearer " + access_token}
-            )
-            if response.status_code != 200:
-                logging.error(
-                    f"[sharepoint_files_reader] Failed to retrieve file content. Status code: {response.status_code}, Response: {response.text}"
-                )
-                return None
-            return response.content
-        except requests.exceptions.RequestException as req_err:
-            logging.error(f"[sharepoint_files_reader] Request error: {req_err}")
-            return None
+        # Try multiple approaches for file content retrieval
+        endpoints_to_try = []
+        
+        # Method 1: Use file ID if available (most reliable)
+        if file_id:
+            endpoints_to_try.append(f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives/{drive_id}/items/{file_id}/content")
+        
+        # Method 2: Use folder path with proper encoding
+        if folder_path and file_name:
+            # Clean up folder path
+            folder_path_clean = folder_path.strip('/')
+            if folder_path_clean:
+                # For non-root folders
+                encoded_path = requests.utils.quote(f"{folder_path_clean}/{file_name}", safe='')
+                endpoints_to_try.append(f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives/{drive_id}/root:/{encoded_path}:/content")
+            else:
+                # For root folder
+                encoded_filename = requests.utils.quote(file_name, safe='')
+                endpoints_to_try.append(f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives/{drive_id}/root:/{encoded_filename}:/content")
+        
+        # Method 3: Fallback - original method with better formatting
+        if folder_path and file_name:
+            folder_path_formatted = folder_path.rstrip("/") if folder_path else ""
+            if folder_path_formatted:
+                endpoint = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives/{drive_id}/root:{folder_path_formatted}/{file_name}:/content"
+            else:
+                endpoint = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives/{drive_id}/root:/{file_name}:/content"
+            endpoints_to_try.append(endpoint)
+
+        # Try each endpoint until one works
+        for i, endpoint in enumerate(endpoints_to_try):
+            try:
+                logging.info(f"[sharepoint_files_reader] Trying endpoint {i+1}/{len(endpoints_to_try)}: {endpoint}")
+                response = requests.get(endpoint, headers=headers, timeout=30)
+                
+                if response.status_code == 200:
+                    logging.info(f"[sharepoint_files_reader] Successfully retrieved file content for {file_name}")
+                    return response.content
+                elif response.status_code == 404:
+                    logging.warning(f"[sharepoint_files_reader] File not found at endpoint {i+1}: {response.text}")
+                    continue
+                else:
+                    logging.warning(f"[sharepoint_files_reader] Failed to retrieve file content at endpoint {i+1}. Status code: {response.status_code}, Response: {response.text}")
+                    continue
+                    
+            except requests.exceptions.RequestException as req_err:
+                logging.warning(f"[sharepoint_files_reader] Request error at endpoint {i+1}: {req_err}")
+                continue
+        
+        # If all methods failed, log final error
+        logging.error(f"[sharepoint_files_reader] Failed to retrieve file content for {file_name} using all available methods")
+        return None
 
     def _retrieve_file_content(
-        self, site_id: str, drive_id: str, folder_path: Optional[str], file_name: str
+        self, site_id: str, drive_id: str, folder_path: Optional[str], file_name: str, file_id: Optional[str] = None
     ) -> Optional[bytes]:
         """
         Retrieve the content of a specific file from SharePoint.
@@ -523,10 +563,11 @@ class SharePointDataReader:
         :param drive_id: SharePoint drive ID.
         :param folder_path: Path to the folder containing the file.
         :param file_name: Name of the file to retrieve.
+        :param file_id: Optional file ID for direct access.
         :return: Content of the file as bytes, or None if retrieval fails.
         """
         return self._get_file_content_bytes(
-            site_id, drive_id, folder_path, file_name
+            site_id, drive_id, folder_path, file_name, file_id=file_id
         )
 
     @staticmethod
@@ -684,10 +725,11 @@ class SharePointDataReader:
 
         for file in files:
             file_name = file.get("name")
+            file_id = file.get("id")
             if file_name and self._is_file_format_valid(file_name, file_formats):
                 metadata = self._extract_file_metadata(file)
                 content = self._retrieve_file_content(
-                    site_id, drive_id, folder_path, file_name
+                    site_id, drive_id, folder_path, file_name, file_id
                 )
                 users_by_role = self._get_read_access_entities(
                     self._get_file_permissions(site_id, file["id"])

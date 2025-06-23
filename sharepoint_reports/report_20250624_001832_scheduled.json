@@ -1,0 +1,39 @@
+{
+  "id": "report_20250624_001832_scheduled",
+  "start_time": "2025-06-24T00:18:32.852815",
+  "end_time": "2025-06-24T00:19:23.798099",
+  "type": "scheduled",
+  "folders": [
+    "mngenvmcap623661.sharepoint.com||Documents|/ppt"
+  ],
+  "files_processed": 2,
+  "files_successful": 2,
+  "files_failed": 0,
+  "chunks_created": 10,
+  "errors": [],
+  "processing_details": [
+    {
+      "file": "04. UltraDisk new features.pptx",
+      "status": "success",
+      "chunks": 6,
+      "method": "document_intelligence"
+    },
+    {
+      "file": "somatosensory.pdf",
+      "status": "success",
+      "chunks": 4,
+      "method": "document_intelligence"
+    }
+  ],
+  "status": "completed",
+  "auto_purge_enabled": true,
+  "purge_results": {
+    "success": true,
+    "message": "No orphaned documents found - index is clean!",
+    "documents_checked": 10,
+    "documents_deleted": 0,
+    "files_checked": 2,
+    "files_not_found": 0,
+    "errors": []
+  }
+}
