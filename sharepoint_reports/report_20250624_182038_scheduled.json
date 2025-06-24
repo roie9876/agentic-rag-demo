@@ -1,0 +1,18 @@
+{
+  "id": "report_20250624_182038_scheduled",
+  "start_time": "2025-06-24T18:20:38.998591",
+  "end_time": "2025-06-24T18:20:46.822199",
+  "type": "scheduled",
+  "folders": [
+    "mngenvmcap623661.sharepoint.com||Documents|/zim"
+  ],
+  "files_processed": 0,
+  "files_successful": 0,
+  "files_failed": 0,
+  "chunks_created": 0,
+  "errors": [],
+  "processing_details": [],
+  "status": "completed",
+  "auto_purge_enabled": true,
+  "purge_results": null
+}

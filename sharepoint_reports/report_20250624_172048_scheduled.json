@@ -1,0 +1,33 @@
+{
+  "id": "report_20250624_172048_scheduled",
+  "start_time": "2025-06-24T17:20:48.929832",
+  "end_time": "2025-06-24T17:21:32.769010",
+  "type": "scheduled",
+  "folders": [
+    "mngenvmcap623661.sharepoint.com||Documents|/zim"
+  ],
+  "files_processed": 1,
+  "files_successful": 1,
+  "files_failed": 0,
+  "chunks_created": 13,
+  "errors": [],
+  "processing_details": [
+    {
+      "file": "HR-205-101E-P.pdf",
+      "status": "success",
+      "chunks": 13,
+      "method": "document_intelligence"
+    }
+  ],
+  "status": "completed",
+  "auto_purge_enabled": true,
+  "purge_results": {
+    "success": true,
+    "message": "Successfully purged 13 orphaned document chunks from 1 deleted files",
+    "documents_checked": 13,
+    "documents_deleted": 13,
+    "files_checked": 1,
+    "files_not_found": 1,
+    "errors": []
+  }
+}
