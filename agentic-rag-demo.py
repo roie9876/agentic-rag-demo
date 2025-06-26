@@ -45,6 +45,9 @@ from tools.aoai import AzureOpenAIClient
 # Import the test_retrieval module
 from test_retrieval import render_test_retrieval_tab
 
+# Import the Studio2Foundry module
+from studio2foundry_tab import render_studio2foundry_tab
+
 def _st_data_editor(*args, **kwargs):
     """
     Wrapper that tries st.data_editor (Streamlit ≥ 1.29) and falls back to
@@ -1338,14 +1341,15 @@ def run_streamlit_ui() -> None:
     # Initialize search client for index management
     _, root_index_client = init_search_client()
     
-    tab_health, tab_create, tab_manage, tab_sharepoint, tab_test, tab_cfg, tab_ai = st.tabs([
+    tab_health, tab_create, tab_manage, tab_sharepoint, tab_test, tab_cfg, tab_ai, tab_studio2foundry = st.tabs([
         "🩺 Health Check",
         "1️⃣ Create Index",
         "2️⃣ Manage Index",
         "📁 SharePoint Index",
         "3️⃣ Test Retrieval",
         "⚙️ Function Config",
-        "🤖 AI Foundry Agent"
+        "🤖 AI Foundry Agent",
+        "🏭 Studio2Foundry"
     ])
 
     # Health Check Tab
@@ -3187,6 +3191,10 @@ def run_streamlit_ui() -> None:
             else:
                 st.error("Failed to create agent via SDK:")
                 st.error(message)
+
+    # ── Studio2Foundry Tab ────────────────────────────────────────────────
+    with tab_studio2foundry:
+        render_studio2foundry_tab()
 
 
 ##############################################################################
