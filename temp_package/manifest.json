@@ -1,0 +1,32 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "id": "c94ebd7b-b329-4014-9312-bccb25b7d46e",
+  "version": "1.0.0",
+  "packageName": "com.contoso.funcproxy",
+  "developer": {
+    "name": "Contoso Corp",
+    "websiteUrl": "https://contoso.com",
+    "privacyUrl": "https://contoso.com/privacy",
+    "termsOfUseUrl": "https://contoso.com/terms"
+  },
+  "name": {
+    "short": "Func Proxy",
+    "full": "Func Proxy - Azure Function Integration"
+  },
+  "description": {
+    "short": "Simple pipe to an Azure Function",
+    "full": "An M365 Copilot plugin that proxies questions to Azure Functions for intelligent responses"
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#FFFFFF",
+  "composeExtensions": [
+    {
+      "botId": "c94ebd7b-b329-4014-9312-bccb25b7d46e",
+      "apiSpecificationFile": "plugin.json"
+    }
+  ]
+}

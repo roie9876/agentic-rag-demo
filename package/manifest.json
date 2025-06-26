@@ -1,0 +1,55 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "id": "ec3a1c99-b14b-4586-890f-a8a963fe5623",
+  "version": "1.0.0",
+  "packageName": "com.contoso.funcproxy",
+  "developer": {
+    "name": "Contoso Corp",
+    "websiteUrl": "https://contoso.com",
+    "privacyUrl": "https://contoso.com/privacy",
+    "termsOfUseUrl": "https://contoso.com/terms"
+  },
+  "name": {
+    "short": "roie-agentic-rag",
+    "full": "roie-agentic-rag - Azure Function Integration"
+  },
+  "description": {
+    "short": "roie-agentic-rag - Function-only responses",
+    "full": "An M365 Copilot plugin that EXCLUSIVELY routes ALL questions to Azure Functions. This agent NEVER answers from its own knowledge, internet, or built-in capabilities. Every user question triggers a function call. No direct responses are provided."
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#FFFFFF",
+  "composeExtensions": [
+    {
+      "botId": "ec3a1c99-b14b-4586-890f-a8a963fe5623",
+      "commands": [
+        {
+          "id": "searchQuery",
+          "type": "query",
+          "title": "Ask roie-agentic-rag",
+          "description": "Send questions to roie-agentic-rag",
+          "initialRun": false,
+          "fetchTask": false,
+          "parameters": [
+            {
+              "name": "searchQuery",
+              "title": "Question",
+              "description": "Your question"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "validDomains": [
+    "*.azurewebsites.net"
+  ],
+  "webApplicationInfo": {
+    "id": "ec3a1c99-b14b-4586-890f-a8a963fe5623",
+    "resource": "https://testfuncroie.azurewebsites.net"
+  }
+}

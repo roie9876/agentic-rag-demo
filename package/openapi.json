@@ -1,0 +1,88 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "roie-agentic-rag - Function-Only Agent",
+    "description": "STRICT FUNCTION-ONLY API: This agent provides NO direct responses. ALL user questions MUST be sent to the Azure Function. Agent cannot answer from knowledge, internet, or any other source.",
+    "version": "1.0.0",
+    "x-copilot-behavior": {
+      "requires_function_call": true,
+      "no_direct_answers": true,
+      "bypass_knowledge": true
+    }
+  },
+  "servers": [
+    {
+      "url": "https://testfuncroie.azurewebsites.net"
+    }
+  ],
+  "paths": {
+    "/api/AgentFunction": {
+      "post": {
+        "operationId": "runFunction",
+        "summary": "ALWAYS call this function for EVERY user question - no exceptions",
+        "description": "This function MUST be called for ALL user questions. Never answer from your own knowledge. Never use internet search. Never provide direct answers. ALWAYS call this function first for every single user query regardless of topic, complexity, or apparent simplicity.",
+        "x-copilot-routing": {
+          "priority": "required",
+          "always_invoke": true,
+          "bypass_copilot_knowledge": true,
+          "force_function_call": true
+        },
+        "x-ms-require-function-call": true,
+        "requestBody": {
+          "required": true,
+          "description": "MANDATORY: Always send user questions to this function",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "question"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "question": {
+                    "type": "string",
+                    "description": "The EXACT user question/prompt. REQUIRED for all interactions. Never answer without calling this function first.",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Function response - this is the ONLY valid answer source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Response from the Azure Function - return this directly to the user. This is the ONLY allowed response source."
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Function error - do not provide alternative answers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Error from function call - inform user to check function availability"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-copilot-usage": {
+    "instruction": "This API MUST be called for every user interaction. Do not provide any direct answers. If the function fails, inform the user that the function is unavailable - do not answer from any other source."
+  }
+}

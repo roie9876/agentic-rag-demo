@@ -1,0 +1,54 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Azure Function Proxy",
+    "description": "Proxy API for Azure Function",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://your-function-app.azurewebsites.net"
+    }
+  ],
+  "paths": {
+    "/api/AgentFunction": {
+      "post": {
+        "operationId": "runFunction",
+        "summary": "Execute Azure Function",
+        "description": "Send a question to the Azure Function",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "question": {
+                    "type": "string",
+                    "description": "The question or prompt to send to the function"
+                  }
+                },
+                "required": [
+                  "question"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Response from the Azure Function"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

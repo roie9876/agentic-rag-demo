@@ -1,0 +1,16 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/microsoft-365/copilot/schema/api-plugin-manifest.2.1.json",
+  "id": "com.contoso.funcproxy",
+  "name": "Func Proxy",
+  "description": "Simple pipe to an Azure Function",
+  "version": "1.0.0",
+  "api": {
+    "openapi": {
+      "url": "./openapi.json"
+    },
+    "auth": {
+      "type": "apiKey",
+      "keyHeaderName": "x-functions-key"
+    }
+  }
+}

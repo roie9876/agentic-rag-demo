@@ -1,0 +1,891 @@
+"""
+M365 Agent Tab for Agentic RAG Demo
+=================================
+This module provides functionality to create and deploy M365 agents that proxy questions
+to existing Azure Functions (HTTP trigger) via API plugins.
+
+Key Features:
+- Create M365 API Plugin manifest (plugin.json)
+- Generate OpenAPI specification (openapi.json)
+- Create Teams/M365 app manifest (manifest.json)
+- Generate upload script for Microsoft Graph
+- Package and zip all artifacts
+"""
+
+import json
+import os
+import uuid
+import zipfile
+import tempfile
+import logging
+from pathlib import Path
+from typing import List, Dict, Any, Tuple, Optional
+import streamlit             if st.button("📄 Generate PowerShell Script"):
+                with st.spinner("Generating PowerShell deployment script..."):
+                    script_content = '''# M365 Agent PowerShell Deployment
+# This script uses Teams PowerShell module since AppCatalog.Submit
+# is only available as a Delegated permission (requires user interaction)
+
+# Install Teams module if needed
+if (-not (Get-Module -ListAvailable -Name MicrosoftTeams)) {
+    Install-Module -Name MicrosoftTeams -Force -AllowClobber -Scope CurrentUser
+}
+
+# Import module
+Import-Module MicrosoftTeams
+
+# Connect to Teams (will open browser for interactive login)
+Connect-MicrosoftTeams
+
+# Upload the app package
+$AppResult = New-TeamsApp -Path "appPackage.zip"
+
+if ($AppResult) {
+    Write-Host "✅ App uploaded successfully!"
+    Write-Host "App ID: $($AppResult.Id)"
+    Write-Host "App Name: $($AppResult.DisplayName)"
+    
+    Write-Host "Next: Go to Teams Admin Center to publish the app"
+    Write-Host "URL: https://admin.teams.microsoft.com"
+} else {
+    Write-Host "❌ Upload failed"
+}
+
+# Disconnect
+Disconnect-MicrosoftTeams'''
+                    
+                    try:
+                        script_path = Path("deploy_m365_powershell.ps1")
+                        with open(script_path, "w") as f:
+                            f.write(script_content)
+                        st.success(f"✅ PowerShell script created: {script_path}")
+                        st.info("💡 Use this script on Windows with PowerShell or PowerShell Core on macOS/Linux")
+                    except Exception as e:
+                        st.error(f"❌ Failed to create PowerShell script: {e}")ort requests
+from datetime import datetime
+
+# Azure Function helper for getting available functions
+from azure_function_helper import list_function_apps, get_azure_subscription
+
+
+class M365AgentManager:
+    """Manages M365 Agent creation and deployment"""
+    
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        
+        # Constants for M365 Agent
+        self.PLUGIN_ID = "com.contoso.funcproxy"
+        self.APP_NAME = "Func Proxy"
+        self.APP_DESC = "Simple pipe to an Azure Function"
+        self.PACKAGE_VER = "1.0.0"
+        self.ICON_COLOR = "color.png"
+        self.ICON_OUTLINE = "outline.png"
+        self.FUNC_KEY_HDR = "x-functions-key"
+        
+    def get_available_functions(self, subscription_id: str) -> List[Dict[str, Any]]:
+        """Get list of available Azure Functions from the subscription"""
+        try:
+            func_choices, func_map = list_function_apps(subscription_id)
+            
+            functions = []
+            for choice in func_choices:
+                if choice in func_map:
+                    name, rg = func_map[choice]
+                    functions.append({
+                        "display_name": choice,
+                        "name": name,
+                        "resource_group": rg,
+                        "url": f"https://{name}.azurewebsites.net/api/AgentFunction"
+                    })
+            
+            return functions
+        except Exception as e:
+            self.logger.error(f"Failed to get available functions: {e}")
+            return []
+    
+    def create_openapi_json(self, func_url: str) -> Dict[str, Any]:
+        """Create OpenAPI specification for the Azure Function"""
+        return {
+            "openapi": "3.0.3",
+            "info": {
+                "title": "Azure Function Proxy",
+                "description": "Proxy API for Azure Function",
+                "version": "1.0.0"
+            },
+            "servers": [
+                {
+                    "url": func_url.replace("/api/AgentFunction", "")
+                }
+            ],
+            "paths": {
+                "/api/AgentFunction": {
+                    "post": {
+                        "operationId": "runFunction",
+                        "summary": "Execute Azure Function",
+                        "description": "Send a question to the Azure Function",
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "question": {
+                                                "type": "string",
+                                                "description": "The question or prompt to send to the function"
+                                            }
+                                        },
+                                        "required": ["question"]
+                                    }
+                                }
+                            }
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "Successful response",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "description": "Response from the Azure Function"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    
+    def create_plugin_json(self) -> Dict[str, Any]:
+        """Create API plugin manifest v2.2"""
+        return {
+            "$schema": "https://developer.microsoft.com/en-us/microsoft-365/copilot/schema/api-plugin-manifest.2.2.json",
+            "id": self.PLUGIN_ID,
+            "name": self.APP_NAME,
+            "description": self.APP_DESC,
+            "version": self.PACKAGE_VER,
+            "api": {
+                "openapi": {
+                    "url": "./openapi.json"
+                },
+                "auth": {
+                    "type": "apiKey",
+                    "keyHeaderName": self.FUNC_KEY_HDR
+                }
+            }
+        }
+    
+    def create_manifest_json(self) -> Dict[str, Any]:
+        """Create Teams/M365 app manifest v1.16"""
+        app_id = str(uuid.uuid4())
+        
+        return {
+            "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+            "manifestVersion": "1.16",
+            "id": app_id,
+            "version": self.PACKAGE_VER,
+            "packageName": "com.contoso.funcproxy",
+            "developer": {
+                "name": "Contoso Corp",
+                "websiteUrl": "https://contoso.com",
+                "privacyUrl": "https://contoso.com/privacy",
+                "termsOfUseUrl": "https://contoso.com/terms"
+            },
+            "name": {
+                "short": self.APP_NAME,
+                "full": f"{self.APP_NAME} - Azure Function Integration"
+            },
+            "description": {
+                "short": self.APP_DESC,
+                "full": "An M365 Copilot plugin that proxies questions to Azure Functions for intelligent responses"
+            },
+            "icons": {
+                "outline": self.ICON_OUTLINE,
+                "color": self.ICON_COLOR
+            },
+            "accentColor": "#FFFFFF",
+            "copilotAgents": {
+                "declarativeAgents": [
+                    {
+                        "id": self.PLUGIN_ID,
+                        "file": "plugin.json"
+                    }
+                ]
+            }
+        }
+    
+    def create_placeholder_icons(self, package_dir: Path) -> None:
+        """Create placeholder PNG icons if they don't exist"""
+        from PIL import Image, ImageDraw
+        
+        # Create outline icon (32x32)
+        outline_path = package_dir / self.ICON_OUTLINE
+        if not outline_path.exists():
+            outline_img = Image.new('RGBA', (32, 32), (255, 255, 255, 0))
+            draw = ImageDraw.Draw(outline_img)
+            draw.rectangle([4, 4, 28, 28], outline=(0, 0, 0, 255), width=2)
+            draw.text((8, 12), "AF", fill=(0, 0, 0, 255))
+            outline_img.save(outline_path)
+        
+        # Create color icon (192x192)
+        color_path = package_dir / self.ICON_COLOR
+        if not color_path.exists():
+            color_img = Image.new('RGBA', (192, 192), (0, 120, 212, 255))
+            draw = ImageDraw.Draw(color_img)
+            draw.rectangle([20, 20, 172, 172], fill=(255, 255, 255, 255))
+            draw.text((60, 90), "Azure\nFunction", fill=(0, 120, 212, 255), align="center")
+            color_img.save(color_path)
+    
+    def build_package(self, func_url: str, output_dir: Path = None) -> Tuple[bool, str, Optional[Path]]:
+        """
+        Build the M365 Agent package with all required artifacts
+        
+        Returns:
+            Tuple of (success: bool, message: str, zip_path: Optional[Path])
+        """
+        try:
+            if output_dir is None:
+                output_dir = Path.cwd()
+            
+            package_dir = output_dir / "package"
+            package_dir.mkdir(exist_ok=True)
+            
+            # Create openapi.json
+            openapi_content = self.create_openapi_json(func_url)
+            with open(package_dir / "openapi.json", "w") as f:
+                json.dump(openapi_content, f, indent=2)
+            
+            # Create plugin.json
+            plugin_content = self.create_plugin_json()
+            with open(package_dir / "plugin.json", "w") as f:
+                json.dump(plugin_content, f, indent=2)
+            
+            # Create manifest.json
+            manifest_content = self.create_manifest_json()
+            with open(package_dir / "manifest.json", "w") as f:
+                json.dump(manifest_content, f, indent=2)
+            
+            # Create placeholder icons
+            try:
+                self.create_placeholder_icons(package_dir)
+            except ImportError:
+                # If PIL is not available, create simple placeholder files
+                (package_dir / self.ICON_OUTLINE).touch()
+                (package_dir / self.ICON_COLOR).touch()
+                self.logger.warning("PIL not available, created empty icon files")
+            
+            # Create zip file
+            zip_path = output_dir / "appPackage.zip"
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for file_path in package_dir.iterdir():
+                    if file_path.is_file():
+                        zipf.write(file_path, file_path.name)
+            
+            return True, f"Package created successfully at {zip_path}", zip_path
+            
+        except Exception as e:
+            self.logger.error(f"Failed to build package: {e}")
+            return False, f"Failed to build package: {e}", None
+    
+    def generate_upload_script(self, output_dir: Path = None) -> Tuple[bool, str, Optional[Path]]:
+        """Generate upload_script.py for deploying to Microsoft Graph"""
+        if output_dir is None:
+            output_dir = Path.cwd()
+        
+        script_content = '''"""
+M365 Agent Upload Script
+=======================
+Upload the M365 Agent package to Microsoft Graph App Catalog
+"""
+
+import os
+import requests
+import json
+from pathlib import Path
+from typing import Optional, Dict, Any
+
+
+def get_access_token(tenant_id: str, client_id: str, client_secret: str) -> Optional[str]:
+    """Get access token using client credentials flow"""
+    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    
+    data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "scope": "https://graph.microsoft.com/.default",
+        "grant_type": "client_credentials"
+    }
+    
+    try:
+        response = requests.post(url, data=data)
+        response.raise_for_status()
+        return response.json().get("access_token")
+    except requests.RequestException as e:
+        print(f"Failed to get access token: {e}")
+        return None
+
+
+def upload_to_app_catalog(access_token: str, zip_path: Path) -> Dict[str, Any]:
+    """Upload the app package to Microsoft Graph App Catalog"""
+    url = "https://graph.microsoft.com/v1.0/appCatalogs/teamsApps"
+    
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/zip"
+    }
+    
+    try:
+        with open(zip_path, "rb") as f:
+            response = requests.post(url, headers=headers, data=f)
+        
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        print(f"Failed to upload app: {e}")
+        return {"error": str(e)}
+
+
+def main():
+    """Main upload function"""
+    # Read credentials from environment - using dedicated M365 variables
+    tenant_id = os.getenv("M365_TENANT_ID")
+    client_id = os.getenv("M365_CLIENT_ID")
+    client_secret = os.getenv("M365_CLIENT_SECRET")
+    
+    if not all([tenant_id, client_id, client_secret]):
+        print("Error: Missing required environment variables:")
+        print("- M365_TENANT_ID")
+        print("- M365_CLIENT_ID")
+        print("- M365_CLIENT_SECRET")
+        return
+    
+    # Check if app package exists
+    zip_path = Path("appPackage.zip")
+    if not zip_path.exists():
+        print(f"Error: {zip_path} not found. Run the M365 Agent tab to create the package first.")
+        return
+    
+    print("Getting access token...")
+    access_token = get_access_token(tenant_id, client_id, client_secret)
+    if not access_token:
+        print("Failed to get access token")
+        return
+    
+    print(f"Uploading {zip_path} to Microsoft Graph App Catalog...")
+    result = upload_to_app_catalog(access_token, zip_path)
+    
+    if "error" in result:
+        print(f"Upload failed: {result['error']}")
+    else:
+        print("✅ Upload successful!")
+        print(f"App ID: {result.get('id', 'Not provided')}")
+        print(f"Display Name: {result.get('displayName', 'Not provided')}")
+        print()
+        print("📝 Next Steps:")
+        print("1. Open Teams Admin Center (https://admin.teams.microsoft.com)")
+        print("2. Go to Teams apps → Manage apps")
+        print("3. Find your app and set Publishing State = 'Published'")
+        print("4. Configure permissions and policies as needed")
+        print("5. The app will be available in Microsoft 365 Copilot")
+
+
+if __name__ == "__main__":
+    main()
+'''
+        
+        try:
+            script_path = output_dir / "upload_script.py"
+            with open(script_path, "w") as f:
+                f.write(script_content)
+            
+            return True, f"Upload script created at {script_path}", script_path
+        except Exception as e:
+            self.logger.error(f"Failed to create upload script: {e}")
+            return False, f"Failed to create upload script: {e}", None
+    
+    def deploy_to_m365(self, package_path: Path) -> Tuple[bool, str]:
+        """
+        Deploy the M365 Agent package directly to Microsoft Graph App Catalog
+        
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        try:
+            # Get M365 credentials from environment
+            tenant_id = os.getenv("M365_TENANT_ID")
+            client_id = os.getenv("M365_CLIENT_ID")
+            client_secret = os.getenv("M365_CLIENT_SECRET")
+            
+            if not all([tenant_id, client_id, client_secret]):
+                return False, "M365 credentials not found in .env file. Please configure M365_TENANT_ID, M365_CLIENT_ID, and M365_CLIENT_SECRET."
+            
+            # Get access token
+            token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+            token_data = {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scope": "https://graph.microsoft.com/.default",
+                "grant_type": "client_credentials"
+            }
+            
+            token_response = requests.post(token_url, data=token_data)
+            
+            if token_response.status_code != 200:
+                return False, f"Failed to get access token: {token_response.status_code} - {token_response.text}"
+            
+            access_token = token_response.json().get("access_token")
+            if not access_token:
+                return False, "No access token received from Microsoft Graph"
+            
+            # Upload to Microsoft Graph App Catalog
+            upload_url = "https://graph.microsoft.com/v1.0/appCatalogs/teamsApps"
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/zip"
+            }
+            
+            with open(package_path, "rb") as f:
+                upload_response = requests.post(upload_url, headers=headers, data=f)
+            
+            if upload_response.status_code in [200, 201]:
+                result = upload_response.json()
+                app_id = result.get('id', 'Unknown')
+                app_name = result.get('displayName', 'Unknown')
+                return True, f"M365 Agent deployed successfully! App ID: {app_id}, Name: {app_name}"
+            else:
+                error_msg = upload_response.text
+                if upload_response.status_code == 409:
+                    return False, "App already exists in the catalog. Please update or delete the existing app first."
+                elif upload_response.status_code == 403:
+                    return False, "Access denied. Microsoft Graph API upload requires user interaction (AppCatalog.Submit is only available as Delegated permission). Please use the PowerShell deployment script or manual upload instead."
+                else:
+                    return False, f"Upload failed: {upload_response.status_code} - {error_msg}"
+                    
+        except requests.RequestException as e:
+            self.logger.error(f"Network error during M365 deployment: {e}")
+            return False, f"Network error: {e}"
+        except Exception as e:
+            self.logger.error(f"Failed to deploy to M365: {e}")
+            return False, f"Deployment failed: {e}"
+
+    # ...existing code...
+    
+class M365AgentUI:
+    """Streamlit UI for M365 Agent management"""
+    
+    def __init__(self):
+        self.manager = M365AgentManager()
+        
+    def render_m365_agent_tab(self):
+        """Render the main M365 Agent tab"""
+        st.header("🤖 M365 Agent Builder")
+        st.markdown("""
+        Create and deploy an M365 API Plugin that proxies questions to your existing Azure Functions.
+        This will create a Teams/M365 app package that can be deployed to your organization.
+        """)
+        
+        # Status Dashboard
+        st.markdown("### 📊 Deployment Status")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        # Check various statuses
+        m365_creds_ok = all([os.getenv("M365_TENANT_ID"), os.getenv("M365_CLIENT_ID"), os.getenv("M365_CLIENT_SECRET")])
+        package_ready = "m365_package_path" in st.session_state and st.session_state.m365_package_path.exists() if "m365_package_path" in st.session_state else False
+        func_key_ok = bool(os.getenv("AGENT_FUNC_KEY"))
+        
+        with col1:
+            if m365_creds_ok:
+                st.success("✅ M365 Credentials")
+            else:
+                st.error("❌ M365 Credentials")
+                
+        with col2:
+            if func_key_ok:
+                st.success("✅ Function Key")
+            else:
+                st.warning("⚠️ Function Key")
+                
+        with col3:
+            if package_ready:
+                st.success("✅ Package Built")
+            else:
+                st.info("⏳ Package Pending")
+                
+        with col4:
+            if package_ready and m365_creds_ok:
+                st.success("🚀 Ready to Deploy")
+            else:
+                st.info("🔄 Setup Required")
+        
+        st.markdown("---")
+        
+        # Step 1: Get Azure subscription and functions
+        st.subheader("📋 Step 1: Select Azure Function")
+        
+        # Get subscription ID
+        cli_sub = get_azure_subscription()
+        subscription_id = st.text_input(
+            "Azure Subscription ID", 
+            value=cli_sub,
+            help="Subscription where your Azure Functions are deployed"
+        )
+        
+        if not subscription_id:
+            st.info("Please enter your Azure subscription ID to continue.")
+            return
+        
+        # Get available functions
+        with st.spinner("Loading Azure Functions..."):
+            available_functions = self.manager.get_available_functions(subscription_id)
+        
+        if not available_functions:
+            st.warning("No Azure Functions found in this subscription. Make sure you have Function Apps deployed.")
+            st.info("💡 You can also enter a function URL manually below.")
+            
+            # Manual function URL input
+            manual_url = st.text_input(
+                "Function URL (Manual)",
+                placeholder="https://your-function-app.azurewebsites.net/api/AgentFunction",
+                help="Direct URL to your Azure Function HTTP trigger"
+            )
+            
+            if manual_url:
+                selected_function_url = manual_url
+                selected_function_name = manual_url.split("//")[1].split(".")[0] if "//" in manual_url else "manual-function"
+            else:
+                st.stop()
+        else:
+            # Function selection dropdown
+            function_options = [f"{func['display_name']}" for func in available_functions]
+            selected_idx = st.selectbox(
+                "Select Azure Function",
+                range(len(function_options)),
+                format_func=lambda i: function_options[i],
+                help="Choose the Azure Function that M365 will send questions to"
+            )
+            
+            selected_function = available_functions[selected_idx]
+            selected_function_url = selected_function["url"]
+            selected_function_name = selected_function["name"]
+        
+        st.success(f"✅ Selected Function: **{selected_function_name}**")
+        st.code(f"Function URL: {selected_function_url}")
+        
+        # Step 2: Function Key Configuration
+        st.subheader("🔑 Step 2: Function Authentication")
+        
+        function_key = st.text_input(
+            "Function Key",
+            value=os.getenv("AGENT_FUNC_KEY", ""),
+            type="password",
+            help="The function key for authenticating with your Azure Function"
+        )
+        
+        if not function_key:
+            st.info("💡 Function key is required for secure authentication with Azure Functions.")
+            st.markdown("""
+            **Where to find your Function Key:**
+            1. Go to Azure Portal → Your Function App
+            2. Navigate to Functions → Your Function → Function Keys
+            3. Copy the default function key or create a new one
+            4. Or use the host key from Function App → App keys → Host keys
+            """)
+        
+        # Step 3: Package Configuration
+        st.subheader("⚙️ Step 3: Package Configuration")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            app_name = st.text_input("App Name", value="M365 Agent", help="Display name for your M365 app")
+            plugin_id = st.text_input("Plugin ID", value="com.contoso.funcproxy", help="Unique identifier for the plugin")
+        
+        with col2:
+            app_description = st.text_input("App Description", value="Azure Function Integration", help="Description of what your app does")
+            package_version = st.text_input("Package Version", value="1.0.0", help="Version number for your app package")
+        
+        # Update manager constants if user modified them
+        if app_name != self.manager.APP_NAME:
+            self.manager.APP_NAME = app_name
+        if plugin_id != self.manager.PLUGIN_ID:
+            self.manager.PLUGIN_ID = plugin_id
+        if app_description != self.manager.APP_DESC:
+            self.manager.APP_DESC = app_description
+        if package_version != self.manager.PACKAGE_VER:
+            self.manager.PACKAGE_VER = package_version
+        
+        # Step 4: Build Package
+        st.subheader("🏗️ Step 4: Build Package")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("📦 Build M365 Package", type="primary", disabled=not function_key):
+                with st.spinner("Building M365 Agent package..."):
+                    success, message, zip_path = self.manager.build_package(selected_function_url)
+                    
+                    if success:
+                        st.success(f"✅ {message}")
+                        
+                        # Show package contents
+                        with st.expander("📁 Package Contents"):
+                            package_files = [
+                                "manifest.json - Teams/M365 app manifest",
+                                "plugin.json - API plugin manifest", 
+                                "openapi.json - OpenAPI specification",
+                                "color.png - App icon (192x192)",
+                                "outline.png - App outline icon (32x32)"
+                            ]
+                            for file in package_files:
+                                st.text(f"✓ {file}")
+                        
+                        # Store package path in session state
+                        st.session_state.m365_package_path = zip_path
+                    else:
+                        st.error(f"❌ {message}")
+        
+        with col2:
+            if st.button("� Deploy to M365", type="secondary", disabled=not function_key):
+                with st.spinner("Deploying M365 Agent package..."):
+                    # First build the package if not already built
+                    if "m365_package_path" not in st.session_state:
+                        success, message, zip_path = self.manager.build_package(selected_function_url)
+                        if success:
+                            st.session_state.m365_package_path = zip_path
+                        else:
+                            st.error(f"❌ Failed to build package: {message}")
+                            st.stop()
+                    
+                    # Deploy the package
+                    deploy_success, deploy_message = self.manager.deploy_to_m365(st.session_state.m365_package_path)
+                    
+                    if deploy_success:
+                        st.success(f"✅ {deploy_message}")
+                        st.balloons()
+                        
+                        st.info("""
+                        🎉 **Deployment Successful!**
+                        
+                        **Next Steps:**
+                        1. Open Teams Admin Center: https://admin.teams.microsoft.com
+                        2. Go to Teams apps → Manage apps
+                        3. Find your app and set Publishing State = 'Published'
+                        4. The app will be available in Microsoft 365 Copilot
+                        """)
+                    else:
+                        st.error(f"❌ {deploy_message}")
+            
+            if st.button("�📄 Generate Upload Script"):
+                with st.spinner("Generating upload script..."):
+                    success, message, script_path = self.manager.generate_upload_script()
+                    
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.info("💡 Use this script for manual deployment or CI/CD pipelines")
+                    else:
+                        st.error(f"❌ {message}")
+        
+        # Step 5: Deployment Instructions
+        st.subheader("🚀 Step 5: Deployment")
+        
+        # Check M365 credentials status
+        m365_tenant_id = os.getenv("M365_TENANT_ID", "")
+        m365_client_id = os.getenv("M365_CLIENT_ID", "")
+        m365_client_secret = os.getenv("M365_CLIENT_SECRET", "")
+        
+        if all([m365_tenant_id, m365_client_id, m365_client_secret]):
+            st.success("✅ M365 credentials are configured - automated deployment available!")
+            
+            # Show quick deploy button if package is ready
+            if "m365_package_path" in st.session_state:
+                st.markdown("### 🎯 One-Click Deployment")
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    if st.button("🚀 Deploy Now to M365", type="primary", use_container_width=True):
+                        with st.spinner("🔄 Deploying to Microsoft 365..."):
+                            deploy_success, deploy_message = self.manager.deploy_to_m365(st.session_state.m365_package_path)
+                            
+                            if deploy_success:
+                                st.success(f"✅ {deploy_message}")
+                                st.balloons()
+                                
+                                st.markdown("""
+                                ### 🎉 Deployment Complete!
+                                
+                                **What happens next:**
+                                1. Your M365 Agent is now in the Teams App Catalog
+                                2. Go to Teams Admin Center to publish it: https://admin.teams.microsoft.com
+                                3. Navigate to: Teams apps → Manage apps → Find your app
+                                4. Set Publishing State = 'Published'
+                                5. Your agent will be available in Microsoft 365 Copilot!
+                                
+                                **Users can now ask questions in M365 Copilot and get answers from your Azure Function! 🎯**
+                                """)
+                            else:
+                                st.error(f"❌ {deploy_message}")
+                                
+                                # Show troubleshooting tips
+                                with st.expander("🔧 Troubleshooting Tips"):
+                                    st.markdown("""
+                                    **Common Issues:**
+                                    
+                                    1. **Access Denied (403) - Most Common Issue**: 
+                                       - ⚠️ **Check Permission Type**: You need **Application** permissions, NOT Delegated permissions
+                                       - Required: Microsoft Graph → **Application permissions** → AppCatalog.Submit
+                                       - Optional: Microsoft Graph → **Application permissions** → AppCatalog.ReadWrite.All
+                                       - ❌ **Remove any Delegated permissions** for AppCatalog
+                                       - ✅ **Grant admin consent** after adding Application permissions
+                                    
+                                    2. **App Already Exists (409)**:
+                                       - The app is already in the catalog
+                                       - Update the Plugin ID to make it unique
+                                       - Or delete the existing app first
+                                    
+                                    3. **Invalid Credentials**:
+                                       - Verify M365_TENANT_ID, M365_CLIENT_ID, M365_CLIENT_SECRET in .env
+                                       - Check that the app registration exists and is active
+                                       - Ensure client secret hasn't expired
+                                    
+                                    4. **Permission Type Issue**:
+                                       - Client credentials flow requires **Application** permissions
+                                       - **Delegated** permissions only work with user interaction
+                                       - Remove delegated permissions and add application permissions instead
+                                    """)
+                st.markdown("---")
+        else:
+            st.warning("⚠️ M365 credentials not found in .env file")
+            
+            with st.expander("🔧 Configure M365 Credentials for Automated Deployment", expanded=True):
+                st.markdown("""
+                **Add these variables to your .env file:**
+                ```bash
+                M365_TENANT_ID=your-m365-tenant-id
+                M365_CLIENT_ID=your-m365-app-client-id
+                M365_CLIENT_SECRET=your-m365-app-client-secret
+                ```
+                
+                **How to get these values:**
+                1. Go to Azure Portal → Azure Active Directory → App registrations
+                2. Create a new app registration for M365 Agent
+                3. Add required API permissions (**IMPORTANT: Use Application permissions, NOT Delegated**)
+                   - Microsoft Graph → **Application permissions** → AppCatalog.Submit
+                   - Microsoft Graph → **Application permissions** → AppCatalog.ReadWrite.All (optional)
+                4. Grant admin consent for the permissions
+                5. Create a client secret
+                6. Copy the Tenant ID, Client ID, and Client Secret to your .env file
+                """)
+        
+        if "m365_package_path" in st.session_state:
+            st.success("Package is ready for deployment!")
+            
+            with st.expander("📖 Deployment Instructions", expanded=True):
+                st.markdown("""
+                ### Prerequisites: M365 App Registration
+                
+                Before deployment, you need to create a dedicated Azure AD app registration for M365 Agent:
+                
+                1. **Go to Azure Portal** → Azure Active Directory → App registrations
+                2. **Create New Registration:**
+                   - Name: "M365 Agent - [Your Organization]"
+                   - Supported account types: Single tenant
+                3. **Add API Permissions:**
+                   - Microsoft Graph → **Application permissions** → AppCatalog.Submit
+                   - Microsoft Graph → **Application permissions** → AppCatalog.ReadWrite.All (if available)
+                   - ⚠️ **IMPORTANT**: Use "Application permissions", NOT "Delegated permissions"
+                4. **Grant admin consent** for the permissions
+                5. **Create Client Secret** → Save the values to your .env file
+                
+                ### Option 1: Automated Upload (Recommended)
+                
+                1. **Set Environment Variables:**
+                ```bash
+                export M365_TENANT_ID="your-m365-tenant-id"
+                export M365_CLIENT_ID="your-m365-client-id" 
+                export M365_CLIENT_SECRET="your-m365-client-secret"
+                ```
+                
+                2. **Run Upload Script:**
+                ```bash
+                python upload_script.py
+                ```
+                
+                ### Option 2: Manual Upload
+                
+                1. **Download the package:** `appPackage.zip`
+                2. **Go to Teams Admin Center:** https://admin.teams.microsoft.com
+                3. **Navigate to:** Teams apps → Manage apps → Upload
+                4. **Upload:** Select `appPackage.zip`
+                5. **Publish:** Set Publishing State to "Published"
+                6. **Configure:** Set up permissions and policies as needed
+                
+                ### After Deployment
+                
+                - The M365 Agent will be available in Microsoft 365 Copilot
+                - Users can ask questions and they'll be proxied to your Azure Function
+                - Monitor usage in the Teams Admin Center
+                """)
+            
+            # Download link for the package
+            if st.session_state.m365_package_path.exists():
+                with open(st.session_state.m365_package_path, "rb") as f:
+                    st.download_button(
+                        label="📥 Download M365 Package",
+                        data=f.read(),
+                        file_name="appPackage.zip",
+                        mime="application/zip"
+                    )
+        else:
+            st.info("Build the package first to see deployment instructions.")
+        
+        # Step 6: Testing and Validation
+        st.subheader("🧪 Step 6: Testing")
+        
+        if function_key and selected_function_url:
+            test_prompt = st.text_input(
+                "Test Prompt",
+                placeholder="Enter a test question for your function...",
+                help="Test your Azure Function before deploying to M365"
+            )
+            
+            if st.button("🧪 Test Function") and test_prompt:
+                with st.spinner("Testing Azure Function..."):
+                    try:
+                        headers = {
+                            "Content-Type": "application/json",
+                            "x-functions-key": function_key
+                        }
+                        
+                        payload = {"question": test_prompt}
+                        
+                        response = requests.post(
+                            selected_function_url,
+                            json=payload,
+                            headers=headers,
+                            timeout=30
+                        )
+                        
+                        if response.status_code == 200:
+                            st.success("✅ Function test successful!")
+                            with st.expander("📄 Response"):
+                                st.json(response.json())
+                        else:
+                            st.error(f"❌ Function test failed: {response.status_code}")
+                            st.code(response.text)
+                            
+                    except requests.RequestException as e:
+                        st.error(f"❌ Connection error: {e}")
+                    except Exception as e:
+                        st.error(f"❌ Test failed: {e}")
+
+
+def render_m365_agent_tab():
+    """Entry point for rendering the M365 Agent tab"""
+    ui = M365AgentUI()
+    ui.render_m365_agent_tab()
+
+
+if __name__ == "__main__":
+    # For testing the module standalone
+    render_m365_agent_tab()

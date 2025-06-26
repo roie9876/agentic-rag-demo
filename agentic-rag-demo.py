@@ -35,6 +35,9 @@ from sharepoint_scheduler import SharePointScheduler
 from sharepoint_index_manager import SharePointIndexManager
 from sharepoint_reports import SharePointReports
 
+# Import M365 Agent Tab
+from m365_agent_tab import render_m365_agent_tab
+
 # ---------------------------------------------------------------------------
 # Streamlit Data‑Editor helper (works on both old & new versions)
 # ---------------------------------------------------------------------------
@@ -873,12 +876,27 @@ def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bo
         openai_api_key = os.getenv("AZURE_OPENAI_KEY_41") or os.getenv("AZURE_OPENAI_KEY") or ""
 
         # ----------- Vectorizer עם api_key -----------
-        vec_params = AzureOpenAIVectorizerParameters(
-            resource_url    = azure_openai_endpoint,
-            deployment_name = embedding_deployment,
-            model_name      = embedding_model,
-            api_key         = openai_api_key,
-        )
+        # Check if we're in a private endpoint scenario
+        use_managed_identity = not openai_api_key or os.getenv("USE_MANAGED_IDENTITY", "false").lower() == "true"
+        
+        if use_managed_identity:
+            # Use managed identity for private endpoints (no API key needed)
+            vec_params = AzureOpenAIVectorizerParameters(
+                resource_url    = azure_openai_endpoint,
+                deployment_name = embedding_deployment,
+                model_name      = embedding_model,
+                # Omit api_key to use managed identity
+            )
+            st.info("🔐 Using Managed Identity for Azure OpenAI access (private endpoint compatible)")
+        else:
+            # Use API key for public endpoints
+            vec_params = AzureOpenAIVectorizerParameters(
+                resource_url    = azure_openai_endpoint,
+                deployment_name = embedding_deployment,
+                model_name      = embedding_model,
+                api_key         = openai_api_key,
+            )
+            st.info("🔑 Using API Key for Azure OpenAI access")
 
         index_schema = SearchIndex(
             name   = name,
@@ -1338,14 +1356,15 @@ def run_streamlit_ui() -> None:
     # Initialize search client for index management
     _, root_index_client = init_search_client()
     
-    tab_health, tab_create, tab_manage, tab_sharepoint, tab_test, tab_cfg, tab_ai = st.tabs([
+    tab_health, tab_create, tab_manage, tab_sharepoint, tab_test, tab_cfg, tab_ai, tab_m365 = st.tabs([
         "🩺 Health Check",
         "1️⃣ Create Index",
         "2️⃣ Manage Index",
         "📁 SharePoint Index",
         "3️⃣ Test Retrieval",
         "⚙️ Function Config",
-        "🤖 AI Foundry Agent"
+        "🤖 AI Foundry Agent",
+        "🏢 M365 Agent"
     ])
 
     # Health Check Tab
@@ -1533,29 +1552,59 @@ def run_streamlit_ui() -> None:
                         deployment_env = deployment_map.get(new_model, "AZURE_OPENAI_DEPLOYMENT_41")
                         deployment_name = os.getenv(deployment_env, "gpt-4.1")
                         
+                        # Check if we need to use managed identity for private endpoints
+                        use_managed_identity = not openai_api_key or os.getenv("USE_MANAGED_IDENTITY", "false").lower() == "true"
+                        
                         # Create/update the agent
-                        agent = KnowledgeAgent(
-                            name = agent_name,
-                            models = [
-                                KnowledgeAgentAzureOpenAIModel(
-                                    azure_open_ai_parameters = AzureOpenAIVectorizerParameters(
-                                        resource_url    = azure_openai_endpoint,
-                                        deployment_name = deployment_name,
-                                        model_name      = new_model,
-                                        api_key         = openai_api_key,
+                        if use_managed_identity:
+                            # For private endpoints - use managed identity (no API key)
+                            agent = KnowledgeAgent(
+                                name = agent_name,
+                                models = [
+                                    KnowledgeAgentAzureOpenAIModel(
+                                        azure_open_ai_parameters = AzureOpenAIVectorizerParameters(
+                                            resource_url    = azure_openai_endpoint,
+                                            deployment_name = deployment_name,
+                                            model_name      = new_model,
+                                            # Omit api_key for managed identity
+                                        )
                                     )
+                                ],
+                                target_indexes = [
+                                    KnowledgeAgentTargetIndex(
+                                        index_name=st.session_state.selected_index, 
+                                        default_reranker_threshold=new_reranker_threshold
+                                    )
+                                ],
+                                request_limits = KnowledgeAgentRequestLimits(
+                                    max_output_size = int(new_max_output_size)
                                 )
-                            ],
-                            target_indexes = [
-                                KnowledgeAgentTargetIndex(
-                                    index_name=st.session_state.selected_index, 
-                                    default_reranker_threshold=new_reranker_threshold
+                            )
+                            st.info("🔐 Agent configured for Managed Identity (private endpoint compatible)")
+                        else:
+                            # For public endpoints - use API key
+                            agent = KnowledgeAgent(
+                                name = agent_name,
+                                models = [
+                                    KnowledgeAgentAzureOpenAIModel(
+                                        azure_open_ai_parameters = AzureOpenAIVectorizerParameters(
+                                            resource_url    = azure_openai_endpoint,
+                                            deployment_name = deployment_name,
+                                            model_name      = new_model,
+                                            api_key         = openai_api_key,
+                                        )
+                                    )
+                                ],
+                                target_indexes = [
+                                    KnowledgeAgentTargetIndex(
+                                        index_name=st.session_state.selected_index, 
+                                        default_reranker_threshold=new_reranker_threshold
+                                    )
+                                ],
+                                request_limits = KnowledgeAgentRequestLimits(
+                                    max_output_size = int(new_max_output_size)
                                 )
-                            ],
-                            request_limits = KnowledgeAgentRequestLimits(
-                                max_output_size = int(new_max_output_size)
-                            ),
-                        )
+                            )
                         
                         root_index_client.create_or_update_agent(agent)
                         
@@ -1743,21 +1792,6 @@ def run_streamlit_ui() -> None:
                                     
                         except Exception as docerr:
                             error_message = str(docerr)
-                            logging.error("DocumentChunker failed for %s: %s", pf.name, docerr)
-                            
-                            # Try fallback for PDFs only
-                            if ext == ".pdf":
-                                try:
-                                    docs = pdf_to_documents(pf, oai_client, embed_deploy)
-                                    error_message = None  # Clear error if fallback succeeded
-                                    logging.info("Fallback to simple PDF processing for %s", pf.name)
-                                except Exception as pdf_err:
-                                    logging.error("PDF fallback also failed for %s: %s", pf.name, pdf_err)
-                                    error_message = f"PDF processing failed: {str(docerr)[:200]}... (Fallback also failed: {str(pdf_err)[:100]}...)"
-                            else:
-                                # For non-PDF files, keep the original error
-                                error_message = f"Failed to process {ext} file: {str(docerr)[:300]}..."
-                        
                         # Handle errors - show in UI and track for summary
                         if error_message or not docs:
                             # Enhanced error message based on common issues
@@ -3187,6 +3221,11 @@ def run_streamlit_ui() -> None:
             else:
                 st.error("Failed to create agent via SDK:")
                 st.error(message)
+
+    # ─────────────────── Tab 8 – M365 Agent ──────────────────────────────
+    with tab_m365:
+        health_block()
+        render_m365_agent_tab()
 
 
 ##############################################################################

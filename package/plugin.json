@@ -1,0 +1,16 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/microsoft-365/copilot/schema/api-plugin-manifest.2.2.json",
+  "id": "com.contoso.funcproxy",
+  "name": "roie-agentic-rag",
+  "description": "roie-agentic-rag. THIS AGENT NEVER ANSWERS DIRECTLY. Every single user question MUST be sent to the Azure Function. Do not use your own knowledge, internet search, or any other data source. ONLY call the Azure Function.",
+  "version": "1.0.0",
+  "api": {
+    "openapi": {
+      "url": "./openapi.json"
+    },
+    "auth": {
+      "type": "apiKey",
+      "keyHeaderName": "x-functions-key"
+    }
+  }
+}
