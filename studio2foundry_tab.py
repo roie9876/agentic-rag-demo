@@ -3,6 +3,7 @@ import os
 import subprocess
 import tempfile
 import zipfile
+import urllib.parse
 from pathlib import Path
 from typing import Tuple
 
@@ -76,41 +77,81 @@ def create_custom_roles(subscription_id: str) -> Tuple[bool, str]:
         import json
         import tempfile
         
-        # Define the custom roles
-        agentic_role = {
-            "Name": "agentic",
-            "Description": "Custom role for reading Azure AI Services agents",
-            "Actions": [],
-            "NotActions": [],
-            "DataActions": [
-                "Microsoft.CognitiveServices/accounts/AIServices/agents/read"
-            ],
-            "NotDataActions": [],
-            "AssignableScopes": [f"/subscriptions/{subscription_id}"]
-        }
-        
-        agentic_write_role = {
-            "Name": "agentic-write", 
-            "Description": "Custom role for writing Azure AI Services agents",
-            "Actions": [],
-            "NotActions": [],
-            "DataActions": [
-                "Microsoft.CognitiveServices/accounts/AIServices/agents/write"
-            ],
-            "NotDataActions": [],
-            "AssignableScopes": [f"/subscriptions/{subscription_id}"]
-        }
-        
         results = []
         
-        # Create both roles
-        for role_name, role_def in [("agentic", agentic_role), ("agentic-write", agentic_write_role)]:
+        # First, check if roles already exist and delete them if they have GUID names
+        try:
+            list_cmd = [
+                "az", "role", "definition", "list",
+                "--subscription", subscription_id,
+                "--custom-role-only", "true",
+                "--query", "[?contains(description, 'agentic') || contains(description, 'AI Services agents')].{name:roleName, displayName:displayName}",
+                "--output", "json"
+            ]
+            list_result = subprocess.run(list_cmd, capture_output=True, text=True, timeout=30)
+            if list_result.returncode == 0:
+                existing_roles = json.loads(list_result.stdout)
+                for role in existing_roles:
+                    # Delete roles with GUID names or old names
+                    role_name = role.get('name', '')
+                    if (len(role_name) == 36 and '-' in role_name) or role_name in ['agentic', 'agentic-write']:
+                        delete_cmd = [
+                            "az", "role", "definition", "delete",
+                            "--name", role_name,
+                            "--subscription", subscription_id
+                        ]
+                        subprocess.run(delete_cmd, capture_output=True, text=True, timeout=30)
+                        results.append(f"🗑️ Deleted old role: {role_name}")
+        except:
+            pass  # Continue if listing fails
+        
+        # Define the custom roles with explicit readable names
+        role_definitions = [
+            {
+                "name": "azure-index-agentic-read",
+                "definition": {
+                    "Name": "azure-index-agentic-read",
+                    "Description": "Custom role for reading Azure AI Services agents and search index",
+                    "Actions": [],
+                    "NotActions": [],
+                    "DataActions": [
+                        "Microsoft.CognitiveServices/accounts/AIServices/agents/read",
+                        "Microsoft.Search/searchServices/indexes/documents/read"
+                    ],
+                    "NotDataActions": [],
+                    "AssignableScopes": [f"/subscriptions/{subscription_id}"]
+                }
+            },
+            {
+                "name": "azure-index-agentic-readwrite",
+                "definition": {
+                    "Name": "azure-index-agentic-readwrite", 
+                    "Description": "Custom role for full access to Azure AI Services agents and search index",
+                    "Actions": [],
+                    "NotActions": [],
+                    "DataActions": [
+                        "Microsoft.CognitiveServices/accounts/AIServices/agents/read",
+                        "Microsoft.CognitiveServices/accounts/AIServices/agents/write",
+                        "Microsoft.Search/searchServices/indexes/documents/read",
+                        "Microsoft.Search/searchServices/indexes/documents/write"
+                    ],
+                    "NotDataActions": [],
+                    "AssignableScopes": [f"/subscriptions/{subscription_id}"]
+                }
+            }
+        ]
+        
+        # Create both roles with explicit naming
+        for role_info in role_definitions:
+            role_name = role_info["name"]
+            role_def = role_info["definition"]
+            
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
                 json.dump(role_def, f, indent=2)
                 role_file = f.name
             
             try:
-                # Create the role
+                # First try to create the role
                 cmd = [
                     "az", "role", "definition", "create",
                     "--role-definition", role_file,
@@ -118,11 +159,42 @@ def create_custom_roles(subscription_id: str) -> Tuple[bool, str]:
                 ]
                 
                 result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
-                results.append(f"✅ Created role: {role_name}")
+                
+                # Verify the role was created with the correct name
+                verify_cmd = [
+                    "az", "role", "definition", "show",
+                    "--name", role_name,
+                    "--subscription", subscription_id,
+                    "--query", "roleName",
+                    "--output", "tsv"
+                ]
+                verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, timeout=30)
+                
+                if verify_result.returncode == 0:
+                    actual_name = verify_result.stdout.strip()
+                    if actual_name == role_name:
+                        results.append(f"✅ Created role: {role_name}")
+                    else:
+                        results.append(f"⚠️ Role created but with name: {actual_name} (expected: {role_name})")
+                else:
+                    results.append(f"✅ Created role: {role_name} (verification failed)")
                 
             except subprocess.CalledProcessError as e:
-                if "already exists" in e.stderr.lower():
-                    results.append(f"ℹ️ Role already exists: {role_name}")
+                if "already exists" in e.stderr.lower() or "conflictingrole" in e.stderr.lower():
+                    # Try to update the existing role
+                    try:
+                        update_cmd = [
+                            "az", "role", "definition", "update",
+                            "--role-definition", role_file,
+                            "--subscription", subscription_id
+                        ]
+                        update_result = subprocess.run(update_cmd, capture_output=True, text=True, timeout=60)
+                        if update_result.returncode == 0:
+                            results.append(f"✅ Updated existing role: {role_name}")
+                        else:
+                            results.append(f"ℹ️ Role already exists: {role_name}")
+                    except:
+                        results.append(f"ℹ️ Role already exists: {role_name}")
                 else:
                     results.append(f"❌ Failed to create {role_name}: {e.stderr}")
             finally:
@@ -168,7 +240,7 @@ def assign_roles_to_function_app(
             return False, "❌ Function App does not have System-assigned Managed Identity enabled"
         
         # Assign both custom roles to the resource group
-        roles = ["agentic", "agentic-write"]
+        roles = ["azure-index-agentic-read", "azure-index-agentic-readwrite"]
         scope = f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
         
         for role_name in roles:
@@ -194,6 +266,73 @@ def assign_roles_to_function_app(
         return False, f"❌ Error getting Function App identity: {e.stderr}"
     except Exception as e:
         return False, f"❌ Error assigning roles: {e}"
+
+
+def enable_managed_identity(
+    subscription_id: str,
+    resource_group: str,
+    function_app_name: str
+) -> Tuple[bool, str]:
+    """
+    Enable System-assigned Managed Identity for the Function App.
+    
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    try:
+        cmd = [
+            "az", "functionapp", "identity", "assign",
+            "--name", function_app_name,
+            "--resource-group", resource_group,
+            "--subscription", subscription_id
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
+        return True, "✅ System-assigned Managed Identity enabled successfully!"
+        
+    except subprocess.CalledProcessError as e:
+        if "already exists" in e.stderr.lower() or "already assigned" in e.stderr.lower():
+            return True, "ℹ️ System-assigned Managed Identity is already enabled"
+        else:
+            return False, f"❌ Failed to enable Managed Identity: {e.stderr}"
+    except Exception as e:
+        return False, f"❌ Error enabling Managed Identity: {e}"
+
+
+def get_resource_groups(subscription_id: str) -> Tuple[list, dict]:
+    """
+    Get list of resource groups in the subscription.
+    
+    Returns:
+        Tuple of (choices_list, name_to_info_map)
+    """
+    try:
+        import json
+        
+        cmd = [
+            "az", "group", "list",
+            "--subscription", subscription_id,
+            "--query", "[].{name:name, location:location}",
+            "--output", "json"
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+        groups = json.loads(result.stdout)
+        
+        choices = []
+        group_map = {}
+        
+        for group in groups:
+            name = group["name"]
+            location = group["location"]
+            display_name = f"{name} ({location})"
+            choices.append(display_name)
+            group_map[display_name] = name
+        
+        return choices, group_map
+        
+    except Exception as e:
+        return [], {}
 
 
 def set_function_app_setting_safely(
@@ -258,10 +397,97 @@ def set_function_app_setting_safely(
         return False, f"❌ Error setting {setting_name}: {e}", 0
 
 
+def cleanup_old_custom_roles(subscription_id: str) -> Tuple[bool, str]:
+    """
+    Clean up old custom roles that have GUID names or old naming.
+    
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    try:
+        import json
+        
+        # List all custom roles in the subscription
+        list_cmd = [
+            "az", "role", "definition", "list",
+            "--subscription", subscription_id,
+            "--custom-role-only", "true",
+            "--query", "[].{name:roleName, displayName:displayName, description:description}",
+            "--output", "json"
+        ]
+        
+        result = subprocess.run(list_cmd, capture_output=True, text=True, check=True, timeout=30)
+        roles = json.loads(result.stdout)
+        
+        deleted_roles = []
+        
+        for role in roles:
+            role_name = role.get('name', '')
+            description = role.get('description', '').lower()
+            
+            # Delete if:
+            # 1. Role name is a GUID (36 chars with dashes)
+            # 2. Role name is old naming (agentic, agentic-write)
+            # 3. Description contains "agentic" or "AI Services agents"
+            should_delete = False
+            
+            if len(role_name) == 36 and role_name.count('-') == 4:
+                should_delete = True  # GUID format
+            elif role_name in ['agentic', 'agentic-write']:
+                should_delete = True  # Old names
+            elif 'agentic' in description or 'ai services agents' in description:
+                # Only delete if it's not already the correct name
+                if role_name not in ['azure-index-agentic-read', 'azure-index-agentic-readwrite']:
+                    should_delete = True
+            
+            if should_delete:
+                try:
+                    delete_cmd = [
+                        "az", "role", "definition", "delete",
+                        "--name", role_name,
+                        "--subscription", subscription_id
+                    ]
+                    
+                    delete_result = subprocess.run(delete_cmd, capture_output=True, text=True, check=True, timeout=30)
+                    deleted_roles.append(f"🗑️ Deleted: {role_name}")
+                    
+                except subprocess.CalledProcessError as e:
+                    deleted_roles.append(f"⚠️ Failed to delete {role_name}: {e.stderr}")
+        
+        if deleted_roles:
+            return True, "\n".join(deleted_roles)
+        else:
+            return True, "ℹ️ No old roles found to cleanup"
+        
+    except Exception as e:
+        return False, f"❌ Error cleaning up roles: {e}"
+
+
 def render_studio2foundry_tab():
     """Render the Studio2Foundry tab UI - simplified version like Function Config"""
     st.header("🏭 Studio2Foundry Function Deployment")
     st.markdown("Deploy your local Studio2Foundry code to Azure Function Apps")
+    
+    # Debug section (can be removed in production)
+    with st.expander("🔧 Debug & Reset", expanded=False):
+        st.write("**Current Session State:**")
+        studio_keys = [k for k in st.session_state.keys() if k.startswith('studio2foundry_')]
+        for key in studio_keys:
+            st.write(f"- `{key}`: {st.session_state[key]}")
+        
+        if st.button("🔄 Reset All Selections", help="Clear all Studio2Foundry dropdown selections"):
+            for key in studio_keys:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
+    
+    # Initialize session state for persistent selections with unique keys
+    if 'studio2foundry_selected_function_app' not in st.session_state:
+        st.session_state.studio2foundry_selected_function_app = "-- Select Function App --"
+    if 'studio2foundry_selected_resource_group' not in st.session_state:
+        st.session_state.studio2foundry_selected_resource_group = "-- Select Resource Group --"
+    if 'studio2foundry_subscription_id' not in st.session_state:
+        st.session_state.studio2foundry_subscription_id = get_azure_subscription()
     
     # Important notice about Managed Identity
     st.error("""
@@ -300,17 +526,37 @@ def render_studio2foundry_tab():
     # Azure Function App Selection (same as Function Config tab)
     st.subheader("🎯 Select Target Function App")
     
-    # Get Azure subscription
-    cli_sub = get_azure_subscription()
-    sub_id = st.text_input("Subscription ID", cli_sub, help="Azure subscription ID for your Function Apps")
+    # Get Azure subscription with session state
+    sub_id = st.text_input(
+        "Subscription ID", 
+        value=st.session_state.studio2foundry_subscription_id, 
+        help="Azure subscription ID for your Function Apps",
+        key="studio2foundry_sub_id_input"
+    )
+    
+    # Update session state when subscription changes
+    if sub_id != st.session_state.studio2foundry_subscription_id:
+        st.session_state.studio2foundry_subscription_id = sub_id
+        # Reset selections when subscription changes
+        st.session_state.studio2foundry_selected_function_app = "-- Select Function App --"
+        st.session_state.studio2foundry_selected_resource_group = "-- Select Resource Group --"
     
     if not sub_id:
         st.warning("⚠️ Please enter your Azure subscription ID to continue")
         return
     
-    # List Function Apps in this subscription
-    with st.spinner("🔍 Loading Function Apps..."):
-        func_choices, func_map = list_function_apps(sub_id)
+    # List Function Apps in this subscription (cache in session state)
+    func_choices_key = f"studio2foundry_func_choices_{sub_id}"
+    func_map_key = f"studio2foundry_func_map_{sub_id}"
+    
+    if func_choices_key not in st.session_state or func_map_key not in st.session_state:
+        with st.spinner("🔍 Loading Function Apps..."):
+            func_choices, func_map = list_function_apps(sub_id)
+            st.session_state[func_choices_key] = func_choices
+            st.session_state[func_map_key] = func_map
+    else:
+        func_choices = st.session_state[func_choices_key]
+        func_map = st.session_state[func_map_key]
     
     if not func_choices:
         st.warning("⚠️ No Function Apps found in this subscription")
@@ -322,13 +568,29 @@ def render_studio2foundry_tab():
         """)
         return
     
-    # Function App selection dropdown
+    # Function App selection dropdown with session state
+    available_choices = ["-- Select Function App --"] + func_choices
+    
+    # Find current index for session state value
+    try:
+        current_index = available_choices.index(st.session_state.studio2foundry_selected_function_app)
+    except ValueError:
+        current_index = 0
+        st.session_state.studio2foundry_selected_function_app = "-- Select Function App --"
+    
     func_sel_lbl = st.selectbox(
         "Choose Function App",
-        ["-- Select Function App --"] + func_choices,
-        index=0,
-        help="Select the Azure Function App where you want to deploy the Studio2Foundry code"
+        available_choices,
+        index=current_index,
+        help="Select the Azure Function App where you want to deploy the Studio2Foundry code",
+        key="studio2foundry_function_app_selector"
     )
+    
+    # Update session state when selection changes
+    if func_sel_lbl != st.session_state.studio2foundry_selected_function_app:
+        st.session_state.studio2foundry_selected_function_app = func_sel_lbl
+        # Reset resource group selection when function app changes
+        st.session_state.studio2foundry_selected_resource_group = "-- Select Resource Group --"
     
     if func_sel_lbl == "-- Select Function App --":
         st.info("👆 Please select a Function App to continue")
@@ -337,7 +599,7 @@ def render_studio2foundry_tab():
     # Get selected Function App details
     app_name, resource_group = func_map[func_sel_lbl]
     
-    st.success(f"✅ Selected: **{app_name}** in resource group **{resource_group}**")
+    st.success(f"✅ Selected: **{app_name}** in resource group **{resource_group}** (Selection persisted)")
     
     st.divider()
     
@@ -368,181 +630,161 @@ def render_studio2foundry_tab():
     
     st.divider()
     
-    # Authentication Setup Information
-    with st.expander("🔐 Fix Azure Authentication Errors", expanded=True):
-        st.markdown("""
-        **Common Error:** `DefaultAzureCredential failed to retrieve a token`
+    # One-Click Authentication Setup
+    st.subheader("🔐 One-Click Authentication Setup")
+    st.markdown("**Automated setup for your Function App to access Azure AI Services**")
+    
+    if func_sel_lbl != "-- Select Function App --":
+        app_name, resource_group = func_map[func_sel_lbl]
         
-        **✅ Solution: Setup Managed Identity + Custom Roles**
+        # Resource Group Selection for Role Assignment
+        st.markdown("### 🎯 Select Resource Group for Role Assignment")
+        with st.spinner("🔍 Loading resource groups..."):
+            rg_choices, rg_map = get_resource_groups(sub_id)
         
-        **⚠️ CRITICAL: Your Azure Function will NOT work without Managed Identity enabled!**
-        
-        Your Azure Function needs specific permissions to access Azure AI Services agents.
-        """)
-        
-        if func_sel_lbl != "-- Select Function App --":
-            app_name, resource_group = func_map[func_sel_lbl]
+        if rg_choices:
+            # Resource group dropdown with session state
+            rg_available_choices = ["-- Select Resource Group --"] + rg_choices
             
-            st.markdown("### 🔴 Step 1: Enable Managed Identity (REQUIRED)")
-            st.error("**This step is MANDATORY - your function will fail without it!**")
+            # Find current index for session state value
+            try:
+                rg_current_index = rg_available_choices.index(st.session_state.studio2foundry_selected_resource_group)
+            except ValueError:
+                rg_current_index = 0
+                st.session_state.studio2foundry_selected_resource_group = "-- Select Resource Group --"
             
-            col1, col2 = st.columns([2, 1])
+            rg_sel_lbl = st.selectbox(
+                "Resource Group for Role Assignment",
+                rg_available_choices,
+                index=rg_current_index,
+                help="Select the resource group where you want to assign the custom roles",
+                key="studio2foundry_resource_group_selector"
+            )
             
-            with col1:
-                st.warning(f"**Must enable System-assigned Managed Identity for {app_name}**")
-                st.markdown("""
-                **Why this is required:**
-                - Your function uses `DefaultAzureCredential()` for authentication
-                - Without Managed Identity, Azure can't authenticate your function
-                - This causes the "failed to retrieve a token" error
+            # Update session state when selection changes
+            if rg_sel_lbl != st.session_state.studio2foundry_selected_resource_group:
+                st.session_state.studio2foundry_selected_resource_group = rg_sel_lbl
+            
+            if rg_sel_lbl != "-- Select Resource Group --":
+                selected_rg = rg_map[rg_sel_lbl]
+                st.success(f"✅ Selected resource group: **{selected_rg}** (Selection persisted)")
                 
-                **Manual steps (REQUIRED):**
-                1. Go to Azure Portal → Your Function App
-                2. Navigate to **Settings** → **Identity**
-                3. Turn **ON** the System-assigned identity
-                4. Click **Save** and wait for it to enable
-                """)
-            
-            with col2:
-                st.markdown("**🚨 Enable Now:**")
-                if st.button("🔗 Open Identity Settings", type="primary", help="Open Function App Identity settings in Azure Portal"):
-                    portal_url = f"https://portal.azure.com/#@/resource/subscriptions/{sub_id}/resourceGroups/{resource_group}/providers/Microsoft.Web/sites/{app_name}/identity"
-                    st.markdown(f"[🔗 Open Function App Identity Settings]({portal_url})")
-                    st.info("👆 Click the link above to open Azure Portal")
-            
-            st.markdown("### Step 2: Create Custom Roles")
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                st.info("Create required custom roles for Azure AI Services agents")
-                st.markdown("""
-                **Required roles:**
-                - `agentic` - Read access to AI Services agents
-                - `agentic-write` - Write access to AI Services agents
-                """)
-            
-            with col2:
-                if st.button("🚀 Create Custom Roles", type="primary", help="Create the required custom roles in your subscription"):
-                    with st.spinner("Creating custom roles..."):
+                # One-Click Setup Buttons
+                st.markdown("### 🚀 Automated Setup Buttons")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    if st.button("🔧 Enable Managed Identity", type="primary", help="Enable System-assigned Managed Identity"):
+                        with st.spinner("Enabling Managed Identity..."):
+                            success, message = enable_managed_identity(sub_id, resource_group, app_name)
+                            if success:
+                                st.success(message)
+                            else:
+                                st.error(message)
+                
+                with col2:
+                    if st.button("🗑️ Cleanup Old Roles", help="Remove roles with GUID names and old naming"):
+                        with st.spinner("Cleaning up old roles..."):
+                            success, message = cleanup_old_custom_roles(sub_id)
+                            if success:
+                                st.success("✅ Cleanup completed!")
+                                st.text(message)
+                            else:
+                                st.error(message)
+                
+                with col3:
+                    if st.button("📋 Create Custom Roles", type="primary", help="Create azure-index-agentic-read and azure-index-agentic-readwrite roles"):
+                        with st.spinner("Creating custom roles..."):
+                            success, message = create_custom_roles(sub_id)
+                            if success:
+                                st.success("✅ Custom roles created!")
+                                st.text(message)
+                            else:
+                                st.error(message)
+                
+                with col4:
+                    if st.button("🎯 Assign Roles", type="primary", help="Assign custom roles to Function App"):
+                        with st.spinner("Assigning roles..."):
+                            success, message = assign_roles_to_function_app(sub_id, selected_rg, app_name)
+                            if success:
+                                st.success("✅ Roles assigned successfully!")
+                                st.text(message)
+                                st.balloons()
+                            else:
+                                st.error(message)
+                
+                # Quick Setup All-in-One
+                st.markdown("### ⚡ Complete Setup (All-in-One)")
+                if st.button("🚀 Complete Authentication Setup", type="primary", help="Run all authentication steps automatically"):
+                    with st.spinner("Running complete authentication setup..."):
+                        results = []
+                        all_success = True
+                        
+                        # Step 1: Enable Managed Identity
+                        success, message = enable_managed_identity(sub_id, resource_group, app_name)
+                        results.append(f"**Step 1 - Managed Identity:** {message}")
+                        if not success:
+                            all_success = False
+                        
+                        # Step 2: Cleanup Old Roles
+                        success, message = cleanup_old_custom_roles(sub_id)
+                        results.append(f"**Step 2 - Cleanup:** {message}")
+                        # Don't fail on cleanup errors
+                        
+                        # Step 3: Create Custom Roles
                         success, message = create_custom_roles(sub_id)
-                        if success:
-                            st.success("✅ Custom roles setup completed!")
-                            st.text(message)
-                        else:
-                            st.error(message)
-            
-            st.markdown("### Step 3: Assign Roles to Function App")
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                st.info(f"Assign custom roles to **{app_name}** on resource group **{resource_group}**")
-                st.warning("⚠️ Make sure Managed Identity is enabled first!")
-            
-            with col2:
-                if st.button("🔧 Assign Roles", type="primary", help="Assign custom roles to Function App's managed identity"):
-                    with st.spinner("Assigning roles to Function App..."):
-                        success, message = assign_roles_to_function_app(sub_id, resource_group, app_name)
-                        if success:
-                            st.success("✅ Roles assigned successfully!")
-                            st.text(message)
+                        results.append(f"**Step 3 - Custom Roles:** {message}")
+                        if not success:
+                            all_success = False
+                        
+                        # Step 4: Assign Roles
+                        success, message = assign_roles_to_function_app(sub_id, selected_rg, app_name)
+                        results.append(f"**Step 4 - Role Assignment:** {message}")
+                        if not success:
+                            all_success = False
+                        
+                        # Show results
+                        if all_success:
+                            st.success("🎉 Complete authentication setup completed successfully!")
                             st.balloons()
                         else:
-                            st.error(message)
+                            st.warning("⚠️ Some steps completed with warnings")
+                        
+                        for result in results:
+                            st.text(result)
+            else:
+                st.info("👆 Please select a resource group for role assignment")
         else:
-            st.info("👆 Select a Function App above to setup authentication")
-        
-        st.markdown("""
-        ### ⚡ Quick Setup Summary
-        **For your function to work, you MUST:**
-        1. **Enable Managed Identity** (click the button above)
-        2. **Create Custom Roles** (click the button above)  
-        3. **Assign Roles** (click the button above)
-        4. **Set PROJECT_ENDPOINT** (in the section below)
-        
-        **Without Managed Identity, you'll get:**
-        ```
-        DefaultAzureCredential failed to retrieve a token from the included credentials.
-        EnvironmentCredential: EnvironmentCredential authentication unavailable.
-        ManagedIdentityCredential: No managed identity endpoint found.
-        ```
-        
-        ### Alternative: Manual Role Assignment
-        If the automatic setup doesn't work:
-        
-        1. **Create custom roles manually:**
-        ```bash
-        # Create agentic role
-        az role definition create --role-definition '{
-            "Name": "agentic",
-            "Description": "Read access to AI Services agents", 
-            "Actions": [],
-            "DataActions": ["Microsoft.CognitiveServices/accounts/AIServices/agents/read"],
-            "AssignableScopes": ["/subscriptions/YOUR_SUBSCRIPTION_ID"]
-        }'
-        
-        # Create agentic-write role  
-        az role definition create --role-definition '{
-            "Name": "agentic-write",
-            "Description": "Write access to AI Services agents",
-            "Actions": [],
-            "DataActions": ["Microsoft.CognitiveServices/accounts/AIServices/agents/write"], 
-            "AssignableScopes": ["/subscriptions/YOUR_SUBSCRIPTION_ID"]
-        }'
-        ```
-        
-        2. **Assign roles to Function App:**
-        ```bash
-        az role assignment create --assignee <FUNCTION_APP_PRINCIPAL_ID> --role "agentic" --scope "/subscriptions/YOUR_SUBSCRIPTION_ID/resourceGroups/YOUR_RESOURCE_GROUP"
-        az role assignment create --assignee <FUNCTION_APP_PRINCIPAL_ID> --role "agentic-write" --scope "/subscriptions/YOUR_SUBSCRIPTION_ID/resourceGroups/YOUR_RESOURCE_GROUP"
-        ```
-        """)
-    
+            st.error("❌ Failed to load resource groups")
+    else:
+        st.info("👆 Select a Function App above to setup authentication")
     st.divider()
     
     # Environment Variables Configuration
     st.subheader("🌍 Function App Environment Variables")
     
     st.markdown("""
-    **🎯 Primary requirement:** Your function needs `PROJECT_ENDPOINT` to work (like your working example).
+    **🎯 Required:** Your function needs `PROJECT_ENDPOINT` to work.
     
-    **🔐 Authentication:** Uses Managed Identity (MUST be enabled first!)
+    **🔐 Authentication:** Uses Managed Identity (setup above!)
     """)
     
-    st.warning("⚠️ **Before setting environment variables**: Make sure Managed Identity is enabled in the authentication section above!")
-    
-    # Check local .env for PROJECT_ENDPOINT (most important)
+    # Check local .env for PROJECT_ENDPOINT
     project_endpoint = os.getenv("PROJECT_ENDPOINT", "")
-    
-    # Optional: Check for Service Principal credentials
-    optional_vars = {
-        "AZURE_CLIENT_ID": os.getenv("AZURE_CLIENT_ID", ""),
-        "AZURE_CLIENT_SECRET": os.getenv("AZURE_CLIENT_SECRET", ""),
-        "AZURE_TENANT_ID": os.getenv("AZURE_TENANT_ID", "")
-    }
-    has_sp_credentials = all(optional_vars.values())
     
     # Show status
     if project_endpoint:
         st.success(f"✅ PROJECT_ENDPOINT found: `{project_endpoint}`")
     else:
         st.error("❌ PROJECT_ENDPOINT not found in local .env file")
-    
-    if has_sp_credentials:
-        st.info("ℹ️ Service Principal credentials found (will be set for explicit auth)")
-    else:
-        st.info("ℹ️ No Service Principal credentials (will use Managed Identity - recommended)")
 
-    with st.expander("⚙️ Configure Environment Variables", expanded=True):
+    with st.expander("⚙️ Configure PROJECT_ENDPOINT", expanded=True):
         st.markdown("""
-        **Configure your Function App environment variables:**
+        **Configure your Function App PROJECT_ENDPOINT:**
         
         **Required:**
         - `PROJECT_ENDPOINT` - Your Azure AI Project endpoint
-        
-        **Optional (for Service Principal auth):**
-        - `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`
-        
-        **💡 Tip:** Use Managed Identity instead of Service Principal for better security!
         """)
         
         if func_sel_lbl != "-- Select Function App --":
@@ -551,19 +793,13 @@ def render_studio2foundry_tab():
             col1, col2 = st.columns([2, 1])
             
             with col1:
-                st.info(f"Will configure environment variables in Function App: **{app_name}**")
+                st.info(f"Will configure PROJECT_ENDPOINT in Function App: **{app_name}**")
                 
                 if project_endpoint:
                     st.write("**Will set:**")
                     st.write(f"- PROJECT_ENDPOINT: `{project_endpoint[:50]}...`")
-                    
-                    if has_sp_credentials:
-                        st.write("- AZURE_CLIENT_ID: `[from local .env]`")
-                        st.write("- AZURE_CLIENT_SECRET: `[from local .env]`")
-                        st.write("- AZURE_TENANT_ID: `[from local .env]`")
-                        st.info("🔐 Service Principal credentials will be set")
-                    else:
-                        st.info("🔐 Only PROJECT_ENDPOINT will be set (use Managed Identity for auth)")
+                else:
+                    st.warning("⚠️ PROJECT_ENDPOINT not found in local .env file")
                 
                 # Show existing settings info
                 if st.button("🔍 View Current Settings", help="Show current environment variables in the Function App"):
@@ -593,15 +829,6 @@ def render_studio2foundry_tab():
                             else:
                                 st.error("❌ PROJECT_ENDPOINT not set")
                             
-                            # Check auth credentials
-                            auth_vars = ["AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID"]
-                            auth_count = sum(1 for var in auth_vars if any(setting["name"] == var for setting in existing_settings))
-                            
-                            if auth_count > 0:
-                                st.info(f"ℹ️ {auth_count}/3 Service Principal credentials set")
-                            else:
-                                st.success("✅ No explicit credentials (good for Managed Identity)")
-                            
                             # Show all settings
                             with st.expander("All current settings", expanded=False):
                                 for setting in sorted(existing_settings, key=lambda x: x["name"]):
@@ -619,15 +846,8 @@ def render_studio2foundry_tab():
             
             with col2:
                 if project_endpoint:
-                    button_text = "🚀 Set PROJECT_ENDPOINT Only" if not has_sp_credentials else "🚀 Set All Variables"
-                    button_help = "Set PROJECT_ENDPOINT (use with Managed Identity)" if not has_sp_credentials else "Set PROJECT_ENDPOINT + Service Principal credentials"
-                    
-                    if st.button(button_text, type="primary", help=button_help):
-                        with st.spinner("Setting environment variables..."):
-                            success_count = 0
-                            error_messages = []
-                            
-                            # Always set PROJECT_ENDPOINT
+                    if st.button("🚀 Set PROJECT_ENDPOINT", type="primary", help="Set PROJECT_ENDPOINT in the Function App"):
+                        with st.spinner("Setting PROJECT_ENDPOINT..."):
                             success, message, _ = set_function_app_setting_safely(
                                 app_name=app_name,
                                 resource_group=resource_group,
@@ -636,41 +856,15 @@ def render_studio2foundry_tab():
                             )
                             
                             if success:
-                                success_count += 1
-                            else:
-                                error_messages.append(f"PROJECT_ENDPOINT: {message}")
-                            
-                            # Optionally set Service Principal credentials
-                            if has_sp_credentials:
-                                for var_name, var_value in optional_vars.items():
-                                    success, message, _ = set_function_app_setting_safely(
-                                        app_name=app_name,
-                                        resource_group=resource_group,
-                                        setting_name=var_name,
-                                        setting_value=var_value
-                                    )
-                                    
-                                    if success:
-                                        success_count += 1
-                                    else:
-                                        error_messages.append(f"{var_name}: {message}")
-                            
-                            # Show results
-                            if success_count > 0:
-                                st.success(f"✅ Successfully configured {success_count} environment variables!")
+                                st.success("✅ PROJECT_ENDPOINT configured successfully!")
                                 st.success("🔄 Your Function App will restart automatically.")
-                                if not has_sp_credentials:
-                                    st.info("💡 Remember to enable Managed Identity in Azure Portal!")
                                 st.balloons()
-                            
-                            if error_messages:
-                                st.error("❌ Some variables failed to set:")
-                                for error in error_messages:
-                                    st.error(error)
+                            else:
+                                st.error(f"❌ Failed to set PROJECT_ENDPOINT: {message}")
                 else:
-                    st.button("🚀 Set Variables", disabled=True, help="PROJECT_ENDPOINT not found in local .env")
+                    st.button("🚀 Set PROJECT_ENDPOINT", disabled=True, help="PROJECT_ENDPOINT not found in local .env")
         else:
-            st.info("👆 Select a Function App above to configure environment variables")
+            st.info("👆 Select a Function App above to configure PROJECT_ENDPOINT")
             
         if not project_endpoint:
             st.markdown("""
@@ -678,13 +872,6 @@ def render_studio2foundry_tab():
             Add `PROJECT_ENDPOINT` to your `.env` file:
             ```
             PROJECT_ENDPOINT=https://your-ai-project-endpoint.com/api/projects/your-project
-            ```
-            
-            **Optional (for Service Principal auth):**
-            ```
-            AZURE_CLIENT_ID=your-client-id
-            AZURE_CLIENT_SECRET=your-client-secret
-            AZURE_TENANT_ID=your-tenant-id
             ```
             """)
         
@@ -765,7 +952,7 @@ def render_studio2foundry_tab():
             {base_url}?message=Hello&agentid=asst_3NKExbfOlMe1tYTdvxi2Woxw
             
             # Hebrew question (URL-encoded)
-            {base_url}?message=%D7%9E%D7%99%20%D7%94%D7%9D%20%D7%97%D7%91%D7%A8%D7%99%20%D7%95%D7%A2%D7%93%D7%AA%20%D7%94%D7%AA%D7%9E%D7%99%D7%9B%D7%95%D7%AA&agentid=asst_3NKExbfOlMe1tYTdvxi2Woxw
+            {base_url}?message=%D7%9E%D7%99%20%D7%94%D7%9D%20%D7%חבר%D7%99%20%D7%95%D7%A2%D7%93%D7%AA%20%D7%94%D7%AA%D7%9E%D7%99%D7%9B%D7%95%D7%AA&agentid=asst_3NKExbfOlMe1tYTdvxi2Woxw
             
             # With conversation thread
             {base_url}?message=Follow%20up%20question&agentid=asst_3NKExbfOlMe1tYTdvxi2Woxw&threadid=thread_abc123
