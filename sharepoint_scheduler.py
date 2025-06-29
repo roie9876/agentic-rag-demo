@@ -83,7 +83,7 @@ class SharePointScheduler:
         self.stop_flags: Dict[str, threading.Event] = {}
         self.reports_dir = "sharepoint_reports"
         self.current_status = "Stopped"
-        self.interval_minutes = 1
+        self.interval_minutes = 15  # Default to 15 minutes instead of 1 minute
         self.is_running = False
         self.scheduler_thread = None
         self.last_run = None
@@ -148,9 +148,10 @@ class SharePointScheduler:
                 # Check if scheduler should still be running
                 was_running = state.get('is_running', False)
                 if was_running:
-                    # Restart scheduler if it was running before
-                    logging.info("Scheduler was running before restart, attempting to resume...")
-                    self._resume_scheduler()
+                    # Don't auto-resume scheduler - wait for explicit user action
+                    logging.info("Scheduler was running before restart, but auto-resume is disabled for user control.")
+                    self.is_running = False
+                    self.current_status = "Stopped (needs manual restart)"
                     
         except Exception as e:
             logging.error(f"Failed to load scheduler state: {e}")
@@ -179,6 +180,10 @@ class SharePointScheduler:
         """Start the scheduler with given configuration"""
         if self.is_running:
             return {"success": False, "message": "Scheduler is already running"}
+        
+        # Validate that folders are explicitly selected by user
+        if not selected_folders or len(selected_folders) == 0:
+            return {"success": False, "message": "No folders selected. Please select folders to monitor before starting the scheduler."}
         
         try:
             self.is_running = True
