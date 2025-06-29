@@ -294,8 +294,9 @@ class MultimodalProcessor:
         self.blob_connection_string = blob_connection_string or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
         self.blob_container = blob_container or os.environ.get("AZURE_STORAGE_CONTAINER")
         
-        # Initialize Document Intelligence client if credentials are available
-        if self.doc_intelligence_endpoint and self.doc_intelligence_key:
+        # Initialize Document Intelligence client if endpoint is available
+        # Note: DocumentIntelligenceClient supports both API key and managed identity authentication
+        if self.doc_intelligence_endpoint:
             try:
                 self.doc_client = WorkingDocIntelClient()
                 logging.info("Document Intelligence client initialized successfully with working client.")
@@ -304,7 +305,7 @@ class MultimodalProcessor:
                 logging.warning(f"Failed to initialize Document Intelligence client: {e}")
         else:
             self.doc_client = None
-            logging.warning("Document Intelligence credentials not provided. Multimodal extraction may be limited.")
+            logging.warning("Document Intelligence endpoint not provided. Multimodal extraction may be limited.")
         
         # Initialize Blob Storage client if connection string is available
         if BLOB_STORAGE_AVAILABLE and self.blob_connection_string and self.blob_container:

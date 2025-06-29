@@ -1,0 +1,39 @@
+{
+  "id": "report_20250629_125308_scheduled",
+  "start_time": "2025-06-29T12:53:08.705055",
+  "end_time": "2025-06-29T12:53:32.873279",
+  "type": "scheduled",
+  "folders": [
+    "mngenvmcap623661.sharepoint.com||Documents|/ppt"
+  ],
+  "files_processed": 2,
+  "files_successful": 2,
+  "files_failed": 0,
+  "chunks_created": 7,
+  "errors": [],
+  "processing_details": [
+    {
+      "file": "Enterprice Chat.docx",
+      "status": "success",
+      "chunks": 1,
+      "method": "document_intelligence"
+    },
+    {
+      "file": "04. UltraDisk new features.pptx",
+      "status": "success",
+      "chunks": 6,
+      "method": "document_intelligence"
+    }
+  ],
+  "status": "completed",
+  "auto_purge_enabled": true,
+  "purge_results": {
+    "success": true,
+    "message": "Successfully purged 4 orphaned document chunks from 1 deleted files",
+    "documents_checked": 24,
+    "documents_deleted": 4,
+    "files_checked": 3,
+    "files_not_found": 1,
+    "errors": []
+  }
+}
