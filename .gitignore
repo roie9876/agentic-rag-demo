@@ -60,6 +60,7 @@ coverage.xml
 .env
 .env.backup
 .env.*
+.env-mi-aut-backup
 
 # MacOS
 .DS_Store
