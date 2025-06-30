@@ -376,10 +376,119 @@ def render_test_retrieval_tab(
         st.success("✨ **Enhanced Agent API WORKING**: Getting essential metadata (URLs, source files) directly from agent responses! Test shows 25% direct metadata + smart extraction for remaining fields.")
         st.info("🔗 **Proven Results**: Real SharePoint URLs and source files are now included in every response for immediate document access!")
         
-        if not session_state.selected_index:
-            st.info("Select or create an index in the previous tabs.")
+        # Add index selection dropdown specifically for test retrieval
+        st.subheader("📂 Index Selection for Testing")
+        
+        # Get available indexes
+        available_indexes = session_state.get('available_indexes', [])
+        if not available_indexes:
+            # Try to refresh the available indexes
+            try:
+                search_client, root_index_client = init_search_client()
+                if root_index_client:
+                    available_indexes = [idx.name for idx in root_index_client.list_indexes()]
+                    session_state.available_indexes = available_indexes
+            except Exception as e:
+                st.error(f"Could not fetch available indexes: {str(e)}")
+        
+        if available_indexes:
+            # Create dropdown for index selection
+            current_test_index = session_state.get('test_retrieval_index', None)
+            
+            # Prepare options with a default selection prompt
+            index_options = ["Select an index for testing..."] + available_indexes
+            
+            # Determine the default selection
+            default_index = 0
+            if current_test_index and current_test_index in available_indexes:
+                default_index = index_options.index(current_test_index)
+            elif session_state.get('selected_index') and session_state.selected_index in available_indexes:
+                # Use the globally selected index as default if available
+                default_index = index_options.index(session_state.selected_index)
+            
+            selected_test_index = st.selectbox(
+                "Choose index to query:",
+                options=index_options,
+                index=default_index,
+                key="test_retrieval_index_selector",
+                help="Select which search index to query for testing retrieval functionality"
+            )
+            
+            if selected_test_index != "Select an index for testing...":
+                session_state.test_retrieval_index = selected_test_index
+                st.success(f"🎯 **Testing with index:** `{selected_test_index}`")
+                
+                # Display index info
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.info(f"**Index:** {selected_test_index}")
+                with col2:
+                    st.info(f"**Agent:** {selected_test_index}-agent")
+                
+                target_index = selected_test_index
+            else:
+                session_state.test_retrieval_index = None
+                target_index = None
         else:
-            search_client, _ = init_search_client(session_state.selected_index)
+            st.warning("No indexes available. Please create an index first in the 'Create Index' or 'Manage Index' tabs.")
+            target_index = None
+        
+        # Show current selection status
+        if target_index:
+            search_client, _ = init_search_client(target_index)
+            
+            # Add search parameters control
+            st.subheader("⚙️ Search Parameters")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                top_k = st.slider(
+                    "Direct Search Results (top_k):",
+                    min_value=1,
+                    max_value=100,
+                    value=50,
+                    step=1,
+                    key="test_retrieval_top_k",
+                    help="Controls how many results are retrieved from direct search calls (not agent API)"
+                )
+            
+            with col2:
+                st.info(f"**Direct Search:** {top_k} results")
+                st.caption("⚠️ **Agent API Note**: Uses agent's `defaultMaxDocsForReranker` setting")
+                st.caption("💡 Agent retrieval count is configured in the agent definition, not per-request")
+
+            # Add explanation about agent vs direct search parameters
+            with st.expander("ℹ️ **Understanding Search Parameters**", expanded=False):
+                st.markdown("""
+                ### 🤖 **Agent API Retrieval**
+                - **Count Control**: Set via `defaultMaxDocsForReranker` in agent configuration
+                - **Per-Request**: Cannot be changed per query (by design)
+                - **Purpose**: Ensures consistent, optimized retrieval for AI processing
+                
+                ### 🔍 **Direct Search API**
+                - **Count Control**: `top_k` parameter (controlled by slider above)
+                - **Per-Request**: Can be adjusted for each query
+                - **Purpose**: Raw search results for debugging and fallback scenarios
+                
+                ### 📊 **Current Setup**
+                - **Agent retrieval**: Uses agent's configured maximum documents
+                - **Direct search**: Uses the `top_k` value you set above ({top_k} results)
+                - **Fallback logic**: Shows up to 3 direct search results if agent fails
+                
+                ### 🔧 **To Change Agent Retrieval Count**
+                The agent's document retrieval count is set during agent creation via:
+                ```json
+                {{
+                    "targetIndexes": [{{
+                        "indexName": "your-index",
+                        "defaultMaxDocsForReranker": 50
+                    }}]
+                }}
+                ```
+                
+                **To modify**: Go to 'Create Agent' tab and update the agent configuration.
+                """.format(top_k=top_k))
 
             # History
             for turn in session_state.history:
@@ -392,7 +501,7 @@ def render_test_retrieval_tab(
                 with st.chat_message("user"):
                     st.markdown(f'<div class="ltr">{user_query}</div>', unsafe_allow_html=True)
 
-                agent_name = f"{session_state.selected_index}-agent"
+                agent_name = f"{target_index}-agent"
                 
                 # Try to check if agent exists (note: older SDK versions might not support this)
                 try:
@@ -449,7 +558,7 @@ def render_test_retrieval_tab(
                     "target_index_params": [
                         # Create index params with only the essential parameters
                         KnowledgeAgentIndexParams(
-                            index_name=session_state.selected_index,
+                            index_name=target_index,
                             reranker_threshold=float(session_state.rerank_thr),
                         )
                     ]
@@ -486,8 +595,11 @@ def render_test_retrieval_tab(
                 st.write({
                     "AZURE_SEARCH_ENDPOINT": os.getenv("AZURE_SEARCH_ENDPOINT"),
                     "Authentication Method": auth_method,
-                    "Selected Index": session_state.selected_index,
-                    "Agent Name": f"{session_state.selected_index}-agent",
+                    "Selected Index": target_index,
+                    "Agent Name": f"{target_index}-agent",
+                    "Direct Search Top K": top_k,
+                    "Agent Retrieval Count": "Configured in agent (defaultMaxDocsForReranker)",
+                    "Reranker Threshold": float(session_state.rerank_thr),
                     "Request Payload": ka_req.dict() if hasattr(ka_req, 'dict') else str(ka_req)
                 })
                 st.markdown("---")
@@ -502,7 +614,7 @@ def render_test_retrieval_tab(
                         api_result = retrieve_with_direct_api(
                             user_question=user_query,
                             agent_name=agent_name,
-                            index_name=session_state.selected_index,
+                            index_name=target_index,
                             reranker_threshold=float(session_state.rerank_thr),
                             include_sources=True
                         )
@@ -536,14 +648,15 @@ def render_test_retrieval_tab(
                 # Try direct search to check if index has content
                 direct_hits = []
                 try:
-                    search_client, _ = init_search_client(session_state.selected_index)
-                    direct_results = search_client.search(search_text=user_query, top=3)
+                    search_client, _ = init_search_client(target_index)
+                    direct_results = search_client.search(search_text=user_query, top=top_k)
                     direct_hits = [doc for doc in direct_results]
                     st.expander("Direct Search Results").write({
                         "query": user_query,
                         "hits_count": len(direct_hits),
                         "first_hit": direct_hits[0] if direct_hits else "No results found",
-                        "index_name": session_state.selected_index
+                        "index_name": target_index,
+                        "top_k_used": top_k
                     })
                 except Exception as ex:
                     st.expander("Direct Search Error").write(f"Error performing direct search: {str(ex)}")
@@ -587,7 +700,8 @@ def render_test_retrieval_tab(
                             st.markdown(answer or "*[לא התקבלה תשובה]*", unsafe_allow_html=True)
                     elif direct_hits:
                         # If agent returned no useful answer but we have direct search results, provide fallback
-                        language = detect_language(" ".join([h.get("content", "") for h in direct_hits[:2]]))
+                        fallback_count = min(3, top_k, len(direct_hits))
+                        language = detect_language(" ".join([h.get("content", "") for h in direct_hits[:fallback_count]]))
                         
                         if language == "he":
                             st.warning("הסוכן לא מצא תוצאות, אך נמצא תוכן רלוונטי בחיפוש ישיר:")
@@ -596,7 +710,9 @@ def render_test_retrieval_tab(
                         
                         # Create a fallback answer from direct search results
                         fallback_content = []
-                        for hit in direct_hits[:2]:  # Show top 2 results
+                        # Use a reasonable number of results for fallback (max 3, but respect user's top_k if smaller)
+                        fallback_count = min(3, top_k, len(direct_hits))
+                        for hit in direct_hits[:fallback_count]:
                             content = hit.get("content", "")[:500]  # Limit content length
                             source_file = hit.get("source_file", "Unknown document" if language == "en" else "מסמך לא ידוע")
                             if content:
@@ -787,7 +903,7 @@ def render_test_retrieval_tab(
                                             # Try to look up URL from search index if doc_key is available
                                             if doc_chunk.get("doc_key") and not doc_chunk.get("url"):
                                                 try:
-                                                    search_client, _ = init_search_client(session_state.selected_index)
+                                                    search_client, _ = init_search_client(target_index)
                                                     direct_doc = search_client.get_document(key=doc_chunk["doc_key"])
                                                     if direct_doc and direct_doc.get("url"):
                                                         st.info(f"✅ **URL found in index:** {direct_doc['url']}")
@@ -1131,6 +1247,32 @@ def render_test_retrieval_tab(
                     
                     **Current Status:** ✅ Enhanced metadata working! Getting URLs and source files directly.
                     """)
+        else:
+            # No index selected - show selection prompt
+            st.info("👆 **Please select an index above to start testing retrieval.**")
+            st.markdown("""
+            ### 🎯 **What you can do here:**
+            - Test retrieval functionality with any available search index
+            - Ask questions and get AI-powered answers with source citations
+            - See metadata like URLs, source files, and page numbers
+            - Debug retrieval performance and source data
+            
+            ### 📋 **Next steps:**
+            1. Select an index from the dropdown above
+            2. Ask a question in the chat interface that appears
+            3. View the response with source citations and metadata
+            4. Explore debug information and retrieval details
+            """)
+            
+            if not available_indexes:
+                st.warning("🏗️ **No indexes found.** Create an index first in the 'Create Index' or 'Manage Index' tabs.")
+                st.markdown("""
+                **To get started:**
+                1. Go to the "Create Index" tab to create a new search index
+                2. Or go to "Manage Index" tab to select an existing index
+                3. Upload some documents to populate the index
+                4. Return here to test retrieval functionality
+                """)
 
 # -------------------------------------------------------------------
 

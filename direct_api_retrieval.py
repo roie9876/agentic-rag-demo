@@ -86,6 +86,7 @@ def retrieve_with_direct_api(
                 "indexName": index_name,
                 "rerankerThreshold": reranker_threshold,
                 "includeReferenceSourceData": True  # Enable full metadata return
+                # Note: top_k is not supported here - use defaultMaxDocsForReranker in agent config
             }
         ]
     }
