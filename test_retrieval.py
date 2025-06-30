@@ -445,8 +445,54 @@ def render_test_retrieval_tab(
         if target_index:
             search_client, _ = init_search_client(target_index)
             
+            # Initialize session state for chat history if not present - MOVED UP BEFORE SLIDERS
+            if 'history' not in session_state:
+                session_state.history = []
+            if 'agent_messages' not in session_state:
+                session_state.agent_messages = []
+            if 'rerank_thr' not in session_state:
+                session_state.rerank_thr = 1.0
+                # Also ensure slider key is cleared for new default
+                if "test_retrieval_reranker" in session_state:
+                    del session_state["test_retrieval_reranker"]
+            
+            # Force update existing users to new default (version-based reset)
+            if 'rerank_default_version' not in session_state:
+                # This is either a new user or existing user before version tracking
+                session_state.rerank_default_version = 1
+                session_state.rerank_thr = 1.0
+                # Clear slider key to force reset to new default
+                if "test_retrieval_reranker" in session_state:
+                    del session_state["test_retrieval_reranker"]
+            if 'max_docs_for_reranker' not in session_state:
+                session_state.max_docs_for_reranker = 200
+            if 'raw_index_json' not in session_state:
+                session_state.raw_index_json = None
+            if 'dbg_chunks' not in session_state:
+                session_state.dbg_chunks = 0
+            
             # Add search parameters control
             st.subheader("⚙️ Search Parameters")
+            
+            # Add reset button to force new defaults
+            col_reset1, col_reset2, col_reset3 = st.columns([1, 1, 2])
+            with col_reset1:
+                if st.button("🔄 Reset to New Defaults", help="Reset Agent parameters to new default values"):
+                    # Clear both session state AND slider keys
+                    session_state.rerank_thr = 1.0
+                    session_state.max_docs_for_reranker = 200
+                    # Clear the slider keys to force reset
+                    if "test_retrieval_max_docs" in session_state:
+                        del session_state["test_retrieval_max_docs"]
+                    if "test_retrieval_reranker" in session_state:
+                        del session_state["test_retrieval_reranker"]
+                    st.success("✅ Reset to new defaults: Max Docs=200, Reranker=1.0")
+                    st.rerun()
+            
+            with col_reset2:
+                st.caption("**New Defaults:**")
+                st.caption("Max Docs: 200")
+                st.caption("Reranker: 1.0")
             
             col1, col2 = st.columns(2)
             
@@ -454,7 +500,7 @@ def render_test_retrieval_tab(
                 max_docs_for_reranker = st.slider(
                     "Agent Max Documents (maxDocsForReranker):",
                     min_value=10,
-                    max_value=500,
+                    max_value=200,
                     value=getattr(session_state, 'max_docs_for_reranker', 200),
                     step=10,
                     key="test_retrieval_max_docs",
@@ -469,7 +515,7 @@ def render_test_retrieval_tab(
                     "Agent Reranker Threshold:",
                     min_value=0.0,
                     max_value=4.0,
-                    value=float(session_state.rerank_thr) if hasattr(session_state, 'rerank_thr') else 2.0,
+                    value=float(session_state.rerank_thr),
                     step=0.1,
                     key="test_retrieval_reranker",
                     help="Controls semantic ranking sensitivity for agent API - lower values retrieve more diverse content"
@@ -486,20 +532,6 @@ def render_test_retrieval_tab(
             with col4:
                 st.info(f"**Agent Reranker:** {reranker_threshold}")
                 st.caption("💡 Lower = more diverse chunks, Higher = more focused chunks")
-
-            # Initialize session state for chat history if not present
-            if 'history' not in session_state:
-                session_state.history = []
-            if 'agent_messages' not in session_state:
-                session_state.agent_messages = []
-            if 'rerank_thr' not in session_state:
-                session_state.rerank_thr = 2.0
-            if 'max_docs_for_reranker' not in session_state:
-                session_state.max_docs_for_reranker = 200
-            if 'raw_index_json' not in session_state:
-                session_state.raw_index_json = None
-            if 'dbg_chunks' not in session_state:
-                session_state.dbg_chunks = 0
 
             # Add explanation about agent vs direct search parameters
             with st.expander("ℹ️ **Understanding Search Parameters**", expanded=False):
@@ -918,13 +950,7 @@ Guidelines:
                     # Summary metrics
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        st.metric("Total Chunks", source_analysis["total_chunks"])
-                    with col2:
-                        st.metric("Unique Documents", source_analysis["unique_documents"])
-                    with col3:
-                        st.metric("Pages Referenced", source_analysis["pages_referenced"])
-                    with col4:
-                        st.metric("Multimodal Chunks", source_analysis["multimodal_chunks"])
+                        st.metric
                     
                     # Document breakdown
                     if source_analysis["documents"]:
