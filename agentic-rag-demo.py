@@ -68,6 +68,9 @@ from core.document_processor import (
     chunk_to_docs as _chunk_to_docs,
     tabular_to_docs as _tabular_to_docs
 )
+# Import UI utilities
+from app.ui.document_processing_info import display_processing_info
+from utils.function_deployment import zip_function_folder
 
 def _st_data_editor(*args, **kwargs):
     """
@@ -571,101 +574,6 @@ def agentic_retrieval(agent_name: str, index_name: str, messages: list[dict]) ->
 
     # Return the raw JSON string (no extra formatting)
     return json.dumps(chunks, ensure_ascii=False)
-
-##############################################################################
-# ZIP Function Folder Helper
-##############################################################################
-def _zip_function_folder(func_dir: Path, zip_path: Path) -> None:
-    """
-    Zip up the contents of *func_dir* (including all subfolders) into *zip_path*.
-    Ensures all files are stored relative to func_dir (so host.json is at root).
-    """
-    import zipfile
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for p in func_dir.rglob("*"):
-            if p.is_file():
-                zf.write(p, p.relative_to(func_dir))
-# ────────────────────────── Helper: zip Azure Function folder ──────────────
-# def _zip_function_folder(func_dir: Path, zip_path: Path) -> None:
-#     """Zip *func_dir* (כולל host.json וכו') כ-relative paths אל *zip_path*."""
-#     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-#         for itm in func_dir.rglob("*"):
-#             if itm.is_file():
-#                 zf.write(itm, itm.relative_to(func_dir))
-# -----------------------------------------------------------------------------
-# Processing Information Display Helper
-# -----------------------------------------------------------------------------
-def display_processing_info(file_name: str, file_ext: str, chunker_type: str = None, show_capabilities: bool = True):
-    """
-    Display processing information for a file to help users understand 
-    what tools and methods are being used for extraction.
-    """
-    ext = file_ext.lower()
-    
-    # File type mapping
-    file_type_map = {
-        '.pdf': '📄 PDF Document',
-        '.docx': '📝 Word Document', 
-        '.pptx': '📊 PowerPoint Presentation',
-        '.xlsx': '📈 Excel Spreadsheet',
-        '.xls': '📈 Excel Spreadsheet',
-        '.csv': '📈 CSV Data',
-        '.png': '🖼️ PNG Image',
-        '.jpg': '🖼️ JPEG Image',
-        '.jpeg': '🖼️ JPEG Image',
-        '.bmp': '🖼️ BMP Image',
-        '.tiff': '🖼️ TIFF Image',
-        '.txt': '📝 Text File',
-        '.md': '📝 Markdown File',
-        '.json': '🔧 JSON Data',
-        '.html': '🌐 HTML Document',
-        '.vtt': '🎬 Video Transcript'
-    }
-    
-    # Processing method mapping
-    processing_map = {
-        '.pdf': ('🔍 Azure Document Intelligence', 'Advanced OCR, layout analysis, table extraction'),
-        '.docx': ('🔍 Azure Document Intelligence', 'Layout analysis, text extraction, formatting preservation'),
-        '.pptx': ('🔍 Azure Document Intelligence', 'Slide analysis, text extraction, layout understanding'),
-        '.xlsx': ('🐼 Pandas Parser', 'Structured spreadsheet data extraction'),
-        '.xls': ('🐼 Pandas Parser', 'Legacy Excel format processing'),
-        '.csv': ('🐼 Pandas Parser', 'Comma-separated values processing'),
-        '.png': ('🔍 Azure Document Intelligence', 'OCR text extraction from images'),
-        '.jpg': ('🔍 Azure Document Intelligence', 'OCR text extraction from images'),
-        '.jpeg': ('🔍 Azure Document Intelligence', 'OCR text extraction from images'),
-        '.bmp': ('🔍 Azure Document Intelligence', 'OCR text extraction from images'),
-        '.tiff': ('🔍 Azure Document Intelligence', 'OCR text extraction from images'),
-        '.txt': ('📝 Simple Text Parser', 'Direct text content extraction'),
-        '.md': ('📝 Markdown Parser', 'Markdown formatting with text extraction'),
-        '.json': ('🔧 JSON Parser', 'Structured JSON data processing'),
-        '.html': ('🔍 Azure Document Intelligence', 'HTML structure and content analysis'),
-        '.vtt': ('🎬 Transcript Processor', 'Video subtitle and timing extraction')
-    }
-    
-    file_type = file_type_map.get(ext, f'📄 {ext.upper()} File')
-    method, capabilities = processing_map.get(ext, ('🔗 LangChain Chunker', 'General purpose text processing'))
-    
-    info_container = st.container()
-    with info_container:
-        col1, col2, col3 = st.columns([2, 3, 3])
-        
-        with col1:
-            st.markdown(f"**File:** {file_type}")
-            st.markdown(f"📋 `{file_name}`")
-            
-        with col2:
-            st.markdown(f"**Processing Tool:** {method}")
-            if show_capabilities:
-                st.markdown(f"⚙️ {capabilities}")
-                
-        with col3:
-            if ext in ['.pdf', '.docx', '.pptx', '.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.html']:
-                st.markdown("🎯 **Advanced Features:**")
-                features = ["✅ Layout Analysis", "✅ Smart Text Extraction", "✅ OCR Processing"]
-                if chunker_type == "MultimodalChunker":
-                    features.extend(["✅ Figure Detection", "✅ AI Image Captions", "✅ Multimodal Processing"])
-                for feature in features:
-                    st.markdown(f"   {feature}")
 
 # -----------------------------------------------------------------------------
 # Streamlit UI wrapper (run with: streamlit run agentic-rag-demo.py)
