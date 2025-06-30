@@ -28,6 +28,30 @@
 			"options": {
 				"cwd": "${workspaceFolder}/function"
 			}
+		},
+		{
+			"label": "Validate Modular Architecture",
+			"type": "shell",
+			"command": "python",
+			"args": ["scripts/validate_modular_architecture.py"],
+			"group": "test",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": true,
+				"clear": false
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Check Code Architecture",
+			"type": "shell",
+			"command": "echo",
+			"args": ["🔍 Checking modular architecture compliance..."],
+			"dependsOn": "Validate Modular Architecture",
+			"group": "test"
 		}
 	]
 }

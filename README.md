@@ -254,6 +254,68 @@ Knowledge Agent Retrieval → Contextual Response
 
 ---
 
+## 🏗️ Development Guidelines
+
+### Modular Architecture
+
+This project enforces a **strict modular architecture** to prevent code bloat and maintain maintainability:
+
+- **Main File Limit**: `agentic-rag-demo.py` should remain under 500 lines
+- **Current Status**: 🔴 2613 lines (needs refactoring)
+- **Rule**: NO new business logic should be added to the main file
+
+### Development Workflow
+
+Before contributing, please follow our modular development workflow:
+
+```bash
+# Check architecture compliance
+python scripts/validate_modular_architecture.py
+
+# For new features, use existing modular structure:
+# - UI components → app/ui/components/ (or create app/tabs/ as needed)
+# - Business logic → core/ (azure_clients.py, document_processor.py)
+# - Utilities → utils/ (azure_helpers.py, file_utils.py)
+# - Health checks → health_check/
+# - Integrations → connectors/sharepoint/
+```
+
+**Key Resources:**
+- **[Development Workflow](MODULAR_DEVELOPMENT_WORKFLOW.md)** - Complete development guidelines
+- **[Architecture Guidelines](.github/copilot-instructions.md)** - Copilot instructions for modular development
+- **VS Code Task**: "Validate Modular Architecture" - Quick compliance check
+
+### Code Organization
+
+```
+📁 Current Project Structure:
+├── agentic-rag-demo.py     # Main orchestration ONLY (target: <500 lines)
+├── app/                    # UI components & processing
+│   ├── ui/components/      # Reusable UI components ✅
+│   ├── document_processing/ # Document processing modules ✅
+│   ├── openai/             # OpenAI-related functionality ✅
+│   └── search/             # Search-related functionality ✅
+├── core/                   # Core business logic ✅
+│   ├── azure_clients.py    # Azure service clients ✅
+│   └── document_processor.py # Document processing ✅
+├── utils/                  # Utility functions ✅
+│   ├── azure_helpers.py    # Azure utilities ✅
+│   ├── file_utils.py       # File operations ✅
+│   └── file_format_detector.py # Format detection ✅
+├── connectors/             # External integrations ✅
+│   └── sharepoint/         # SharePoint integration ✅
+├── health_check/           # Health check system ✅
+│   ├── health_checker.py   # Health check logic ✅
+│   └── health_check_ui.py  # Health check UI ✅
+├── chunking/               # Document chunking system ✅
+└── scripts/                # Development tools ✅
+    └── validate_modular_architecture.py # Architecture validation ✅
+```
+
+**Pre-commit Hook**: Automatically validates architecture compliance before each commit.
+
+---
+
 ## Troubleshooting
 
 ### Common Issues

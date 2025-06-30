@@ -1,0 +1,60 @@
+# Modular Architecture Configuration
+# This file controls the enforcement of modular architecture rules
+
+[main_file]
+# Target and current line limits for agentic-rag-demo.py
+target_lines = 500
+current_lines = 2613
+# Allow gradual reduction - set to true to enforce strict limits
+enforce_strict_limit = false
+# Warning threshold - when to start showing warnings
+warning_threshold = 2700
+
+[allowed_functions]
+# Functions that are allowed to remain in main file
+main = true
+run_streamlit_ui = true
+setup_logging = true
+init_session_state = true
+load_config = true
+init_azure_clients = true
+create_streamlit_tabs = true
+
+[prohibited_patterns]
+# Code patterns that should NOT be in main file
+render_tab_functions = true
+service_classes = true
+manager_classes = true
+processing_functions = true
+validation_functions = true
+upload_functions = true
+download_functions = true
+
+[module_structure]
+# Required module directories
+app_tabs = "app/tabs"
+app_components = "app/components"
+core = "core"
+services = "services"
+utils = "utils"
+connectors = "connectors"
+
+[enforcement_mode]
+# How strictly to enforce rules
+# "warning" = show warnings only
+# "error" = fail validation 
+# "block" = block commits (via pre-commit hook)
+mode = "warning"
+
+[migration_priority]
+# Order of functions/classes to extract (highest priority first)
+1 = "Large functions (>100 lines)"
+2 = "Tab rendering functions"
+3 = "Service/Manager classes"
+4 = "Processing functions"
+5 = "Utility functions"
+
+[exceptions]
+# Temporary exceptions (should be removed over time)
+# Format: "function_name" = "reason for exception"
+# Example: "legacy_function" = "Scheduled for refactor in Q2"

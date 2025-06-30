@@ -1,0 +1,178 @@
+---
+mode: agent
+---
+
+# Agentic RAG Demo - GitHub Copilot Instructions
+
+## 🚨 **CRITICAL RULE: KEEP MAIN FILE MINIMAL**
+
+You are working with the **Agentic RAG Demo** project. The main file `agentic-rag-demo.py` has grown to 2600+ lines and is becoming unmaintainable. **Your primary directive is to keep new code OUT of the main file.**
+
+## 📋 **Core Development Rules**
+
+### Rule 1: **Module-First Development**
+- **NEVER** add new functions directly to `agentic-rag-demo.py`
+- **ALWAYS** create separate modules for new functionality
+- **ONLY** add imports and orchestration calls to the main file
+
+### Rule 2: **Modular Architecture**
+When creating new features, use this structure:
+
+```
+📁 NEW CODE LOCATIONS:
+├── app/tabs/               # Streamlit tab implementations  
+├── core/                   # Core business logic
+├── services/               # Business services
+├── utils/                  # Utility functions
+├── connectors/             # External integrations
+└── components/             # Reusable components
+```
+
+### Rule 3: **Existing Module Locations**
+The project already has these extracted modules - USE THEM:
+
+```
+✅ ALREADY EXTRACTED:
+├── core/azure_clients.py           # Azure service clients
+├── core/document_processor.py      # Document processing
+├── utils/azure_helpers.py          # Azure utilities  
+├── health_check/                   # Health monitoring
+├── connectors/sharepoint/          # SharePoint integration
+├── test_retrieval.py              # Test retrieval tab ✅
+├── studio2foundry_tab.py           # Studio2Foundry tab ✅
+├── agent_foundry.py                # AI Foundry management
+└── azure_function_helper.py        # Function deployment
+```
+
+## 🛠 **Implementation Patterns**
+
+### Pattern 1: Adding New Streamlit Tab
+```python
+# ✅ CORRECT: Create app/tabs/my_new_tab.py
+def render_my_new_tab(session_state, clients, **kwargs):
+    """Complete tab implementation here."""
+    st.header("🆕 My New Feature")
+    # All logic here...
+
+# ✅ CORRECT: In agentic-rag-demo.py (minimal)
+from app.tabs.my_new_tab import render_my_new_tab
+
+with tab_new:
+    render_my_new_tab(
+        session_state=st.session_state,
+        clients=azure_clients
+    )
+```
+
+### Pattern 2: Adding New Business Logic
+```python
+# ✅ CORRECT: Create services/my_service.py
+class MyService:
+    def __init__(self, config):
+        self.config = config
+    
+    def process_data(self, data):
+        # Business logic here...
+
+# ✅ CORRECT: In agentic-rag-demo.py (minimal)
+from services.my_service import MyService
+service = MyService(config)
+```
+
+### Pattern 3: Adding Azure Integration
+```python
+# ✅ CORRECT: Add to core/azure_clients.py
+def init_new_azure_client():
+    """Initialize new Azure service."""
+    # Implementation here...
+
+# ✅ CORRECT: In agentic-rag-demo.py (minimal)
+from core.azure_clients import init_new_azure_client
+client = init_new_azure_client()
+```
+
+## ❌ **What NOT to Do**
+
+```python
+# ❌ WRONG: Adding new functions to agentic-rag-demo.py
+def complex_new_feature():
+    # 100+ lines of code...
+    
+def another_helper_function():
+    # More code...
+
+# ❌ WRONG: Adding UI logic directly to main file
+with st.expander("New Feature"):
+    # 50+ lines of Streamlit code...
+```
+
+## ✅ **What TO Do**
+
+```python
+# ✅ CORRECT: Keep main file minimal with imports only
+from app.tabs.complex_feature_tab import render_complex_feature_tab
+from services.helper_service import HelperService
+
+# ✅ CORRECT: Simple orchestration only
+with tab_feature:
+    render_complex_feature_tab(session_state=st.session_state)
+```
+
+## 🎯 **Specific Code Guidelines**
+
+### For New Azure Search Features:
+- Add to `core/azure_clients.py` or `services/search_service.py`
+- NOT to `agentic-rag-demo.py`
+
+### For New UI Components:
+- Create `app/components/my_component.py`
+- Import and use in main file
+
+### For New Document Processing:
+- Extend `core/document_processor.py`
+- NOT inline in main file
+
+### For New SharePoint Features:
+- Extend `connectors/sharepoint/`
+- NOT in main file
+
+### For New Utilities:
+- Add to `utils/` directory
+- NOT in main file
+
+## 🔄 **When Modifying Existing Code**
+
+1. **If code is already in a module** → Modify the module
+2. **If code is in main file and small** → Consider extracting to module
+3. **If code is in main file and large** → MUST extract to module
+
+## 📝 **Required Actions for Every New Feature**
+
+1. ✅ **Identify** the appropriate module/directory
+2. ✅ **Create** the module file if needed
+3. ✅ **Implement** all logic in the module
+4. ✅ **Add minimal import** to main file
+5. ✅ **Test** the integration
+6. ❌ **NEVER** implement directly in main file
+
+## 🎯 **Success Criteria**
+
+- Main file stays under 800 lines (currently 2600+)
+- New functionality in appropriate modules
+- Clear separation of concerns
+- Easy to maintain and test
+
+## 💡 **Remember**
+
+**The main file should be an orchestrator, not an implementor.**
+
+When in doubt, ask yourself:
+- "Does this belong in the main orchestration file?"
+- "Can this be extracted to a focused module?"
+- "Will this make the main file harder to maintain?"
+
+If the answer suggests extraction, **create a module first**.
+
+## 🚀 **Current Priority**
+
+Help refactor the existing 2600-line main file into clean, modular components while ensuring all new code follows the modular architecture pattern.

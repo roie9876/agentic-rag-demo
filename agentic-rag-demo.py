@@ -2344,44 +2344,16 @@ def run_streamlit_ui() -> None:
 
     # ─────────────────── Tab 5 – Test Retrieval ──────────────────────────
     with tab_test:
-        health_block()
-        st.header("🔍 Test Retrieval")
-        
-        # Test retrieval functionality
-        if not st.session_state.selected_index:
-            st.warning("Please select an index first in the 'Manage Index' tab.")
-        else:
-            st.success(f"Testing retrieval from index: **{st.session_state.selected_index}**")
-            
-            test_query = st.text_input("Test Query", placeholder="Enter a search query to test retrieval")
-            
-            if test_query and st.button("🔍 Test Search"):
-                with st.spinner("Searching..."):
-                    try:
-                        # Test the search functionality
-                        search_client, _ = init_search_client()
-                        results = search_client.search(
-                            search_text=test_query,
-                            top=st.session_state.get('top_k', 5),
-                            include_total_count=True
-                        )
-                        
-                        search_results = list(results)
-                        
-                        if search_results:
-                            st.success(f"Found {len(search_results)} results")
-                            
-                            for i, result in enumerate(search_results):
-                                with st.expander(f"Result {i+1}: {result.get('source_file', 'Unknown')} (Score: {result['@search.score']:.3f})"):
-                                    st.write(f"**Content:** {result.get('content', result.get('page_chunk', 'No content'))[:500]}...")
-                                    st.write(f"**Source:** {result.get('source_file', 'Unknown')}")
-                                    st.write(f"**URL:** {result.get('url', 'No URL')}")
-                                    st.write(f"**Page:** {result.get('page_number', 'Unknown')}")
-                        else:
-                            st.info("No results found for this query.")
-                            
-                    except Exception as e:
-                        st.error(f"Search failed: {str(e)}")
+        # Use the proper agentic retrieval implementation from test_retrieval.py
+        render_test_retrieval_tab(
+            tab_test=tab_test,
+            health_block=health_block,
+            session_state=st.session_state,
+            init_agent_client=init_agent_client,
+            init_search_client=init_search_client,
+            env=env,
+            search_credential_fn=get_search_credential
+        )
 
     # ─────────────────── Tab 6 – Function Config ─────────────────────────
     with tab_cfg:
