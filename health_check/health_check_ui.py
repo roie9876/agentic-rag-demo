@@ -7,6 +7,8 @@ This module contains the UI components for the health check functionality.
 
 import os
 import streamlit as st
+import subprocess
+import json
 from .health_checker import HealthChecker
 
 
@@ -21,7 +23,15 @@ class HealthCheckUI:
     
     def render_health_check_tab(self):
         """Render the complete health check tab."""
-        st.header("🩺 Service Health Check")
+        st.header("🔐 Login & Health Check")
+        
+        # Login Section
+        self._render_login_section()
+        
+        st.divider()
+        
+        # Health Check Section
+        st.subheader("🩺 Service Health Check")
         
         if st.button("🔄 Check All Services"):
             with st.spinner("Checking services..."):
@@ -34,6 +44,10 @@ class HealthCheckUI:
             self._render_health_results()
         else:
             st.info("Run a health check before using other tabs.")
+        
+        # Add role configuration section
+        st.divider()
+        self._render_role_configuration_section()
     
     def _render_health_results(self):
         """Render the health check results."""
@@ -145,3 +159,367 @@ class HealthCheckUI:
                 """)
                 
             st.markdown("---")
+
+    def _render_login_section(self):
+        """Render the Azure CLI login section."""
+        st.subheader("🔐 Azure CLI Authentication")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            # Check current login status
+            login_status = self._check_azure_login()
+            if login_status["logged_in"]:
+                st.success(f"✅ Logged in as: **{login_status['user']}**")
+                st.info(f"📍 Subscription: **{login_status['subscription_name']}** ({login_status['subscription_id']})")
+                
+                # Show tenant info if available
+                if login_status.get('tenant_id'):
+                    st.info(f"🏢 Tenant: **{login_status['tenant_id']}**")
+            else:
+                st.error("❌ Not logged in to Azure CLI")
+                st.warning("Please log in to Azure CLI to use managed identity features.")
+        
+        with col2:
+            if st.button("🔐 Login", help="Open Azure CLI login"):
+                self._perform_azure_login()
+            
+            if login_status["logged_in"]:
+                if st.button("🔄 Refresh", help="Refresh login status"):
+                    st.rerun()
+                
+                if st.button("🚪 Logout", help="Logout from Azure CLI"):
+                    self._perform_azure_logout()
+
+    def _check_azure_login(self):
+        """Check if user is logged in to Azure CLI."""
+        try:
+            result = subprocess.run(
+                ["az", "account", "show", "--output", "json"],
+                capture_output=True, text=True, timeout=10
+            )
+            
+            if result.returncode == 0:
+                account_info = json.loads(result.stdout)
+                return {
+                    "logged_in": True,
+                    "user": account_info.get("user", {}).get("name", "Unknown"),
+                    "subscription_id": account_info.get("id", "Unknown"),
+                    "subscription_name": account_info.get("name", "Unknown"),
+                    "tenant_id": account_info.get("tenantId", "Unknown")
+                }
+            else:
+                return {"logged_in": False}
+                
+        except Exception as e:
+            st.error(f"Error checking Azure CLI status: {e}")
+            return {"logged_in": False}
+
+    def _perform_azure_login(self):
+        """Perform Azure CLI login."""
+        with st.spinner("Opening Azure CLI login..."):
+            try:
+                # Use az login --use-device-code for better compatibility
+                result = subprocess.run(
+                    ["az", "login", "--use-device-code"],
+                    capture_output=True, text=True, timeout=300
+                )
+                
+                if result.returncode == 0:
+                    st.success("✅ Login successful!")
+                    st.rerun()
+                else:
+                    st.error(f"❌ Login failed: {result.stderr}")
+                    
+            except subprocess.TimeoutExpired:
+                st.error("❌ Login timed out. Please try again.")
+            except Exception as e:
+                st.error(f"❌ Login error: {e}")
+
+    def _perform_azure_logout(self):
+        """Perform Azure CLI logout."""
+        with st.spinner("Logging out..."):
+            try:
+                result = subprocess.run(
+                    ["az", "logout"],
+                    capture_output=True, text=True, timeout=30
+                )
+                
+                if result.returncode == 0:
+                    st.success("✅ Logged out successfully!")
+                    st.rerun()
+                else:
+                    st.error(f"❌ Logout failed: {result.stderr}")
+                    
+            except Exception as e:
+                st.error(f"❌ Logout error: {e}")
+    
+    def _render_role_configuration_section(self):
+        """Render the role configuration section for managed identity setup."""
+        st.header("🔐 Managed Identity Role Configuration")
+        st.markdown("""
+        **Configure Azure RBAC roles** to enable managed identity authentication for each service.
+        This allows your application to authenticate without API keys.
+        """)
+        
+        # Get current user information
+        user_principal = self._get_current_user()
+        if user_principal:
+            st.info(f"Current user: **{user_principal}**")
+        else:
+            st.warning("⚠️ Azure CLI not logged in. Please run `az login` first.")
+            return
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("🔍 Azure AI Search")
+            search_endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "")
+            if search_endpoint:
+                st.code(search_endpoint)
+                search_service = self._extract_service_name_from_url(search_endpoint)
+                
+                if st.button("🔧 Configure Search Roles", key="search_roles"):
+                    self._configure_search_roles(search_service, user_principal)
+            else:
+                st.error("AZURE_SEARCH_ENDPOINT not configured")
+                
+            st.subheader("🧠 Azure OpenAI")
+            openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+            if not openai_endpoint:
+                openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT_41", "")
+            if openai_endpoint:
+                st.code(openai_endpoint)
+                openai_service = self._find_resource_name_by_endpoint(openai_endpoint, ["OpenAI"])
+                
+                if openai_service:
+                    if st.button("🔧 Configure OpenAI Roles", key="openai_roles"):
+                        self._configure_openai_roles(openai_service, user_principal)
+                else:
+                    st.warning("Could not find Azure OpenAI resource. Make sure you're logged in and have access.")
+            else:
+                st.error("AZURE_OPENAI_ENDPOINT not configured")
+        
+        with col2:
+            st.subheader("📄 Document Intelligence")
+            docint_endpoint = os.getenv("DOCUMENT_INTEL_ENDPOINT", "")
+            if not docint_endpoint:
+                docint_endpoint = os.getenv("AZURE_FORMREC_SERVICE", "")
+            if docint_endpoint:
+                st.code(docint_endpoint)
+                docint_service = self._find_resource_name_by_endpoint(docint_endpoint, ["DocumentIntelligence", "FormRecognizer"])
+                
+                if docint_service:
+                    if st.button("🔧 Configure Document Intelligence Roles", key="docint_roles"):
+                        self._configure_docint_roles(docint_service, user_principal)
+                else:
+                    st.warning("Could not find Document Intelligence resource. Make sure you're logged in and have access.")
+            else:
+                st.error("DOCUMENT_INTEL_ENDPOINT not configured")
+                
+            st.subheader("ℹ️ Current Authentication Status")
+            self._show_auth_status()
+
+    def _get_current_user(self):
+        """Get the current Azure CLI user principal."""
+        try:
+            result = subprocess.run(
+                ["az", "account", "show", "--query", "user.name", "-o", "tsv"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+            return None
+        except Exception:
+            return None
+
+    def _extract_service_name_from_url(self, url):
+        """Extract Azure service name from URL."""
+        try:
+            # Extract from URL like https://myservice.search.windows.net
+            return url.split("://")[1].split(".")[0]
+        except Exception:
+            return None
+
+    def _find_resource_name_by_endpoint(self, endpoint, resource_types):
+        """Find Azure resource name by endpoint."""
+        try:
+            # Try to extract from endpoint URL
+            service_name = self._extract_service_name_from_url(endpoint)
+            if service_name:
+                return service_name
+            return None
+        except Exception:
+            return None
+
+    def _configure_search_roles(self, service_name, user_principal):
+        """Configure Azure Search roles."""
+        with st.spinner("Configuring Azure Search roles..."):
+            try:
+                # Required roles for Azure Search
+                roles = [
+                    "Search Index Data Contributor",
+                    "Search Service Contributor"
+                ]
+                
+                success_count = 0
+                for role in roles:
+                    result = subprocess.run([
+                        "az", "role", "assignment", "create",
+                        "--role", role,
+                        "--assignee", user_principal,
+                        "--scope", f"/subscriptions/{self._get_subscription_id()}/resourceGroups/{self._get_resource_group(service_name)}/providers/Microsoft.Search/searchServices/{service_name}"
+                    ], capture_output=True, text=True, timeout=60)
+                    
+                    if result.returncode == 0:
+                        success_count += 1
+                        st.success(f"✅ Assigned role: {role}")
+                    else:
+                        if "already exists" in result.stderr.lower():
+                            st.info(f"ℹ️ Role already assigned: {role}")
+                            success_count += 1
+                        else:
+                            st.error(f"❌ Failed to assign role {role}: {result.stderr}")
+                
+                if success_count == len(roles):
+                    st.success("🎉 All Azure Search roles configured successfully!")
+                else:
+                    st.warning("⚠️ Some role assignments may have failed. Check the messages above.")
+                    
+            except Exception as e:
+                st.error(f"❌ Error configuring roles: {e}")
+
+    def _configure_openai_roles(self, service_name, user_principal):
+        """Configure Azure OpenAI roles."""
+        with st.spinner("Configuring Azure OpenAI roles..."):
+            try:
+                # Required roles for Azure OpenAI
+                roles = [
+                    "Cognitive Services OpenAI User",
+                    "Cognitive Services User"
+                ]
+                
+                success_count = 0
+                for role in roles:
+                    result = subprocess.run([
+                        "az", "role", "assignment", "create",
+                        "--role", role,
+                        "--assignee", user_principal,
+                        "--scope", f"/subscriptions/{self._get_subscription_id()}/resourceGroups/{self._get_resource_group(service_name)}/providers/Microsoft.CognitiveServices/accounts/{service_name}"
+                    ], capture_output=True, text=True, timeout=60)
+                    
+                    if result.returncode == 0:
+                        success_count += 1
+                        st.success(f"✅ Assigned role: {role}")
+                    else:
+                        if "already exists" in result.stderr.lower():
+                            st.info(f"ℹ️ Role already assigned: {role}")
+                            success_count += 1
+                        else:
+                            st.error(f"❌ Failed to assign role {role}: {result.stderr}")
+                
+                if success_count == len(roles):
+                    st.success("🎉 All Azure OpenAI roles configured successfully!")
+                else:
+                    st.warning("⚠️ Some role assignments may have failed. Check the messages above.")
+                    
+            except Exception as e:
+                st.error(f"❌ Error configuring roles: {e}")
+
+    def _configure_docint_roles(self, service_name, user_principal):
+        """Configure Document Intelligence roles."""
+        with st.spinner("Configuring Document Intelligence roles..."):
+            try:
+                # Required roles for Document Intelligence
+                roles = [
+                    "Cognitive Services User"
+                ]
+                
+                success_count = 0
+                for role in roles:
+                    result = subprocess.run([
+                        "az", "role", "assignment", "create",
+                        "--role", role,
+                        "--assignee", user_principal,
+                        "--scope", f"/subscriptions/{self._get_subscription_id()}/resourceGroups/{self._get_resource_group(service_name)}/providers/Microsoft.CognitiveServices/accounts/{service_name}"
+                    ], capture_output=True, text=True, timeout=60)
+                    
+                    if result.returncode == 0:
+                        success_count += 1
+                        st.success(f"✅ Assigned role: {role}")
+                    else:
+                        if "already exists" in result.stderr.lower():
+                            st.info(f"ℹ️ Role already assigned: {role}")
+                            success_count += 1
+                        else:
+                            st.error(f"❌ Failed to assign role {role}: {result.stderr}")
+                
+                if success_count == len(roles):
+                    st.success("🎉 All Document Intelligence roles configured successfully!")
+                else:
+                    st.warning("⚠️ Some role assignments may have failed. Check the messages above.")
+                    
+            except Exception as e:
+                st.error(f"❌ Error configuring roles: {e}")
+
+    def _get_subscription_id(self):
+        """Get current subscription ID."""
+        try:
+            result = subprocess.run(
+                ["az", "account", "show", "--query", "id", "-o", "tsv"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+            return None
+        except Exception:
+            return None
+
+    def _get_resource_group(self, resource_name):
+        """Get resource group for a given resource."""
+        try:
+            # Try to find the resource group by resource name
+            result = subprocess.run([
+                "az", "resource", "list",
+                "--name", resource_name,
+                "--query", "[0].resourceGroup",
+                "-o", "tsv"
+            ], capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+            return "default-resource-group"  # Fallback
+        except Exception:
+            return "default-resource-group"  # Fallback
+
+    def _show_auth_status(self):
+        """Show current authentication status for all services."""
+        st.markdown("**Current Authentication Methods:**")
+        
+        # Azure Search
+        search_key = os.getenv("AZURE_SEARCH_KEY", "")
+        if search_key:
+            st.markdown("🔑 Azure Search: **API Key**")
+        else:
+            st.markdown("🔐 Azure Search: **Managed Identity**")
+        
+        # Azure OpenAI
+        openai_key = os.getenv("AZURE_OPENAI_KEY", "") or os.getenv("AZURE_OPENAI_KEY_41", "")
+        if openai_key:
+            st.markdown("🔑 Azure OpenAI: **API Key**")
+        else:
+            st.markdown("🔐 Azure OpenAI: **Managed Identity**")
+        
+        # Document Intelligence
+        docint_key = os.getenv("DOCUMENT_INTEL_KEY", "") or os.getenv("AZURE_FORMREC_KEY", "")
+        if docint_key:
+            st.markdown("🔑 Document Intelligence: **API Key**")
+        else:
+            st.markdown("🔐 Document Intelligence: **Managed Identity**")
+        
+        st.markdown("""
+        **Migration Tips:**
+        - Remove API key environment variables to switch to managed identity
+        - Ensure RBAC roles are assigned before removing API keys
+        - Test each service after switching authentication methods
+        """)

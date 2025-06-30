@@ -170,8 +170,9 @@ class HealthChecker:
             if not key:
                 key = os.getenv("AZURE_FORMREC_KEY", "").strip()
                 
-            if not endpoint or not key:
-                return False, "Missing Document Intelligence configuration. Set DOCUMENT_INTEL_ENDPOINT/DOCUMENT_INTEL_KEY or the legacy AZURE_FORMREC_SERVICE/AZURE_FORMREC_KEY environment variables."
+            # Only require endpoint - key is optional for managed identity
+            if not endpoint:
+                return False, "Missing Document Intelligence configuration. Set DOCUMENT_INTEL_ENDPOINT or the legacy AZURE_FORMREC_SERVICE environment variable."
             
             # Force reload the module to pick up env var changes
             import importlib
