@@ -829,24 +829,27 @@ def run_streamlit_ui() -> None:
                     current_agent = root_index_client.get_agent(agent_name)
                     agent_exists = True
                     
-                    # Extract current configuration values
+                    # Extract current configuration values with safe defaults
                     current_config = {
-                        "max_output_size": None,
+                        "max_output_size": 16000,  # default
                         "reranker_threshold": 2.5,  # default
                         "model_name": "gpt-4.1",    # default
+                        "max_docs_for_reranker": 200,  # default
                     }
                     
                     # Try to get max_output_size from request_limits
                     if hasattr(current_agent, 'request_limits') and current_agent.request_limits:
-                        if hasattr(current_agent.request_limits, 'max_output_size'):
+                        if hasattr(current_agent.request_limits, 'max_output_size') and current_agent.request_limits.max_output_size:
                             current_config["max_output_size"] = current_agent.request_limits.max_output_size
                     
-                    # Get reranker threshold from target indexes
+                    # Get reranker threshold and max docs from target indexes
                     if hasattr(current_agent, 'target_indexes') and current_agent.target_indexes:
                         for target_idx in current_agent.target_indexes:
-                            if hasattr(target_idx, 'default_reranker_threshold'):
+                            if hasattr(target_idx, 'default_reranker_threshold') and target_idx.default_reranker_threshold is not None:
                                 current_config["reranker_threshold"] = target_idx.default_reranker_threshold
-                                break
+                            if hasattr(target_idx, 'default_max_docs_for_reranker') and target_idx.default_max_docs_for_reranker is not None:
+                                current_config["max_docs_for_reranker"] = target_idx.default_max_docs_for_reranker
+                            break
                     
                     # Get model name from models
                     if hasattr(current_agent, 'models') and current_agent.models:
@@ -869,26 +872,44 @@ def run_streamlit_ui() -> None:
                 
                 # Max Output Size
                 current_max_output = current_config.get("max_output_size", 16000)
-                if current_max_output is None:
-                    current_max_output = 16000  # Default if not set
+                if current_max_output is None or current_max_output <= 0:
+                    current_max_output = 16000  # Default if not set or invalid
                     
                 new_max_output_size = st.number_input(
                     "Max Output Size (characters)",
                     min_value=1000,
                     max_value=100000,
-                    value=current_max_output,
+                    value=int(current_max_output),
                     step=1000,
                     help="Maximum number of characters the agent can return in a single response"
                 )
                 
                 # Reranker Threshold
+                current_reranker = current_config.get("reranker_threshold", 2.5)
+                if current_reranker is None:
+                    current_reranker = 2.5  # Default if not set
+                    
                 new_reranker_threshold = st.number_input(
                     "Reranker Threshold",
                     min_value=0.0,
                     max_value=5.0,
-                    value=float(current_config.get("reranker_threshold", 2.5)),
+                    value=float(current_reranker),
                     step=0.1,
                     help="Threshold for semantic reranking (lower = more results, higher = more selective)"
+                )
+                
+                # Max Docs for Reranker
+                current_max_docs = current_config.get("max_docs_for_reranker", 200)
+                if current_max_docs is None or current_max_docs <= 0:
+                    current_max_docs = 200  # Default if not set or invalid
+                    
+                new_max_docs_for_reranker = st.number_input(
+                    "Max Docs for Reranker",
+                    min_value=1,
+                    max_value=1000,
+                    value=int(current_max_docs),
+                    step=10,
+                    help="Maximum number of documents to retrieve and rerank for each query"
                 )
                 
                 # Model Selection
@@ -948,7 +969,8 @@ def run_streamlit_ui() -> None:
                             target_indexes = [
                                 KnowledgeAgentTargetIndex(
                                     index_name=st.session_state.selected_index, 
-                                    default_reranker_threshold=new_reranker_threshold
+                                    default_reranker_threshold=new_reranker_threshold,
+                                    default_max_docs_for_reranker=int(new_max_docs_for_reranker)
                                 )
                             ],
                             request_limits = KnowledgeAgentRequestLimits(
@@ -960,7 +982,7 @@ def run_streamlit_ui() -> None:
                         
                         action = "Updated" if agent_exists else "Created"
                         st.success(f"✅ {action} agent `{agent_name}` successfully!")
-                        st.info(f"📋 Configuration: Max Output: {new_max_output_size}, Reranker: {new_reranker_threshold}, Model: {new_model}")
+                        st.info(f"📋 Configuration: Max Output: {new_max_output_size}, Reranker: {new_reranker_threshold}, Max Docs: {new_max_docs_for_reranker}, Model: {new_model}")
                         
                         # Force a rerun to refresh the current config display
                         if hasattr(st, "rerun"):
@@ -990,10 +1012,11 @@ def run_streamlit_ui() -> None:
             if agent_exists:
                 with st.expander("📋 Current Agent Configuration", expanded=False):
                     config_data = {
-                        "Parameter": ["Max Output Size", "Reranker Threshold", "Model", "Target Index"],
+                        "Parameter": ["Max Output Size", "Reranker Threshold", "Max Docs for Reranker", "Model", "Target Index"],
                         "Value": [
                             f"{current_config.get('max_output_size', 'Not Set')} characters",
                             f"{current_config.get('reranker_threshold', 'Default')}",
+                            f"{current_config.get('max_docs_for_reranker', 'Default')} documents",
                             current_config.get('model_name', 'Unknown'),
                             st.session_state.selected_index
                         ]

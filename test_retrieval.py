@@ -151,8 +151,9 @@ def analyze_chunks_for_sources(chunks):
                     "chunk_count": 0,
                     "pages": [],
                     "chunks": [],
-                    "url": "",
-                    "extraction_method": "",
+                    "url": chunk_data.get("url", ""),
+                    "source_file": chunk_data.get("source_file", ""),
+                    "extraction_method": chunk_data.get("extraction_method", ""),
                     "multimodal_chunks": 0
                 }
             
@@ -217,31 +218,38 @@ def analyze_chunks_for_sources(chunks):
                 
                 # Try extracting from page_chunk field if it exists
                 if page_num is None and "page_chunk" in chunk_data:
-                    page_chunk_content = chunk_data.get("page_chunk", "")
-                    if isinstance(page_chunk_content, str):
-                        for pattern in [r'<!-- PageNumber="(\d+)" -->', r'PageNumber="(\d+)"']:
-                            match = re.search(pattern, page_chunk_content)
-                            if match:
-                                try:
-                                    page_num = int(match.group(1))
-                                    break
-                                except (ValueError, IndexError):
-                                    continue
-                
-                # Look in the raw chunk for any numeric page reference
-                if page_num is None:
-                    # Try to find any number that might be a page number
-                    for field_name in ["page", "pagenum", "page_num"]:
-                        if field_name in chunk_data and chunk_data[field_name] is not None:
-                            try:
-                                page_num = int(chunk_data[field_name])
-                                break
-                            except (ValueError, TypeError):
-                                continue
+                    try:
+                        page_num = int(chunk_data["page_chunk"])
+                    except (ValueError, TypeError):
+                        pass
             
             # If still no page number found, try to infer from document structure
             if page_num is None:
-                # Use a meaningful default - we can't just use i+1 since that's chunk order, not page order
+                # For agent responses, try extracting from content structure
+                if analysis["is_agent_response"] and isinstance(content, str):
+                    # Look for any numeric patterns that might indicate page numbers
+                    lines = content.split('\n')
+                    for line in lines[:3]:  # Check first few lines
+                        # Look for standalone numbers or structured patterns
+                        standalone_number = re.search(r'^\s*(\d+)\s*$', line.strip())
+                        if standalone_number:
+                            try:
+                                page_num = int(standalone_number.group(1))
+                                # Validate it looks like a reasonable page number
+                                if 1 <= page_num <= 10000:  # Reasonable page range
+                                    break
+                                else:
+                                    page_num = None
+                            except ValueError:
+                                continue
+                
+                # Last resort: Use chunk index as page indicator for agent responses
+                if page_num is None and analysis["is_agent_response"]:
+                    # This is very rough but better than nothing for agent responses
+                    page_num = f"Unknown"
+                    
+            # Set default if still None
+            if page_num is None:
                 page_num = "Unknown"
             
             is_multimodal = chunk_data.get("isMultimodal", False)
@@ -443,52 +451,97 @@ def render_test_retrieval_tab(
             col1, col2 = st.columns(2)
             
             with col1:
-                top_k = st.slider(
-                    "Direct Search Results (top_k):",
-                    min_value=1,
-                    max_value=100,
-                    value=50,
-                    step=1,
-                    key="test_retrieval_top_k",
-                    help="Controls how many results are retrieved from direct search calls (not agent API)"
+                max_docs_for_reranker = st.slider(
+                    "Agent Max Documents (maxDocsForReranker):",
+                    min_value=10,
+                    max_value=500,
+                    value=getattr(session_state, 'max_docs_for_reranker', 200),
+                    step=10,
+                    key="test_retrieval_max_docs",
+                    help="Controls how many documents the agent retrieves before reranking - higher values get more diverse content"
                 )
+                # Update session state with new value
+                session_state.max_docs_for_reranker = max_docs_for_reranker
             
             with col2:
-                st.info(f"**Direct Search:** {top_k} results")
-                st.caption("⚠️ **Agent API Note**: Uses agent's `defaultMaxDocsForReranker` setting")
-                st.caption("💡 Agent retrieval count is configured in the agent definition, not per-request")
+                # Add reranker threshold control
+                reranker_threshold = st.slider(
+                    "Agent Reranker Threshold:",
+                    min_value=0.0,
+                    max_value=4.0,
+                    value=float(session_state.rerank_thr) if hasattr(session_state, 'rerank_thr') else 2.0,
+                    step=0.1,
+                    key="test_retrieval_reranker",
+                    help="Controls semantic ranking sensitivity for agent API - lower values retrieve more diverse content"
+                )
+                # Update session state with new value
+                session_state.rerank_thr = reranker_threshold
+
+            # Enhanced info display
+            col3, col4 = st.columns(2)
+            with col3:
+                st.info(f"**Agent Max Docs:** {max_docs_for_reranker}")
+                st.caption("📊 Controls document retrieval count for agent API")
+            
+            with col4:
+                st.info(f"**Agent Reranker:** {reranker_threshold}")
+                st.caption("💡 Lower = more diverse chunks, Higher = more focused chunks")
+
+            # Initialize session state for chat history if not present
+            if 'history' not in session_state:
+                session_state.history = []
+            if 'agent_messages' not in session_state:
+                session_state.agent_messages = []
+            if 'rerank_thr' not in session_state:
+                session_state.rerank_thr = 2.0
+            if 'max_docs_for_reranker' not in session_state:
+                session_state.max_docs_for_reranker = 200
+            if 'raw_index_json' not in session_state:
+                session_state.raw_index_json = None
+            if 'dbg_chunks' not in session_state:
+                session_state.dbg_chunks = 0
 
             # Add explanation about agent vs direct search parameters
             with st.expander("ℹ️ **Understanding Search Parameters**", expanded=False):
-                st.markdown("""
+                st.markdown(f"""
                 ### 🤖 **Agent API Retrieval**
-                - **Count Control**: Set via `defaultMaxDocsForReranker` in agent configuration
-                - **Per-Request**: Cannot be changed per query (by design)
-                - **Purpose**: Ensures consistent, optimized retrieval for AI processing
+                - **Count Control**: `maxDocsForReranker` = {max_docs_for_reranker} documents (adjustable above)
+                - **Per-Request**: Can now be changed per query via slider
+                - **Reranker Threshold**: {reranker_threshold} (adjustable above)
+                - **Purpose**: Controls how many documents agent retrieves before applying reranking
                 
                 ### 🔍 **Direct Search API**
-                - **Count Control**: `top_k` parameter (controlled by slider above)
-                - **Per-Request**: Can be adjusted for each query
+                - **Count Control**: Uses {max_docs_for_reranker} results for fallback scenarios
+                - **Per-Request**: Follows the maxDocsForReranker setting
                 - **Purpose**: Raw search results for debugging and fallback scenarios
                 
                 ### 📊 **Current Setup**
-                - **Agent retrieval**: Uses agent's configured maximum documents
-                - **Direct search**: Uses the `top_k` value you set above ({top_k} results)
+                - **Agent retrieval**: {max_docs_for_reranker} documents before reranking
+                - **Agent reranker**: Threshold = {reranker_threshold} (controls chunk diversity vs focus)
+                - **Direct search**: Uses same {max_docs_for_reranker} value for consistency
                 - **Fallback logic**: Shows up to 3 direct search results if agent fails
                 
-                ### 🔧 **To Change Agent Retrieval Count**
-                The agent's document retrieval count is set during agent creation via:
-                ```json
-                {{
-                    "targetIndexes": [{{
-                        "indexName": "your-index",
-                        "defaultMaxDocsForReranker": 50
-                    }}]
-                }}
-                ```
+                ### 🎯 **Reranker Threshold Guide**
+                - **0.0 - 1.0**: Very diverse chunks, includes loosely related content
+                - **1.0 - 2.0**: Balanced diversity and relevance (good for general questions)
+                - **2.0 - 3.0**: Focused on highly relevant content (current: {reranker_threshold})
+                - **3.0 - 4.0**: Very focused, only most relevant chunks
                 
-                **To modify**: Go to 'Create Agent' tab and update the agent configuration.
-                """.format(top_k=top_k))
+                **💡 Troubleshooting with Reranker:**
+                - Agent returning wrong type of content? → Lower threshold (try 1.0-1.5)
+                - Agent too unfocused/irrelevant? → Higher threshold (try 2.5-3.0)
+                - Agent saying "no information"? → Lower threshold to get more chunks
+                
+                ### 🔧 **Max Documents vs Reranker Threshold**
+                - **Max Documents ({max_docs_for_reranker})**: More documents = more diverse content to choose from
+                - **Reranker Threshold ({reranker_threshold})**: Lower threshold = agent uses more of those documents
+                - **Best Practice**: Start with high max docs (200+) and tune threshold for quality
+                
+                ### 📝 **Note on Agent Configuration**
+                This UI now overrides the agent's default `defaultMaxDocsForReranker` setting.
+                The agent was originally configured with a fixed value, but this slider allows 
+                real-time adjustment for testing and optimization.
+                """)
 
             # History
             for turn in session_state.history:
@@ -541,7 +594,20 @@ def render_test_retrieval_tab(
                 
                 agent_client = init_agent_client(agent_name)
                 if not session_state.agent_messages:
-                    session_state.agent_messages = [{"role": "assistant", "content": "Answer with sources."}]
+                    # Generic system prompt suitable for any document type and subject matter
+                    generic_system_prompt = """Answer the question based only on the indexed sources. Provide accurate, specific information from the documents.
+
+Guidelines:
+- Use only information found in the provided sources
+- Respond in the same language as the question (if question is in Hebrew, respond in Hebrew; if in English, respond in English)
+- Cite sources using square brackets [filename.pdf] 
+- If the answer requires distinguishing between different types, categories, or scenarios mentioned in the documents, be specific about which applies
+- If multiple relevant pieces of information exist, present them clearly and distinguish between them
+- Synthesize information from multiple chunks when they contain related information about the same topic
+- If the information is not available in the sources, say "I don't know" or "This information is not available in the provided sources" (in Hebrew: "אין לי מידע" or "המידע הזה לא זמין במקורות שסופקו")
+- Preserve important details like dates, numbers, timeframes, and specific requirements exactly as stated in the sources"""
+                    
+                    session_state.agent_messages = [{"role": "assistant", "content": generic_system_prompt}]
                 session_state.agent_messages.append({"role": "user", "content": user_query})
 
                 ka_msgs = [
@@ -552,18 +618,36 @@ def render_test_retrieval_tab(
                     for m in session_state.agent_messages
                 ]
 
-                # Create a base request with only the most essential parameters
+                # Create a base request with dynamic parameters
                 ka_req_params = {
                     "messages": ka_msgs,
-                    "target_index_params": [
-                        # Create index params with only the essential parameters
-                        KnowledgeAgentIndexParams(
+                    "target_index_params": []
+                }
+                
+                # Try to create index params with maxDocsForReranker support
+                try:
+                    # Try the new parameter first
+                    index_params = KnowledgeAgentIndexParams(
+                        index_name=target_index,
+                        reranker_threshold=float(session_state.rerank_thr),
+                        max_docs_for_reranker=max_docs_for_reranker,
+                    )
+                    ka_req_params["target_index_params"].append(index_params)
+                    st.caption(f"✅ Using dynamic maxDocsForReranker = {max_docs_for_reranker}")
+                except Exception as e:
+                    # Fallback to basic parameters if max_docs_for_reranker is not supported
+                    try:
+                        index_params = KnowledgeAgentIndexParams(
                             index_name=target_index,
                             reranker_threshold=float(session_state.rerank_thr),
                         )
-                    ]
-                    # NOTE: Removed request_limits with max_output_size - this parameter is set on the knowledge agent definition, not in retrieve requests
-                }
+                        ka_req_params["target_index_params"].append(index_params)
+                        st.warning(f"⚠️ SDK doesn't support dynamic maxDocsForReranker. Using agent's default setting. Error: {str(e)[:100]}")
+                    except Exception as e2:
+                        # Ultimate fallback
+                        index_params = KnowledgeAgentIndexParams(index_name=target_index)
+                        ka_req_params["target_index_params"].append(index_params)
+                        st.error(f"⚠️ Limited SDK support. Using minimal parameters. Error: {str(e2)[:100]}")
                 
                 # Try to add optional parameters that might not be supported in all SDK versions
                 try:
@@ -597,8 +681,8 @@ def render_test_retrieval_tab(
                     "Authentication Method": auth_method,
                     "Selected Index": target_index,
                     "Agent Name": f"{target_index}-agent",
-                    "Direct Search Top K": top_k,
-                    "Agent Retrieval Count": "Configured in agent (defaultMaxDocsForReranker)",
+                    "Agent Max Documents": max_docs_for_reranker,
+                    "Agent Retrieval Count": f"Dynamic (maxDocsForReranker={max_docs_for_reranker})",
                     "Reranker Threshold": float(session_state.rerank_thr),
                     "Request Payload": ka_req.dict() if hasattr(ka_req, 'dict') else str(ka_req)
                 })
@@ -649,14 +733,14 @@ def render_test_retrieval_tab(
                 direct_hits = []
                 try:
                     search_client, _ = init_search_client(target_index)
-                    direct_results = search_client.search(search_text=user_query, top=top_k)
+                    direct_results = search_client.search(search_text=user_query, top=max_docs_for_reranker)
                     direct_hits = [doc for doc in direct_results]
                     st.expander("Direct Search Results").write({
                         "query": user_query,
                         "hits_count": len(direct_hits),
                         "first_hit": direct_hits[0] if direct_hits else "No results found",
                         "index_name": target_index,
-                        "top_k_used": top_k
+                        "max_docs_used": max_docs_for_reranker
                     })
                 except Exception as ex:
                     st.expander("Direct Search Error").write(f"Error performing direct search: {str(ex)}")
@@ -700,7 +784,7 @@ def render_test_retrieval_tab(
                             st.markdown(answer or "*[לא התקבלה תשובה]*", unsafe_allow_html=True)
                     elif direct_hits:
                         # If agent returned no useful answer but we have direct search results, provide fallback
-                        fallback_count = min(3, top_k, len(direct_hits))
+                        fallback_count = min(3, max_docs_for_reranker, len(direct_hits))
                         language = detect_language(" ".join([h.get("content", "") for h in direct_hits[:fallback_count]]))
                         
                         if language == "he":
@@ -710,8 +794,8 @@ def render_test_retrieval_tab(
                         
                         # Create a fallback answer from direct search results
                         fallback_content = []
-                        # Use a reasonable number of results for fallback (max 3, but respect user's top_k if smaller)
-                        fallback_count = min(3, top_k, len(direct_hits))
+                        # Use a reasonable number of results for fallback (max 3, but respect user's max_docs if smaller)
+                        fallback_count = min(3, max_docs_for_reranker, len(direct_hits))
                         for hit in direct_hits[:fallback_count]:
                             content = hit.get("content", "")[:500]  # Limit content length
                             source_file = hit.get("source_file", "Unknown document" if language == "en" else "מסמך לא ידוע")
@@ -1148,12 +1232,7 @@ def render_test_retrieval_tab(
                                         html_content = content.replace('\n', '<br>')
                                         st.markdown(html_content, unsafe_allow_html=True)
                                     else:
-                                        # Convert newlines to HTML breaks for proper rendering of Hebrew and special chars
-                                        if isinstance(content, str):
-                                            html_content = content.replace('\n', '<br>')
-                                            st.markdown(html_content, unsafe_allow_html=True)
-                                        else:
-                                            st.write(content)
+                                        st.write(content)
                                     
                                     # Check for and display images from multimodal content
                                     related_images = parsed_itm.get("relatedImages", [])

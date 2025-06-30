@@ -117,7 +117,7 @@ def _search_client(index_name: str) -> SearchClient:
 
 # ---------------------------------------------------------------------------
 INDEX_NAME          = os.getenv("INDEX_NAME", "agentic-rag")
-RERANKER_THRESHOLD  = float(os.getenv("RERANKER_THRESHOLD", "2.5"))
+RERANKER_THRESHOLD  = float(os.getenv("RERANKER_THRESHOLD", "1"))
 
 # ---------------------------------------------------------------------------
 # ⬇⬇⬇  NEW: lightweight summarizer so /retrieve results can be merged locally
@@ -236,6 +236,7 @@ def answer_question(
             {
                 "indexName": idx,
                 "rerankerThreshold": thres,
+                "maxDocsForReranker": 200,
                 #"topK": tk,
                 # "citationFieldName": "source_file",
             }
