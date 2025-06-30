@@ -48,6 +48,20 @@ from test_retrieval import render_test_retrieval_tab
 # Import the Studio2Foundry module
 from studio2foundry_tab import render_studio2foundry_tab
 
+
+# Import extracted modules
+from utils.azure_helpers import (
+    get_search_credential,
+    rbac_enabled, 
+    get_az_logged_user,
+    grant_search_role,
+    grant_openai_role,
+    reload_env_and_restart,
+    env
+)
+from core.azure_clients import init_openai, init_search_client, init_agent_client
+
+
 def _st_data_editor(*args, **kwargs):
     """
     Wrapper that tries st.data_editor (Streamlit ≥ 1.29) and falls back to
@@ -164,47 +178,16 @@ from azure.ai.agents.models import OpenApiTool, OpenApiAnonymousAuthDetails
 
 
 # ToolDefinition is only under .models
-def _search_credential() -> AzureKeyCredential | DefaultAzureCredential:
-    """
-    Return Azure credential based on env:
-    • If AZURE_SEARCH_KEY is set → key auth
-    • else → DefaultAzureCredential (AAD)
-    """
-    key = os.getenv("AZURE_SEARCH_KEY", "").strip()
-    if key:
-        return AzureKeyCredential(key)
-    return DefaultAzureCredential()
 
 
 # ---------------------------------------------------------------------------
 # RBAC status probe
 # ---------------------------------------------------------------------------
-def _rbac_enabled(service_url: str) -> bool:
-    """
-    Quick probe: return True if Role‑based access control is enabled on the
-    Search service (Authentication mode = RBAC).
-    """
-    try:
-        url = f"{service_url.rstrip('/')}/?api-version=2023-11-01"
-        r = httpx.get(url, timeout=3)
-        # When RBAC is ON the payload includes "RoleBasedAccessControl"
-        return "RoleBasedAccessControl" in r.text
-    except Exception:
-        return False
+
 
 # ---------------------------------------------------------------------------
 # Azure CLI helpers
 # ---------------------------------------------------------------------------
-def _az_logged_user() -> tuple[str | None, str | None]:
-    """Return (UPN/email, subscription-id) of the signed‑in az cli user, or (None,None)."""
-    try:
-        out = subprocess.check_output(
-            ["az", "account", "show", "--output", "json"], text=True, timeout=10
-        )
-        data = json.loads(out)
-        return data["user"]["name"], data["id"]
-    except Exception:
-        return None, None
 
 
 # Remove the duplicate function since it's now in agent_foundry.py
@@ -256,84 +239,17 @@ def _az_logged_user() -> tuple[str | None, str | None]:
 #         return []
 
 
-def _grant_search_role(service_name: str, subscription_id: str, resource_group: str, principal: str, role: str) -> tuple[bool, str]:
-    """
-    Grant the specified *role* to *principal* on the given service.
-    Returns (success, message).
-    """
-    try:
-        scope = f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Search/searchServices/{service_name}"
-        subprocess.check_call(
-            [
-                "az", "role", "assignment", "create",
-                "--role", role,
-                "--assignee", principal,
-                "--scope", scope
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=15,
-        )
-        return True, "Role granted successfully"
-    except subprocess.CalledProcessError as e:
-        return False, f"az cli error: {e}"
-    except Exception as ex:
-        return False, str(ex)
-
 
 
 # ---------------------------------------------------------------------------
 # Helper to grant OpenAI role
 # ---------------------------------------------------------------------------
-def _grant_openai_role(account_name: str, subscription_id: str, resource_group: str,
-                       principal: str, role: str = "Cognitive Services OpenAI User") -> tuple[bool, str]:
-    """
-    Grant *role* (default: Cognitive Services OpenAI User) on the Azure OpenAI
-    account to *principal*.
-    """
-    try:
-        scope = (
-            f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
-            f"/providers/Microsoft.CognitiveServices/accounts/{account_name}"
-        )
-        subprocess.check_call(
-            [
-                "az", "role", "assignment", "create",
-                "--role", role,
-                "--assignee", principal,
-                "--scope", scope,
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=15,
-        )
-        return True, "Role granted successfully"
-    except subprocess.CalledProcessError as e:
-        return False, f"az cli error: {e}"
-    except Exception as ex:
-        return False, str(ex)
+
 
 # ---------------------------------------------------------------------------
 # Force‑reload .env at runtime
 # ---------------------------------------------------------------------------
-def _reload_env_and_restart():
-    """
-    Reload the .env file (override existing variables), clear cached clients,
-    and rerun the Streamlit script so the new values take effect.
-    """
-    env_path = Path(__file__).resolve().parent / ".env"
-    load_dotenv(env_path, override=True)
 
-    # Clear Streamlit caches for resource‑building functions
-    for fn in (init_openai, init_search_client, init_agent_client):
-        if hasattr(fn, "clear"):
-            fn.clear()
-
-    st.toast("✅ .env reloaded – restarting app…", icon="🔄")
-    if hasattr(st, "rerun"):
-        st.rerun()
-    else:  # fallback for older versions
-        st.experimental_rerun()
 
 ##############################################################################
 # Environment helpers
@@ -344,42 +260,8 @@ FUNCTION_KEY = os.getenv("AGENT_FUNC_KEY", "")
 TOP_K_DEFAULT = int(os.getenv("TOP_K", 5))   # fallback for CLI path
 
 
-def env(var: str) -> str:
-    """Fetch env var or exit with error."""
-    v = os.getenv(var)
-    if not v:
-        sys.exit(f"❌ Missing env var: {var}")
-    return v
 
 
-def init_openai(model: str = "o3") -> Tuple[AzureOpenAI, dict]:
-    """
-    Return AzureOpenAI client + chat params for the chosen *model*
-    (o3, 4o, 41).  Picks env‑vars with appropriate suffix.
-    """
-    suffix = {"o3": "", "4o": "_4o", "41": "_41"}.get(model, "")
-    client = AzureOpenAI(
-        api_key=env(f"AZURE_OPENAI_KEY{suffix}"),
-        azure_endpoint=env(f"AZURE_OPENAI_ENDPOINT{suffix}").rstrip("/"),
-        api_version=env(f"AZURE_OPENAI_API_VERSION{suffix}"),
-    )
-    # If no API key, use AAD token provider
-    if not os.getenv(f"AZURE_OPENAI_KEY{suffix}", "").strip():
-        # Switch to AAD token provider
-        aad = get_bearer_token_provider(
-            DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
-        )
-        client = AzureOpenAI(
-            azure_endpoint=env(f"AZURE_OPENAI_ENDPOINT{suffix}").rstrip("/"),
-            azure_ad_token_provider=aad,
-            api_version=env(f"AZURE_OPENAI_API_VERSION{suffix}"),
-        )
-    chat_params = dict(
-        model=env(f"AZURE_OPENAI_DEPLOYMENT{suffix}"),
-        temperature=0,
-        max_tokens=st.session_state.get("max_tokens", 80000),
-    )
-    return client, chat_params
 
 
 def embed_text(oai_client: AzureOpenAI, deployment: str, text: str) -> list[float]:
@@ -816,50 +698,11 @@ def _tabular_to_docs(
     return docs
 
 
-def init_search_client(index_name: str | None = None) -> Tuple[SearchClient, SearchIndexClient]:
-    """
-    Return (search_client, index_client).
-    Only API Key authentication is supported for agentic retrieval (see Azure docs).
-    `index_name` – if provided, SearchClient will target that index,
-    otherwise a dummy client pointing at the service root is returned.
-    """
-    endpoint = env("AZURE_SEARCH_ENDPOINT")
-    credential = _search_credential()
 
-    index_client = SearchIndexClient(endpoint=endpoint, credential=credential)
-
-    if index_name:
-        search_client = SearchClient(endpoint=endpoint, index_name=index_name, credential=credential)
-    else:
-        # Return a SearchClient bound to some default index just to keep type happy.
-        # Caller should create a proper one later.
-        search_client = SearchClient(endpoint=endpoint, index_name="dummy", credential=credential)
-
-    # Improved index listing debug
-    try:
-        available_indexes = list(index_client.list_indexes())
-        st.session_state.available_indexes = [idx.name for idx in available_indexes]
-    except Exception as conn_error:
-        logging.error("list_indexes() failed: %s", conn_error)
-        st.session_state.available_indexes = []
-
-    return search_client, index_client
 
 # ---------------------------------------------------------------------------
 # Knowledge‑Agent client (cached per agent name)
 # ---------------------------------------------------------------------------
-@st.cache_resource
-def init_agent_client(agent_name: str) -> KnowledgeAgentRetrievalClient:
-    """
-    Create KnowledgeAgentRetrievalClient.
-    Only API Key authentication is supported for agentic retrieval (see Azure docs).
-    """
-    cred = _search_credential()   # Always AzureKeyCredential
-    return KnowledgeAgentRetrievalClient(
-        endpoint=env("AZURE_SEARCH_ENDPOINT"),
-        agent_name=agent_name,
-        credential=cred,
-    )
 
 
 def create_agentic_rag_index(index_client: "SearchIndexClient", name: str) -> bool:
@@ -1089,7 +932,7 @@ def agentic_retrieval(agent_name: str, index_name: str, messages: list[dict]) ->
     ka_client = KnowledgeAgentRetrievalClient(
         endpoint=env("AZURE_SEARCH_ENDPOINT"),
         agent_name=agent_name,
-        credential=_search_credential(),
+        credential=get_search_credential(),
     )
     ka_msgs = [
         KnowledgeAgentMessage(
@@ -1315,7 +1158,7 @@ def run_streamlit_ui() -> None:
         st.caption("Change `.env` to add more deployments")
         auth_mode = "Managed Identity (RBAC)" if not os.getenv("AZURE_SEARCH_KEY") else "API Key"
         st.caption(f"🔑 Search auth: {auth_mode}")
-        rbac_flag = _rbac_enabled(env("AZURE_SEARCH_ENDPOINT"))
+        rbac_flag = rbac_enabled(env("AZURE_SEARCH_ENDPOINT"))
         st.caption(f"🔒 RBAC: {'🟢 Enabled' if rbac_flag else '🔴 Disabled'}")
         if not rbac_flag:
             st.warning(
@@ -1335,7 +1178,7 @@ def run_streamlit_ui() -> None:
         chunks_placeholder.caption(f"Chunks sent to LLM: {st.session_state.get('dbg_chunks', 0)}")
 
         if st.button("🔄 Reload .env & restart"):
-            _reload_env_and_restart()
+            reload_env_and_restart()
 
     # ── Tabbed layout ─────────────────────────────────────────────────────
     # Initialize search client for index management
@@ -1693,7 +1536,7 @@ def run_streamlit_ui() -> None:
                     sender = SearchIndexingBufferedSender(
                         endpoint=env("AZURE_SEARCH_ENDPOINT"),
                         index_name=st.session_state.selected_index,
-                        credential=_search_credential(),
+                        credential=get_search_credential(),
                         batch_size=100,
                         auto_flush_interval=5,
                         on_error=_on_error,
