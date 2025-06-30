@@ -78,3 +78,34 @@ secret-log.txt
 
 # Ignore agentic-rag-demo.py secrets
 # (No secrets should be committed)
+
+# Backup directories
+*-backup-*/
+project-backup-*/
+agentic-rag-migration-backup-*/
+
+# Backup files
+*.backup
+*.bak
+*.backup-*
+
+# Debug and test files
+debug_*.py
+test_*.py
+simple_debug_*.py
+
+# Reports and UI directories
+sharepoint_reports/
+ui/
+
+# Config and core files (if they contain sensitive data)
+config.py
+rag_core.py
+rag_prompts.py
+
+# Update and migration files
+update_*.py
+*_MIGRATION_*.md
+*_RECOVERY_*.md
+*_INTEGRATION_*.md
+*_SUCCESS.md
