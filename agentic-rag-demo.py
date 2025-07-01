@@ -60,6 +60,8 @@ from utils.azure_helpers import (
     env
 )
 from core.azure_clients import init_openai, init_search_client, init_agent_client
+# Import services
+from services.index_service import index_service
 # Import document processing functions
 from core.document_processor import (
     embed_text,
@@ -70,6 +72,7 @@ from core.document_processor import (
 )
 # Import UI utilities
 from app.ui.document_processing_info import display_processing_info
+from app.ui.components.index_creation_ui import render_index_creation_tab
 from utils.function_deployment import zip_function_folder
 
 def _st_data_editor(*args, **kwargs):
@@ -583,6 +586,19 @@ def run_streamlit_ui() -> None:
     import json as local_json
     from subprocess import check_output, CalledProcessError
     
+    # Initialize Azure authentication service for private/public resource support
+    try:
+        from services.azure_auth_service import azure_auth_service
+        # Set up all environment variables for backward compatibility
+        azure_auth_service.setup_all_compatibility_env_vars()
+        logging.info("Azure authentication service initialized successfully")
+    except ImportError:
+        # If the service is not available, continue without it
+        logging.warning("Azure authentication service not available, continuing with standard authentication")
+    except Exception as e:
+        logging.error(f"Failed to initialize Azure authentication service: {e}")
+        # Continue execution even if auth service fails
+    
     st.set_page_config(page_title="Agentic RAG Demo", page_icon="📚", layout="wide")
 
     # ── persistent session keys ───────────────────────────────────────────
@@ -719,17 +735,7 @@ def run_streamlit_ui() -> None:
 
     # ─────────────────── Tab 1 – Create Index ────────────────────────────
     with tab_create:
-        health_block()
-        st.header("🆕 Create a New Vector Index")
-        new_index_name = st.text_input("New index name", placeholder="e.g. agentic‑vectors")
-        if st.button("➕ Create new index") and new_index_name:
-            if root_index_client is None:
-                st.error("❌ Search client not available. Check your configuration in the Public Health Check tab.")
-            elif create_agentic_rag_index(root_index_client, new_index_name):
-                st.success(f"Created index '{new_index_name}'")
-                st.session_state.selected_index = new_index_name
-                if new_index_name not in st.session_state.available_indexes:
-                    st.session_state.available_indexes.append(new_index_name)
+        render_index_creation_tab(root_index_client, st.session_state, health_block)
 
     # ─────────────────── Tab 2 – Manage Index ────────────────────────────
     with tab_manage:

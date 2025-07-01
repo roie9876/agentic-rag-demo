@@ -23,6 +23,16 @@ except ImportError:
     sys.path.append(str(Path(__file__).resolve().parent.parent))
     from tools.doc_intelligence import DocumentIntelligenceClient as WorkingDocIntelClient
 
+# Import Azure Authentication Service for unified authentication
+try:
+    from services.azure_auth_service import azure_auth_service
+except ImportError:
+    # Fallback import path
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).resolve().parent.parent))
+    from services.azure_auth_service import azure_auth_service
+
 # Only import Azure Storage for blob operations
 try:
     from azure.storage.blob import BlobServiceClient
@@ -274,7 +284,11 @@ class MultimodalProcessor:
     def __init__(self, doc_intelligence_endpoint=None, doc_intelligence_key=None, 
                  blob_connection_string=None, blob_container=None):
         """Initialize the multimodal processor with Azure service configurations."""
-        # Try multiple environment variable names for Document Intelligence
+        
+        # Set Document Intelligence environment variables for backward compatibility
+        azure_auth_service.set_document_intelligence_env_vars()
+        
+        # Try multiple environment variable names for Document Intelligence (for backward compatibility)
         self.doc_intelligence_endpoint = (
             doc_intelligence_endpoint or 
             os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT") or
@@ -291,6 +305,7 @@ class MultimodalProcessor:
             os.environ.get("AZURE_FORMRECOGNIZER_KEY")
         )
         
+        # Use the legacy approach for backward compatibility, but with auth service fallback
         self.blob_connection_string = blob_connection_string or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
         self.blob_container = blob_container or os.environ.get("AZURE_STORAGE_CONTAINER")
         
@@ -307,8 +322,39 @@ class MultimodalProcessor:
             self.doc_client = None
             logging.warning("Document Intelligence endpoint not provided. Multimodal extraction may be limited.")
         
-        # Initialize Blob Storage client if connection string is available
-        if BLOB_STORAGE_AVAILABLE and self.blob_connection_string and self.blob_container:
+        # Initialize Blob Storage client with enhanced authentication support
+        self._initialize_blob_storage()
+    
+    def _initialize_blob_storage(self):
+        """Initialize blob storage with support for both connection strings and managed identity."""
+        if not BLOB_STORAGE_AVAILABLE:
+            self.blob_service_client = None
+            self.container_client = None
+            logging.warning("Azure Storage SDK not available. Image storage will not be available.")
+            return
+        
+        # First try the azure auth service for unified authentication
+        try:
+            blob_client, container_name = azure_auth_service.create_blob_client_from_env()
+            if blob_client:
+                self.blob_service_client = blob_client
+                self.blob_container = container_name or self.blob_container
+                
+                # Ensure container exists
+                container_client = self.blob_service_client.get_container_client(self.blob_container)
+                try:
+                    if not container_client.exists():
+                        container_client = self.blob_service_client.create_container(self.blob_container)
+                    self.container_client = container_client
+                    logging.info(f"Blob storage initialized successfully with container '{self.blob_container}' (using auth service)")
+                    return
+                except Exception as container_error:
+                    logging.warning(f"Container operations failed with auth service: {container_error}")
+        except Exception as auth_service_error:
+            logging.warning(f"Azure auth service blob initialization failed: {auth_service_error}")
+        
+        # Fallback to legacy connection string approach for backward compatibility
+        if self.blob_connection_string and self.blob_container:
             try:
                 self.blob_service_client = BlobServiceClient.from_connection_string(self.blob_connection_string)
                 # Ensure container exists
@@ -316,18 +362,18 @@ class MultimodalProcessor:
                 if not container_client.exists():
                     container_client = self.blob_service_client.create_container(self.blob_container)
                 self.container_client = container_client
-                logging.info("Blob storage initialized successfully.")
+                logging.info(f"Blob storage initialized successfully with container '{self.blob_container}' (using connection string)")
+                return
             except Exception as e:
-                logging.error(f"Failed to initialize blob container: {str(e)}")
-                self.blob_service_client = None
-                self.container_client = None
-        else:
-            self.blob_service_client = None
-            self.container_client = None
-            if not BLOB_STORAGE_AVAILABLE:
-                logging.warning("Azure Storage SDK not available. Image storage will not be available.")
-            else:
-                logging.warning("Blob storage credentials not provided. Image storage will not be available.")
+                logging.error(f"Failed to initialize blob container with connection string: {str(e)}")
+                # Check if this is a managed identity error
+                if "KeyBasedAuthenticationNotPermitted" in str(e):
+                    logging.info("Storage account requires managed identity authentication. Connection string authentication is disabled.")
+        
+        # If all methods fail, disable blob storage
+        self.blob_service_client = None
+        self.container_client = None
+        logging.warning("Blob storage credentials not available or failed. Image storage will not be available.")
     
     def process_document(self, document_bytes, filename):
         """

@@ -15,6 +15,15 @@ from azure.core.credentials import AzureKeyCredential
 from azure.search.documents.indexes import SearchIndexClient
 from openai import AzureOpenAI
 
+# Import RBAC manager for automated role assignment
+try:
+    import sys
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from services.azure_rbac_manager import AzureRBACManager
+except ImportError as e:
+    logging.warning(f"Could not import AzureRBACManager: {e}")
+    AzureRBACManager = None
+
 
 class HealthChecker:
     """
@@ -220,37 +229,125 @@ class HealthChecker:
         except Exception as e:
             return False, f"❌ Error: {str(e)}"
     
-    def check_all_services(self) -> Tuple[Dict[str, Tuple[bool, str]], bool, Optional[Dict[str, str]]]:
-        """Check health of all services and return summary."""
-        results = {
-            "OpenAI": self.check_openai_health(),
-            "AI Search": self.check_ai_search_health(), 
-            "Document Intelligence": self.check_document_intelligence_health()
-        }
+    def check_rbac_health(self) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+        """
+        Check RBAC configuration for Azure AI Search to Azure OpenAI vectorization.
+        Returns (is_healthy, message, fix_info).
+        """
+        if not AzureRBACManager:
+            return False, "❌ RBAC manager not available", None
+            
+        try:
+            rbac_manager = AzureRBACManager()
+            
+            # Check if this is a private setup that needs RBAC
+            search_endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "").strip()
+            openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT_41", "").strip()
+            if not openai_endpoint:
+                openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
+            
+            if not search_endpoint or not openai_endpoint:
+                return False, "❌ Missing Azure Search or OpenAI endpoint configuration", None
+            
+            # Check if we're using managed identity for search (no API key)
+            search_key = os.getenv("AZURE_SEARCH_KEY", "").strip()
+            if search_key:
+                return True, "✅ Using API key authentication - RBAC not required", None
+            
+            # For managed identity setups, check RBAC
+            status = rbac_manager.check_rbac_status()
+            
+            if status["rbac_configured"]:
+                return True, f"✅ RBAC properly configured - {status['message']}", status
+            else:
+                # RBAC is missing but can be fixed
+                if status["can_fix"]:
+                    return False, f"⚠️ RBAC needs configuration - {status['message']}", status
+                else:
+                    return False, f"❌ RBAC configuration error - {status['message']}", status
+                    
+        except Exception as e:
+            return False, f"❌ Error checking RBAC: {str(e)}", None
+    
+    def check_all_services(self) -> Tuple[Dict[str, Tuple[bool, str]], bool, Dict[str, str]]:
+        """
+        Check all services and return results with troubleshooting information.
+        Returns (results_dict, all_healthy, troubleshooting_dict).
+        """
+        results = {}
+        troubleshooting = {}
         
+        # Check OpenAI service
+        status, message = self.check_openai_health()
+        results["OpenAI"] = (status, message)
+        if not status:
+            troubleshooting["OpenAI"] = """
+            **Common OpenAI Issues:**
+            1. Check AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY environment variables
+            2. Verify your Azure OpenAI resource is deployed and accessible
+            3. Check if you have the correct API version (2024-05-01-preview recommended)
+            4. For managed identity setups, ensure proper role assignments
+            """
+        
+        # Check Azure AI Search service
+        status, message = self.check_ai_search_health()
+        results["Azure AI Search"] = (status, message)
+        if not status:
+            troubleshooting["Azure AI Search"] = """
+            **Common Azure AI Search Issues:**
+            1. Check AZURE_SEARCH_ENDPOINT environment variable
+            2. For API key auth: Set AZURE_SEARCH_KEY
+            3. For managed identity: Ensure your app has proper permissions
+            4. Verify the search service is running and accessible
+            """
+        
+        # Check Document Intelligence service
+        status, message = self.check_document_intelligence_health()
+        results["Document Intelligence"] = (status, message)
+        if not status:
+            troubleshooting["Document Intelligence"] = """
+            **Common Document Intelligence Issues:**
+            1. Check DOCUMENT_INTEL_ENDPOINT or AZURE_FORMREC_ENDPOINT environment variables
+            2. For API key auth: Set DOCUMENT_INTEL_KEY or AZURE_FORMREC_KEY
+            3. For managed identity: Ensure proper role assignments
+            4. Verify your Document Intelligence resource supports your required features
+            """
+        
+        # Check RBAC configuration (only for managed identity setups)
+        search_key = os.getenv("AZURE_SEARCH_KEY", "").strip()
+        if not search_key:  # Only check RBAC for managed identity setups
+            status, message, rbac_info = self.check_rbac_health()
+            results["RBAC Configuration"] = (status, message)
+            if not status:
+                troubleshooting["RBAC Configuration"] = """
+                **RBAC Configuration Issues:**
+                1. Azure AI Search needs roles to access Azure OpenAI in private mode
+                2. Required roles: "Cognitive Services OpenAI User", "Azure AI Developer", "Reader"
+                3. Use the automatic fix button below or assign roles manually
+                4. Ensure Azure AI Search has managed identity enabled
+                """
+        
+        # Determine overall health
         all_healthy = all(status for status, _ in results.values())
         
-        # Add troubleshooting info for failed services
-        troubleshooting_info = {}
-        if not results["OpenAI"][0]:
-            troubleshooting_info["OpenAI"] = (
-                "Check that your OpenAI environment variables are set correctly:\n"
-                "- Either AZURE_OPENAI_ENDPOINT or AZURE_OPENAI_ENDPOINT_41 should be set\n"
-                "- AZURE_OPENAI_KEY should be set\n"
-                "- Your app is using AZURE_OPENAI_ENDPOINT_41, ensure the health check can access it\n"
-                "- Verify your network connection and firewall settings\n"
-                "- Check the API version matches what your endpoint supports\n\n"
-                "The app will use the suffix (_41, _4o) endpoints if available, falling back to the base variables."
-            )
-        if not results["AI Search"][0]:
-            troubleshooting_info["AI Search"] = (
-                "Check that AZURE_SEARCH_ENDPOINT is set correctly. "
-                "If using API key authentication, ensure AZURE_SEARCH_KEY is set."
-            )
-        if not results["Document Intelligence"][0]:
-            troubleshooting_info["Document Intelligence"] = (
-                "Check that DOCUMENT_INTEL_ENDPOINT/DOCUMENT_INTEL_KEY or the legacy "
-                "AZURE_FORMREC_SERVICE/AZURE_FORMREC_KEY environment variables are set correctly."
-            )
-        
-        return results, all_healthy, troubleshooting_info if troubleshooting_info else None
+        return results, all_healthy, troubleshooting
+
+    def fix_rbac_health(self) -> Tuple[bool, str]:
+        """
+        Automatically fix RBAC configuration issues.
+        Returns (success, message).
+        """
+        if not AzureRBACManager:
+            return False, "❌ RBAC manager not available"
+            
+        try:
+            rbac_manager = AzureRBACManager()
+            success, message = rbac_manager.setup_search_to_openai_rbac()
+            
+            if success:
+                return True, f"✅ RBAC configuration fixed - {message}"
+            else:
+                return False, f"❌ Failed to fix RBAC - {message}"
+                
+        except Exception as e:
+            return False, f"❌ Error fixing RBAC: {str(e)}"

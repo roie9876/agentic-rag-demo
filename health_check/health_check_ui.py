@@ -76,6 +76,10 @@ class HealthCheckUI:
                 with st.expander(f"Troubleshooting steps for {service_name}", expanded=True):
                     st.info(troubleshooting[service_name])
                     
+                    # For RBAC Configuration, add fix button
+                    if service_name == "RBAC Configuration":
+                        self._render_rbac_fix_section()
+                    
                     # For OpenAI specifically, add environment variable inspection
                     if service_name == "OpenAI":
                         self._render_openai_env_vars()
@@ -594,3 +598,76 @@ class HealthCheckUI:
                 st.code(guidance['sample_env_content'], language='bash')
         else:
             st.info("Click 'Validate .env Configuration' to check your environment setup.")
+    
+    def _render_rbac_fix_section(self):
+        """Render RBAC fix section with automatic remediation."""
+        st.subheader("🔧 Automatic RBAC Fix")
+        
+        st.markdown("""
+        **What this will do:**
+        - Assign **all three required roles** to your Azure AI Search service's managed identity:
+          - **Cognitive Services OpenAI User** (for API access)
+          - **Azure AI Developer** (for advanced AI features)
+          - **Reader** (for resource access)
+        - Enable Azure AI Search to access Azure OpenAI for vectorization in private mode
+        - Use Azure CLI to perform the role assignments
+        """)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🛠️ Fix RBAC Issues", type="primary"):
+                with st.spinner("Fixing RBAC configuration..."):
+                    success, message = self.health_checker.fix_rbac_health()
+                    
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.info("💡 **Next step:** Run the health check again to verify the fix.")
+                        # Clear health results to force re-check
+                        if 'health_results' in st.session_state:
+                            del st.session_state['health_results']
+                    else:
+                        st.error(f"❌ {message}")
+                        st.info("💡 **Manual fix:** You may need to assign the roles manually using the Azure portal or CLI.")
+        
+        with col2:
+            if st.button("ℹ️ Show Manual Instructions"):
+                st.info("""
+                **Manual RBAC setup (all three roles required):**
+                
+                1. Find your Azure AI Search service name
+                2. Find your Azure OpenAI resource name  
+                3. Run these Azure CLI commands:
+                
+                ```bash
+                # Get the Search service principal ID
+                SEARCH_PRINCIPAL_ID=$(az search service show \\
+                  --name YOUR_SEARCH_SERVICE \\
+                  --resource-group YOUR_RG \\
+                  --query identity.principalId -o tsv)
+                
+                # Create OpenAI resource scope
+                OPENAI_SCOPE="/subscriptions/YOUR_SUB/resourceGroups/YOUR_RG/providers/Microsoft.CognitiveServices/accounts/YOUR_OPENAI"
+                
+                # Assign all three required roles
+                az role assignment create \\
+                  --assignee-object-id $SEARCH_PRINCIPAL_ID \\
+                  --assignee-principal-type ServicePrincipal \\
+                  --role "Cognitive Services OpenAI User" \\
+                  --scope $OPENAI_SCOPE
+                
+                az role assignment create \\
+                  --assignee-object-id $SEARCH_PRINCIPAL_ID \\
+                  --assignee-principal-type ServicePrincipal \\
+                  --role "Azure AI Developer" \\
+                  --scope $OPENAI_SCOPE
+                
+                az role assignment create \\
+                  --assignee-object-id $SEARCH_PRINCIPAL_ID \\
+                  --assignee-principal-type ServicePrincipal \\
+                  --role "Reader" \\
+                  --scope $OPENAI_SCOPE
+                ```
+                
+                Replace YOUR_SEARCH_SERVICE, YOUR_RG, YOUR_SUB, and YOUR_OPENAI with your actual values.
+                """)
