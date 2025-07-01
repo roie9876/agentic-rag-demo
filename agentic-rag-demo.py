@@ -614,7 +614,16 @@ def run_streamlit_ui() -> None:
     with st.sidebar:
         st.header("⚙️ Model: GPT‑4.1")
         model_choice = "41"
-        oai_client, chat_params = init_openai(model_choice)
+        try:
+            oai_client, chat_params = init_openai(model_choice)
+        except ValueError as e:
+            st.warning(f"⚠️ OpenAI configuration missing: {e}")
+            st.info("Configure your OpenAI endpoint in the Public Health Check tab.")
+            oai_client, chat_params = None, {"model": "gpt-4", "temperature": 0, "max_tokens": 80000}
+        except Exception as e:
+            st.error(f"⚠️ OpenAI client initialization failed: {e}")
+            st.info("Some features may not work. Check the Public Health Check tab for details.")
+            oai_client, chat_params = None, {"model": "gpt-4", "temperature": 0, "max_tokens": 80000}
 
         st.caption("Change `.env` to add more deployments")
         auth_mode = "Managed Identity (RBAC)" if not os.getenv("AZURE_SEARCH_KEY") else "API Key"
@@ -643,10 +652,20 @@ def run_streamlit_ui() -> None:
 
     # ── Tabbed layout ─────────────────────────────────────────────────────
     # Initialize search client for index management
-    _, root_index_client = init_search_client()
+    try:
+        _, root_index_client = init_search_client()
+    except ValueError as e:
+        st.warning(f"⚠️ Search configuration missing: {e}")
+        st.info("Configure your Search endpoint in the Public Health Check tab.")
+        root_index_client = None
+    except Exception as e:
+        st.error(f"⚠️ Search client initialization failed: {e}")
+        st.info("Index management features may not work. Check the Public Health Check tab for details.")
+        root_index_client = None
     
-    tab_health, tab_create, tab_manage, tab_sharepoint, tab_test, tab_cfg, tab_ai, tab_studio2foundry = st.tabs([
-        "🩺 Health Check",
+    tab_health, tab_private_health, tab_create, tab_manage, tab_sharepoint, tab_test, tab_cfg, tab_ai, tab_studio2foundry = st.tabs([
+        "🩺 Public Health Check",
+        "🔒 Private Health Check", 
         "1️⃣ Create Index",
         "2️⃣ Manage Index",
         "📁 SharePoint Index",
@@ -656,11 +675,42 @@ def run_streamlit_ui() -> None:
         "🏭 Studio2Foundry"
     ])
 
-    # Health Check Tab
+    # Public Health Check Tab (renamed from Health Check)
     with tab_health:
         # Initialize and render health check UI
         health_ui = HealthCheckUI()
         health_ui.render_health_check_tab()
+
+    # Private Health Check Tab (new dedicated tab)
+    with tab_private_health:
+        st.header("🔒 Private Endpoint Health Check")
+        
+        try:
+            # Initialize private endpoint health check UI
+            from health_check.private_endpoint_health_ui import PrivateEndpointHealthCheckUI
+            private_health_ui = PrivateEndpointHealthCheckUI()
+            
+            # Render the private endpoint health check interface
+            private_health_ui.render_private_endpoint_health_tab()
+            
+        except Exception as e:
+            st.error(f"❌ Error loading Private Health Check: {str(e)}")
+            st.write("**Debug Information:**")
+            st.code(str(e))
+            
+            # Show basic troubleshooting
+            st.subheader("🔧 Troubleshooting")
+            st.markdown("""
+            **Common Issues:**
+            1. **Missing .env configuration** - Ensure all required environment variables are set
+            2. **Azure authentication** - Check that managed identity or API keys are configured
+            3. **Private endpoint connectivity** - Verify DNS resolution and network access
+            
+            **Quick Fixes:**
+            - Restart the Streamlit app: `streamlit run agentic-rag-demo.py`
+            - Check your .env file for missing variables
+            - Verify Azure resource permissions and RBAC roles
+            """)
 
     # Show warnings if health check not passed (optional, non-blocking)
     def health_block():
@@ -673,7 +723,9 @@ def run_streamlit_ui() -> None:
         st.header("🆕 Create a New Vector Index")
         new_index_name = st.text_input("New index name", placeholder="e.g. agentic‑vectors")
         if st.button("➕ Create new index") and new_index_name:
-            if create_agentic_rag_index(root_index_client, new_index_name):
+            if root_index_client is None:
+                st.error("❌ Search client not available. Check your configuration in the Public Health Check tab.")
+            elif create_agentic_rag_index(root_index_client, new_index_name):
                 st.success(f"Created index '{new_index_name}'")
                 st.session_state.selected_index = new_index_name
                 if new_index_name not in st.session_state.available_indexes:
@@ -685,7 +737,15 @@ def run_streamlit_ui() -> None:
         st.header("📂 Manage Existing Index")
 
         # refresh list each render
-        st.session_state.available_indexes = [idx.name for idx in root_index_client.list_indexes()]
+        if root_index_client is not None:
+            try:
+                st.session_state.available_indexes = [idx.name for idx in root_index_client.list_indexes()]
+            except Exception as e:
+                st.error(f"❌ Failed to list indexes: {e}")
+                st.session_state.available_indexes = []
+        else:
+            st.error("❌ Search client not available. Check your configuration in the Public Health Check tab.")
+            st.session_state.available_indexes = []
 
         existing = st.selectbox(
             "Existing indexes",
@@ -703,19 +763,22 @@ def run_streamlit_ui() -> None:
         if st.session_state.selected_index:
             st.warning(f"Selected index: **{st.session_state.selected_index}**")
             if st.button("🗑️ Delete selected index"):
-                try:
-                    idx_name = st.session_state.selected_index
-                    agent_name = f"{idx_name}-agent"
+                if root_index_client is None:
+                    st.error("❌ Search client not available. Check your configuration in the Public Health Check tab.")
+                else:
                     try:
-                        root_index_client.delete_agent(agent_name)
-                    except Exception:
-                        pass
-                    root_index_client.delete_index(idx_name)
-                    st.session_state.available_indexes.remove(idx_name)
-                    st.session_state.selected_index = None
-                    st.success(f"Deleted index **{idx_name}** and its agent.")
-                except Exception as ex:
-                    st.error(f"Failed to delete index: {ex}")
+                        idx_name = st.session_state.selected_index
+                        agent_name = f"{idx_name}-agent"
+                        try:
+                            root_index_client.delete_agent(agent_name)
+                        except Exception:
+                            pass
+                        root_index_client.delete_index(idx_name)
+                        st.session_state.available_indexes.remove(idx_name)
+                        st.session_state.selected_index = None
+                        st.success(f"Deleted index **{idx_name}** and its agent.")
+                    except Exception as ex:
+                        st.error(f"Failed to delete index: {ex}")
 
         st.divider()
         
@@ -735,8 +798,12 @@ def run_streamlit_ui() -> None:
                 
                 try:
                     # Try to get current agent configuration
-                    current_agent = root_index_client.get_agent(agent_name)
-                    agent_exists = True
+                    if root_index_client is not None:
+                        current_agent = root_index_client.get_agent(agent_name)
+                        agent_exists = True
+                    else:
+                        st.error("❌ Search client not available. Cannot check agent configuration.")
+                        agent_exists = False
                     
                     # Extract current configuration values with safe defaults
                     current_config = {
@@ -887,10 +954,13 @@ def run_streamlit_ui() -> None:
                             ),
                         )
                         
-                        root_index_client.create_or_update_agent(agent)
-                        
-                        action = "Updated" if agent_exists else "Created"
-                        st.success(f"✅ {action} agent `{agent_name}` successfully!")
+                        if root_index_client is not None:
+                            root_index_client.create_or_update_agent(agent)
+                            
+                            action = "Updated" if agent_exists else "Created"
+                            st.success(f"✅ {action} agent `{agent_name}` successfully!")
+                        else:
+                            st.error("❌ Search client not available. Cannot create/update agent.")
                         st.info(f"📋 Configuration: Max Output: {new_max_output_size}, Reranker: {new_reranker_threshold}, Max Docs: {new_max_docs_for_reranker}, Model: {new_model}")
                         
                         # Force a rerun to refresh the current config display
@@ -905,8 +975,11 @@ def run_streamlit_ui() -> None:
                 
                 if delete_agent_button and agent_exists:
                     try:
-                        root_index_client.delete_agent(agent_name)
-                        st.success(f"✅ Deleted agent `{agent_name}` successfully!")
+                        if root_index_client is not None:
+                            root_index_client.delete_agent(agent_name)
+                            st.success(f"✅ Deleted agent `{agent_name}` successfully!")
+                        else:
+                            st.error("❌ Search client not available. Cannot delete agent.")
                         
                         # Force a rerun to refresh the display
                         if hasattr(st, "rerun"):

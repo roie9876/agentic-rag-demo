@@ -10,6 +10,7 @@ import streamlit as st
 import subprocess
 import json
 from .health_checker import HealthChecker
+from .private_endpoint_health_ui import PrivateEndpointHealthCheckUI
 
 
 class HealthCheckUI:
@@ -20,10 +21,13 @@ class HealthCheckUI:
     def __init__(self):
         """Initialize the health check UI."""
         self.health_checker = HealthChecker()
+        self.private_endpoint_ui = PrivateEndpointHealthCheckUI()
     
     def render_health_check_tab(self):
-        """Render the complete health check tab."""
-        st.header("🔐 Login & Health Check")
+        """Render the public health check tab (renamed from complete health check tab)."""
+        st.header("🩺 Public Health Check & Login")
+        
+        st.info("💡 **Note**: For private endpoint health checks, use the dedicated **🔒 Private Health Check** tab.")
         
         # Login Section
         self._render_login_section()
@@ -44,6 +48,10 @@ class HealthCheckUI:
             self._render_health_results()
         else:
             st.info("Run a health check before using other tabs.")
+        
+        # Add environment configuration validation section
+        st.divider()
+        self._render_environment_validation_section()
         
         # Add role configuration section
         st.divider()
@@ -523,3 +531,66 @@ class HealthCheckUI:
         - Ensure RBAC roles are assigned before removing API keys
         - Test each service after switching authentication methods
         """)
+
+    def _render_environment_validation_section(self):
+        """Render environment configuration validation section."""
+        st.subheader("🔧 Environment Configuration Validation")
+        
+        if st.button("🔍 Validate .env Configuration"):
+            with st.spinner("Validating environment configuration..."):
+                # Import and use the validation from private endpoint health checker
+                from .private_endpoint_health_checker import PrivateEndpointHealthChecker
+                
+                validator = PrivateEndpointHealthChecker()
+                validation_result = validator.validate_env_configuration()
+                guidance = validator.generate_env_guidance(validation_result)
+                
+                # Store results in session state
+                st.session_state['env_validation_result'] = validation_result
+                st.session_state['env_guidance'] = guidance
+        
+        # Display validation results if available
+        if 'env_validation_result' in st.session_state:
+            validation_result = st.session_state['env_validation_result']
+            guidance = st.session_state['env_guidance']
+            
+            # Show overall status
+            if validation_result['is_configuration_complete']:
+                st.success("✅ Environment configuration is complete!")
+            else:
+                st.warning(f"⚠️ Environment configuration needs attention: {len(validation_result['missing_required'])} required variables missing")
+            
+            # Show summary stats
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Present Variables", len(validation_result['present_vars']))
+            with col2:
+                st.metric("Missing Required", len(validation_result['missing_required']))
+            with col3:
+                st.metric("Authentication Method", validation_result['auth_method'].replace('_', ' ').title())
+            
+            # Show guidance message
+            st.markdown(guidance['guidance_message'])
+            
+            # Show missing variables if any
+            if validation_result['missing_required']:
+                with st.expander("❌ Missing Required Variables", expanded=True):
+                    for var in validation_result['missing_required']:
+                        var_def = validation_result['var_definitions'][var]
+                        st.markdown(f"**`{var}`** - {var_def['description']}")
+                        st.code(f"Example: {var}={var_def['example']}")
+            
+            # Show authentication recommendations
+            with st.expander("🔐 Authentication Methods", expanded=False):
+                for method, details in guidance['auth_recommendations'].items():
+                    status = "✅ Recommended" if details['recommended'] else "ℹ️ Available"
+                    st.markdown(f"**{method.replace('_', ' ').title()}** - {status}")
+                    st.markdown(f"- {details['description']}")
+                    st.markdown(f"- Setup: {details['setup_required']}")
+                    st.markdown("")
+            
+            # Show sample .env content
+            with st.expander("📄 Sample .env File Content", expanded=False):
+                st.code(guidance['sample_env_content'], language='bash')
+        else:
+            st.info("Click 'Validate .env Configuration' to check your environment setup.")
