@@ -100,26 +100,114 @@ def load_function_settings(
         cfg = wcli.web_apps.list_application_settings(resource_group, function_name)
         raw = cfg.properties or {}
         
+        # Debug: Show what we loaded from Azure
+        print(f"DEBUG: Loaded {len(raw)} settings from Azure Function App")
+        
         # Merge precedence: Function settings ← .env values (1‑to‑1)
         param_vals = raw.copy()
-        param_vals.update(env_vars)
+        
+        # Map .env values to Function App setting names
+        env_to_function_mapping = {
+            "INDEX_NAME": "INDEX_NAME",
+            "AGENT_NAME": "AGENT_NAME",
+            "AZURE_SEARCH_ENDPOINT": "SERVICE_NAME",  # Special handling needed
+            "AZURE_OPENAI_ENDPOINT": "OPENAI_ENDPOINT",
+            "AZURE_OPENAI_ENDPOINT_41": "OPENAI_ENDPOINT",  # Support _41 suffix (preferred)
+            "AZURE_OPENAI_DEPLOYMENT": "OPENAI_DEPLOYMENT", 
+            "AZURE_OPENAI_DEPLOYMENT_41": "OPENAI_DEPLOYMENT",  # Support _41 suffix (preferred)
+            "AZURE_OPENAI_CHAT_DEPLOYMENT": "OPENAI_DEPLOYMENT",  # Fallback for compatibility
+            "AZURE_OPENAI_API_VERSION": "API_VERSION",
+            "API_VERSION": "API_VERSION",  # Direct mapping
+            "MAX_OUTPUT_SIZE": "MAX_OUTPUT_SIZE",
+            "RERANKER_THRESHOLD": "RERANKER_THRESHOLD", 
+            "TOP_K": "TOP_K",
+            "debug": "debug",
+            "includesrc": "includesrc",
+            # Legacy keys (optional for fallback compatibility)
+            "AZURE_OPENAI_KEY": "OPENAI_KEY",
+            "AZURE_OPENAI_KEY_41": "OPENAI_KEY",  # Support _41 suffix
+            "AZURE_SEARCH_KEY": "SEARCH_API_KEY"
+        }
+        
+        # Apply .env values to function settings (prioritize _41 variants and override empty values)
+        for env_key, func_key in env_to_function_mapping.items():
+            if env_key in env_vars and env_vars[env_key]:
+                if func_key == "SERVICE_NAME" and env_vars[env_key]:
+                    # Extract service name from AZURE_SEARCH_ENDPOINT
+                    import re
+                    match = re.search(r'https://([^.]+)\.search\.windows\.net', env_vars[env_key])
+                    if match:
+                        param_vals[func_key] = match.group(1)
+                        print(f"DEBUG: Mapped {env_key} -> {func_key}: {match.group(1)}")
+                else:
+                    # Update if:
+                    # 1. Key doesn't exist in function app
+                    # 2. Key exists but is empty/None in function app
+                    # 3. This is a _41 variant (preferred)
+                    current_value = param_vals.get(func_key, "")
+                    should_update = (
+                        func_key not in param_vals or 
+                        not current_value or 
+                        current_value.strip() == "" or
+                        env_key.endswith('_41')
+                    )
+                    
+                    if should_update:
+                        param_vals[func_key] = env_vars[env_key]
+                        print(f"DEBUG: Mapped {env_key} -> {func_key}: {env_vars[env_key][:20]}... (was: '{current_value}')")
+        
+        # Apply direct env_vars that are already in function format (passed from UI)
+        for key, value in env_vars.items():
+            if key not in env_to_function_mapping.values() and value:
+                current_value = param_vals.get(key, "")
+                # Override if empty or doesn't exist
+                if not current_value or current_value.strip() == "":
+                    param_vals[key] = value
+                    print(f"DEBUG: Direct mapping: {key}: {value[:20]}... (was: '{current_value}')")
+        
+        # Debug: Show final merged values
+        print(f"DEBUG: Final merged settings count: {len(param_vals)}")
+        print(f"DEBUG: Key presence check - SERVICE_NAME: {'SERVICE_NAME' in param_vals}, INDEX_NAME: {'INDEX_NAME' in param_vals}")
+        print(f"DEBUG: Key presence check - OPENAI_DEPLOYMENT: {'OPENAI_DEPLOYMENT' in param_vals}, OPENAI_ENDPOINT: {'OPENAI_ENDPOINT' in param_vals}")
         
         REQUIRED_KEYS = [
-            "AGENT_FUNC_KEY", "AGENT_NAME", "API_VERSION",
-            "APPLICATIONINSIGHTS_CONNECTION_STRING",
-            "AZURE_OPENAI_API_VERSION", "AzureWebJobsStorage", "debug",
-            "DEPLOYMENT_STORAGE_CONNECTION_STRING", "includesrc",
-            "INDEX_NAME", "MAX_OUTPUT_SIZE",
-            "OPENAI_DEPLOYMENT", "OPENAI_ENDPOINT", "OPENAI_KEY",
-            "RERANKER_THRESHOLD", "SEARCH_API_KEY",
-            "SERVICE_NAME"
+            # Core function settings (managed identity)
+            "SERVICE_NAME", "AGENT_NAME", "INDEX_NAME", 
+            "OPENAI_ENDPOINT", "OPENAI_DEPLOYMENT", 
+            "API_VERSION", "RERANKER_THRESHOLD", "MAX_OUTPUT_SIZE",
+            
+            # Optional function settings
+            "includesrc", "debug", "TOP_K",
+            
+            # Azure Functions infrastructure
+            "APPLICATIONINSIGHTS_CONNECTION_STRING", "AzureWebJobsStorage",
+            "DEPLOYMENT_STORAGE_CONNECTION_STRING",
+            
+            # Optional legacy keys for fallback compatibility
+            "OPENAI_KEY", "SEARCH_API_KEY",
+            
+            # Function-specific key
+            "AGENT_FUNC_KEY"
         ]
         
+        # Ensure all required keys exist (set empty if missing)
         for k in REQUIRED_KEYS:
             param_vals.setdefault(k, "")
-            
-        rows = [{"key": k, "value": mask_sensitive_value(str(param_vals[k]))} for k in REQUIRED_KEYS]
+        
+        # Create DataFrame with ALL param_vals keys (prioritize required keys first)
+        all_keys = list(REQUIRED_KEYS)
+        
+        # Add any additional keys from param_vals that aren't in REQUIRED_KEYS
+        for key in sorted(param_vals.keys()):
+            if key not in all_keys:
+                all_keys.append(key)
+        
+        # Create rows for all keys
+        rows = [{"key": k, "value": mask_sensitive_value(str(param_vals[k]))} for k in all_keys]
         df = pd.DataFrame(rows)
+        
+        print(f"DEBUG: Created DataFrame with {len(rows)} rows")
+        print(f"DEBUG: Keys in DataFrame: {[row['key'] for row in rows[:10]]}")  # Show first 10
         
         return True, df, raw, ""
     except Exception as err:
@@ -156,9 +244,28 @@ def push_function_settings(
             k = str(row["key"]).strip()
             v = str(row["value"]).strip()
             # If the cell still shows masked dots, keep original
-            if v == "••••••" and k in new_props:
+            if v == "••••••" and k in original_raw:
                 continue
             new_props[k] = v
+        
+        # Ensure required settings are present for managed identity
+        required_for_function = {
+            "SERVICE_NAME": "",
+            "AGENT_NAME": "",
+            "OPENAI_ENDPOINT": "",
+            "OPENAI_DEPLOYMENT": "",
+            "API_VERSION": "2025-05-01-preview",
+            "INDEX_NAME": "",
+            "RERANKER_THRESHOLD": "2.0",
+            "MAX_OUTPUT_SIZE": "16000",
+            "includesrc": "true",
+            "debug": "false"
+        }
+        
+        # Add any missing required settings with defaults
+        for key, default_value in required_for_function.items():
+            if key not in new_props:
+                new_props[key] = default_value
             
         # Update in Azure
         wcli.web_apps.update_application_settings(

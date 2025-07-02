@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-agent.py  –  Minimal CLI tester for an Azure AI Search *Knowledge‑Agent*
+agent.py  –  Minimal CLI tester for an Azure AI Search *Knowledge‑Agent*
 using the new May‑2025 REST routes (`:retrieve` / `:responses`).
 
 USAGE
@@ -17,7 +17,6 @@ The script:
 """
 
 import json
-import logging
 import re
 import shlex
 import subprocess
@@ -32,31 +31,34 @@ load_dotenv()  # Load environment variables from .env file if present
 import requests
 from openai import AzureOpenAI
 import os
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from azure.identity import DefaultAzureCredential
 from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 
-# Legacy API keys (optional fallback for development/testing)
-SEARCH_API_KEY = os.getenv("SEARCH_API_KEY")  
-OPENAI_KEY = os.getenv("OPENAI_KEY")         
-
-MAX_OUTPUT_SIZE = int(os.getenv("MAX_OUTPUT_SIZE", "16000"))   
-TOP_K_DEFAULT   = int(os.getenv("TOP_K", "50"))        
+SEARCH_API_KEY = os.getenv("SEARCH_API_KEY")  # ← new optional var
+MAX_OUTPUT_SIZE = int(os.getenv("MAX_OUTPUT_SIZE", "16000"))   # ← new
+TOP_K_DEFAULT   = int(os.getenv("TOP_K", "50"))        # ← NEW default
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ====== EDIT THESE CONSTANTS ==================================================
 SERVICE_NAME = os.getenv("SERVICE_NAME")
 AGENT_NAME   = os.getenv("AGENT_NAME")
-API_VERSION = os.getenv("API_VERSION", "2025-05-01-preview")  
+API_VERSION = os.getenv("API_VERSION", "2025-05-01-preview")  # default kept for convenience
 # ============================================================================
 
-DEFAULT_AGENT = AGENT_NAME   
+DEFAULT_AGENT = AGENT_NAME   # keep env value as default
 
-# Build endpoint (retrieve returns the individual chunks)
-# FIXED: Use correct URL format per Microsoft docs: agents('agentName') instead of agents/agentName
+# ----- remove the import-time check ---------------------------------
+# missing = [n for n in ("SERVICE_NAME", "AGENT_NAME") if not globals()[n] or "<" in globals()[n]]
+# if missing:
+#     raise RuntimeError(...)
+# --------------------------------------------------------------------
+
+
+# Build endpoint  (retrieve returns the individual chunks)
 ENDPOINT = (
     f"https://{SERVICE_NAME}.search.windows.net"
-    f"/agents('{AGENT_NAME}')/retrieve"
+    f"/agents/{AGENT_NAME}/retrieve"
     f"?api-version={API_VERSION}"
 )
 
@@ -73,68 +75,40 @@ def get_bearer_token() -> Optional[str]:
 
 def _validate_env() -> None:
     """Raise if critical vars not set; called at run-time."""
-    logging.info("=== VALIDATING ENVIRONMENT ===")
-    logging.info(f"SERVICE_NAME from globals: {globals().get('SERVICE_NAME', 'NOT FOUND')}")
-    logging.info(f"AGENT_NAME from globals: {globals().get('AGENT_NAME', 'NOT FOUND')}")
-    logging.info(f"SERVICE_NAME from os.getenv: {os.getenv('SERVICE_NAME', 'NOT SET')}")
-    logging.info(f"AGENT_NAME from os.getenv: {os.getenv('AGENT_NAME', 'NOT SET')}")
-    
     missing = [
         n for n in ("SERVICE_NAME", "AGENT_NAME")
         if not globals()[n] or "<" in globals()[n]
     ]
     if missing:
-        logging.error(f"Missing environment variables: {missing}")
         raise RuntimeError(
             "Environment variables not set: "
             + ", ".join(missing)
             + ". Edit local.settings.json or export them in your shell."
         )
-    logging.info("Environment validation passed")
 
 
 def _build_search_headers() -> dict[str, str]:
     """
-    Determine auth header for Azure AI Search:
-      • Prefer Managed Identity (bearer token) for production
-      • Fall back to SEARCH_API_KEY if provided (for development/testing)
+    Determine auth header:
+      • use SEARCH_API_KEY if provided
+      • else use bearer token from Managed Identity
     """
-    # Try managed identity first (recommended for production)
+    if SEARCH_API_KEY:
+        return {"api-key": SEARCH_API_KEY, "Content-Type": "application/json"}
+
     token = get_bearer_token()
     if token:
-        logging.info("Using managed identity for Azure AI Search")
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-    # Fall back to API key if managed identity is not available
-    if SEARCH_API_KEY:
-        logging.info("Using API key for Azure AI Search (fallback)")
-        return {"api-key": SEARCH_API_KEY, "Content-Type": "application/json"}
 
     raise RuntimeError(
         "No Search authentication available. "
-        "Either assign a Managed Identity to the Function App with proper RBAC roles, "
-        "or set SEARCH_API_KEY for development/testing."
+        "Set SEARCH_API_KEY or assign a Managed Identity to the Function App."
     )
 
 
 def _search_client(index_name: str) -> SearchClient:
-    """Return a SearchClient for *index_name* using managed identity or API key fallback."""
-    # Prefer managed identity for production
-    try:
-        cred = DefaultAzureCredential()
-        # Test the credential by attempting to get a token
-        cred.get_token("https://search.azure.com/.default")
-        logging.info("Using managed identity for Azure AI Search client")
-    except Exception:
-        if SEARCH_API_KEY:
-            cred = AzureKeyCredential(SEARCH_API_KEY)
-            logging.info("Using API key for Azure AI Search client (fallback)")
-        else:
-            raise RuntimeError(
-                "No valid credentials available for Azure AI Search. "
-                "Configure managed identity with proper RBAC or set SEARCH_API_KEY."
-            )
-    
+    """Return a SearchClient for *index_name* using the same auth method as queries."""
+    cred = AzureKeyCredential(SEARCH_API_KEY) if SEARCH_API_KEY else DefaultAzureCredential()
     return SearchClient(
         endpoint=f"https://{SERVICE_NAME}.search.windows.net",
         index_name=index_name,
@@ -146,42 +120,22 @@ INDEX_NAME          = os.getenv("INDEX_NAME", "agentic-rag")
 RERANKER_THRESHOLD  = float(os.getenv("RERANKER_THRESHOLD", "1"))
 
 # ---------------------------------------------------------------------------
-# Azure OpenAI client setup with managed identity support
+# ⬇⬇⬇  NEW: lightweight summarizer so /retrieve results can be merged locally
 try:
-    # Get OpenAI configuration from environment
+    # Expect these env‑vars when running in Azure Functions
     OPENAI_ENDPOINT    = os.getenv("OPENAI_ENDPOINT")
-    OPENAI_DEPLOYMENT  = os.getenv("OPENAI_DEPLOYMENT")  
+    OPENAI_KEY         = os.getenv("OPENAI_KEY")
+    OPENAI_DEPLOYMENT  = os.getenv("OPENAI_DEPLOYMENT")  # model/deployment name
 
-    if OPENAI_ENDPOINT and OPENAI_DEPLOYMENT:
-        # Try managed identity first (recommended for production)
-        try:
-            cred = DefaultAzureCredential()
-            # Test the credential
-            token_provider = get_bearer_token_provider(cred, "https://cognitiveservices.azure.com/.default")
-            
-            _openai_client = AzureOpenAI(
-                azure_ad_token_provider=token_provider,
-                azure_endpoint=OPENAI_ENDPOINT,
-                api_version="2024-02-15-preview",
-            )
-            logging.info("Using managed identity for Azure OpenAI")
-        except Exception as e:
-            # Fall back to API key if managed identity fails
-            if OPENAI_KEY:
-                _openai_client = AzureOpenAI(
-                    api_key=OPENAI_KEY,
-                    azure_endpoint=OPENAI_ENDPOINT,
-                    api_version="2024-02-15-preview",
-                )
-                logging.info("Using API key for Azure OpenAI (fallback)")
-            else:
-                logging.warning(f"Failed to initialize OpenAI with managed identity and no API key available: {e}")
-                _openai_client = None
+    if OPENAI_ENDPOINT and OPENAI_KEY and OPENAI_DEPLOYMENT:
+        _openai_client = AzureOpenAI(
+            api_key=OPENAI_KEY,
+            azure_endpoint=OPENAI_ENDPOINT,
+            api_version="2024-02-15-preview",   # works for both 3.5/4 turbo
+        )
     else:
-        logging.warning("Missing OPENAI_ENDPOINT or OPENAI_DEPLOYMENT environment variables")
         _openai_client = None
-except Exception as e:
-    logging.error(f"Failed to initialize OpenAI client: {e}")
+except Exception:                                # fallback when sdk missing
     _openai_client = None
 
 
@@ -192,7 +146,7 @@ def summarize_with_llm(chunks_text: str, user_q: str) -> str:
     This helper is used only when the Knowledge‑Agent `/retrieve`
     endpoint is called (i.e. when `use_responses=False`).
 
-    • If an Azure OpenAI client is available → ask the LLM
+    • If an Azure OpenAI client is available → ask the LLM
     • Otherwise → fall back to returning the raw chunks.
     """
     if not _openai_client:                       # no credentials / sdk
@@ -238,38 +192,24 @@ def answer_question(
         reranker_threshold: Optional[float] = None,
         agent_name: Optional[str] = None,
         max_output_size: Optional[int] = None,
-        top_k: Optional[int] = None,          
+        top_k: Optional[int] = None,          # ← NEW
         use_responses: bool = False,
         debug: bool = False,
         include_sources: bool = False
 ) -> Union[str, dict]:
-    logging.info("=== ANSWER_QUESTION FUNCTION START ===")
-    logging.info(f"Question: {user_question[:100]}...")
-    logging.info(f"Parameters: index_name={index_name}, agent_name={agent_name}, use_responses={use_responses}")
-    
-    try:
-        logging.info("Validating environment...")
-        _validate_env()
-        logging.info("Environment validation passed")
-        
-        logging.info("Building search headers...")
-        headers = _build_search_headers()
-        logging.info(f"Headers built successfully: {list(headers.keys())}")
-    except Exception as e:
-        logging.error(f"Error in initial setup: {e}")
-        raise
+    _validate_env()
+    headers = _build_search_headers()
 
     idx   = index_name  or INDEX_NAME
     thres = reranker_threshold if reranker_threshold is not None else RERANKER_THRESHOLD
-    agn   = agent_name or DEFAULT_AGENT               
+    agn   = agent_name or DEFAULT_AGENT               # ← pick agent
     max_out = max_output_size or MAX_OUTPUT_SIZE
     tk = top_k if top_k is not None else TOP_K_DEFAULT
 
     route = "responses" if use_responses else "retrieve"
-    # FIXED: Use correct URL format per Microsoft docs: agents('agentName') instead of agents/agentName
     endpoint = (
         f"https://{SERVICE_NAME}.search.windows.net"
-        f"/agents('{agn}')/{route}"
+        f"/agents/{agn}/{route}"
         f"?api-version={API_VERSION}"
     )
 
@@ -302,12 +242,16 @@ def answer_question(
             }
         ]
     }
+    # Top‑level setting for which field the agent should use as citation label
     
+    # Ensure /retrieve returns doc_key so we can look up source_file later
+
     # When we use the /responses route we can request extra metadata so we can
     # map citations back to the original filename or URL.
     if use_responses:
         body["citationFieldName"] = "source_file"
         body["responseFields"] = ["text", "doc_key", "source_file", "url"]
+        # NOTE: maxOutputSize is not a valid parameter for /retrieve API - it's set on the knowledge agent definition
 
     resp = requests.post(endpoint, headers=headers, json=body, timeout=60)
 
@@ -343,10 +287,10 @@ def answer_question(
 
     try:
         # -------- schema-agnostic extraction --------------------------------
-        if "response" in koa:               # ← /responses OR "merged" retrieve
+        if "response" in koa:               # ← /responses OR “merged” retrieve
             json_str = koa["response"][0]["content"][0]["text"]
             try:
-                # If it's a JSON list of chunks → continue below
+                # If it’s a JSON list of chunks → continue below
                 chunks = json.loads(json_str)
             except Exception:
                 # Not JSON → it is already the final answer
@@ -384,7 +328,7 @@ def answer_question(
               1) source_file   (file name when present)
               2) source        (alias field)
               3) url           (last segment of URL)
-              4) filename embedded at start of content, e.g. "[my.pdf] …"
+              4) filename embedded at start of content, e.g. “[my.pdf] …”
               5) fallback      (generic docN)
             """
             if chunk.get("source_file"):
@@ -396,7 +340,7 @@ def answer_question(
             if chunk.get("url"):
                 return Path(chunk["url"]).name or chunk["url"]
 
-            # NEW – parse leading "[filename] …" in the chunk text itself
+            # NEW – parse leading “[filename] …” in the chunk text itself
             txt = chunk.get("content", "")
             if txt.startswith("[") and "]" in txt[:150]:
                 return txt[1:txt.find("]")]

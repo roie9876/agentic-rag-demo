@@ -19,6 +19,33 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     Returns plain-text answer (could be easily switched to JSON).
     """
     logging.info("AgentFunction triggered")
+    
+    # Debug: Log environment variables
+    import os
+    logging.info("=== ENVIRONMENT VARIABLES DEBUG ===")
+    env_vars_to_check = [
+        "SERVICE_NAME", "AGENT_NAME", "API_VERSION", "INDEX_NAME",
+        "OPENAI_ENDPOINT", "OPENAI_DEPLOYMENT", "AZURE_SEARCH_ENDPOINT",
+        "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_DEPLOYMENT", "AZURE_OPENAI_API_VERSION"
+    ]
+    for var in env_vars_to_check:
+        value = os.getenv(var, "NOT SET")
+        # Don't log full keys, just indicate if set
+        if 'KEY' in var or 'SECRET' in var:
+            value = f"[SET: {len(value)} chars]" if value != "NOT SET" else "NOT SET"
+        logging.info(f"  {var}: {value}")
+    logging.info("=== END ENVIRONMENT DEBUG ===")
+    
+    # Debug: Log request details
+    logging.info(f"Request method: {req.method}")
+    logging.info(f"Request URL: {req.url}")
+    logging.info(f"Query params: {dict(req.params)}")
+    
+    try:
+        body = req.get_body().decode('utf-8')
+        logging.info(f"Request body: {body[:200]}..." if len(body) > 200 else f"Request body: {body}")
+    except:
+        logging.info("Could not decode request body")
 
     question = req.route_params.get("question")   # ← 1st priority: path
     if not question:

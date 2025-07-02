@@ -1824,17 +1824,79 @@ def run_streamlit_ui() -> None:
         health_block()
         st.header("⚙️ Azure Function Configuration")
         
-        # Load environment variables
+        # Load environment variables (updated for managed identity)
+        # Map local .env variables to Function App settings
+        local_to_function_mapping = {
+            "INDEX_NAME": "INDEX_NAME",
+            "AGENT_NAME": "AGENT_NAME", 
+            "AZURE_SEARCH_ENDPOINT": "SERVICE_NAME",  # Extract service name from endpoint
+            "AZURE_OPENAI_ENDPOINT": "OPENAI_ENDPOINT",
+            "AZURE_OPENAI_ENDPOINT_41": "OPENAI_ENDPOINT",  # Support _41 suffix (preferred)
+            "AZURE_OPENAI_DEPLOYMENT": "OPENAI_DEPLOYMENT", 
+            "AZURE_OPENAI_DEPLOYMENT_41": "OPENAI_DEPLOYMENT",  # Support _41 suffix (preferred)
+            "AZURE_OPENAI_CHATGPT_DEPLOYMENT": "OPENAI_DEPLOYMENT",  # Alternative deployment name
+            # API_VERSION removed as requested - Azure Function will use default
+            "MAX_OUTPUT_SIZE": "MAX_OUTPUT_SIZE",
+            "RERANKER_THRESHOLD": "RERANKER_THRESHOLD", 
+            "TOP_K": "TOP_K",
+            "debug": "debug",
+            "includesrc": "includesrc",
+            # Legacy keys (optional for development/fallback compatibility)
+            "AZURE_OPENAI_KEY": "OPENAI_KEY",
+            "AZURE_OPENAI_KEY_41": "OPENAI_KEY",  # Support _41 suffix
+            "AZURE_SEARCH_KEY": "SEARCH_API_KEY"
+        }
+        
         env_vars = {}
-        for key in [
-            "INDEX_NAME", "AGENT_NAME", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_KEY",
-            "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_CHAT_DEPLOYMENT",
-            "AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "AZURE_SEARCH_ENDPOINT",
-            "AZURE_SEARCH_KEY"
-        ]:
-            env_vars[key] = os.getenv(key, "")
+        for local_key, function_key in local_to_function_mapping.items():
+            local_value = os.getenv(local_key, "")
+            
+            # Special handling for SERVICE_NAME - extract from AZURE_SEARCH_ENDPOINT
+            if function_key == "SERVICE_NAME" and local_value:
+                # Extract service name from https://service-name.search.windows.net
+                import re
+                match = re.search(r'https://([^.]+)\.search\.windows\.net', local_value)
+                if match:
+                    env_vars[function_key] = match.group(1)
+                else:
+                    env_vars[function_key] = ""
+            else:
+                # Only update if we don't have this function_key already, or if this is a _41 variant (preferred)
+                if function_key not in env_vars or local_key.endswith('_41'):
+                    if local_value:  # Only set if there's a value
+                        env_vars[function_key] = local_value
+        
+        # Set defaults for missing critical values
+        if not env_vars.get("INDEX_NAME") and st.session_state.get("selected_index"):
+            env_vars["INDEX_NAME"] = st.session_state.selected_index
+        
+        # Set default AGENT_NAME based on INDEX_NAME
+        if env_vars.get("INDEX_NAME") and not env_vars.get("AGENT_NAME"):
+            env_vars["AGENT_NAME"] = f"{env_vars['INDEX_NAME']}-agent"
+            
+        # API_VERSION removed as requested - not needed in Function App settings
 
         st.markdown("Configure environment variables for Azure Function deployment.")
+        
+        # Add information about managed identity
+        st.info("💡 **Managed Identity Configuration**: This setup prioritizes managed identity authentication. "
+                "API keys (AZURE_OPENAI_KEY, AZURE_SEARCH_KEY) are optional fallback credentials.")
+        
+        with st.expander("🔧 Managed Identity Setup Guide", expanded=False):
+            st.markdown("""
+            **Prerequisites for Managed Identity:**
+            1. **Function App Identity**: Enable system-assigned managed identity on your Function App
+            2. **RBAC Roles Required**:
+               - **Azure AI Search**: `Search Index Data Contributor` + `Search Service Contributor` 
+               - **Azure OpenAI**: `Cognitive Services OpenAI User`
+            3. **Environment Variables**: Only endpoint URLs and deployment names are required
+            
+            **Benefits:**
+            - ✅ No API keys to manage or rotate
+            - ✅ Enhanced security with Azure RBAC
+            - ✅ Automatic credential management
+            - ✅ Fallback to API keys for development/testing
+            """)
 
         # Index selection for function config
         index_options = st.session_state.get("available_indexes", [])
@@ -1893,13 +1955,42 @@ def run_streamlit_ui() -> None:
                 st.session_state.func_df = pd.DataFrame(columns=["key", "value"])
 
             if st.button("🔄 Load settings"):
-                success, df, raw, error_msg = load_function_settings(rg, app, sub_id, env_vars)
-                if success:
-                    st.session_state.func_raw = raw
-                    st.session_state.func_df = df
-                    st.success(f"Loaded & merged {len(df)} setting(s).")
-                else:
-                    st.error(f"Failed to load: {error_msg}")
+                with st.spinner("Loading Function App settings..."):
+                    success, df, raw, error_msg = load_function_settings(rg, app, sub_id, env_vars)
+                    if success:
+                        st.session_state.func_raw = raw
+                        st.session_state.func_df = df
+                        st.success(f"Loaded & merged {len(df)} setting(s).")
+                        
+                        # Debug information
+                        with st.expander("🔍 Debug: Loaded Settings", expanded=False):
+                            st.write("**Environment variables mapped:**")
+                            for key, value in env_vars.items():
+                                if value:
+                                    display_value = value[:50] + "..." if len(value) > 50 else value
+                                    # Mask sensitive values
+                                    if "key" in key.lower() or "secret" in key.lower():
+                                        display_value = "••••••"
+                                    st.write(f"- `{key}`: {display_value}")
+                            
+                            st.write(f"**Function App settings loaded:** {len(raw)} items")
+                            st.write(f"**Final merged settings:** {len(df)} items")
+                    else:
+                        st.error(f"Failed to load: {error_msg}")
+                        
+                        # Show debug info on failure
+                        st.write("**Debug Information:**")
+                        st.write(f"- Resource Group: `{rg}`")
+                        st.write(f"- Function App: `{app}`") 
+                        st.write(f"- Subscription: `{sub_id}`")
+                        st.write(f"- Environment variables provided: {len([k for k, v in env_vars.items() if v])}")
+                        
+                        # Show available env vars (masked)
+                        with st.expander("Available Environment Variables", expanded=False):
+                            for key, value in env_vars.items():
+                                if value:
+                                    display_value = "••••••" if "key" in key.lower() else value[:30] + "..."
+                                    st.write(f"- `{key}`: {display_value}")
 
         # Show editable table on every render once loaded
         if st.session_state.get("func_df") is not None and not st.session_state.func_df.empty:
