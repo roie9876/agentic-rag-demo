@@ -471,20 +471,145 @@ class AIFoundryHubDeploymentUI:
         # Enhanced Private Endpoint and DNS Configuration for existing resources
         st.markdown("**Network Configuration:**")
         
+        # Check for existing private endpoints if resource ID is provided
+        existing_pe_options = []
+        if resource.existing_resource_id:
+            try:
+                # Get the resource group from the existing resource ID
+                resource_parts = resource.existing_resource_id.split('/')
+                if len(resource_parts) >= 5:
+                    resource_group = resource_parts[4]
+                    
+                    # Get private endpoint suggestions for this resource type
+                    # Map from Azure resource type to simplified type for private endpoint discovery
+                    resource_type_for_pe = None
+                    simplified_type = None
+                    
+                    st.write(f"🔍 DEBUG: Processing resource type: {resource_type}")
+                    
+                    if resource_type == "Microsoft.Search/searchServices":
+                        resource_type_for_pe = "search"
+                        simplified_type = "ai_search"
+                        st.write(f"🔍 DEBUG: Mapped AI Search to: {resource_type_for_pe} -> {simplified_type}")
+                    elif resource_type == "Microsoft.Storage/storageAccounts":
+                        resource_type_for_pe = "storage"
+                        simplified_type = "storage"
+                        st.write(f"🔍 DEBUG: Mapped Storage to: {resource_type_for_pe} -> {simplified_type}")
+                    elif resource_type == "Microsoft.DocumentDB/databaseAccounts":
+                        resource_type_for_pe = "cosmos"
+                        simplified_type = "cosmos_db"
+                        st.write(f"🔍 DEBUG: Mapped Cosmos to: {resource_type_for_pe} -> {simplified_type}")
+                    else:
+                        st.write(f"🔍 DEBUG: No mapping found for resource type: {resource_type}")
+                    
+                    if resource_type_for_pe:
+                        st.write(f"🔍 DEBUG: Calling PE suggestions with: resource_type_for_pe={resource_type_for_pe}, simplified_type={simplified_type}")
+                        
+                        pe_suggestions = self.service.suggest_private_endpoints_for_services(
+                            resource_group=resource_group,
+                            ai_search_id=resource.existing_resource_id if resource_type_for_pe == 'search' else "",
+                            storage_id=resource.existing_resource_id if resource_type_for_pe == 'storage' else "",
+                            cosmos_id=resource.existing_resource_id if resource_type_for_pe == 'cosmos' else ""
+                        )
+                        
+                        st.write(f"🔍 DEBUG: PE suggestions result: {pe_suggestions}")
+                        
+                        # Get suggestions for this resource type
+                        existing_pe_options = pe_suggestions.get(simplified_type, [])
+                        
+                        st.write(f"🔍 DEBUG: Found {len(existing_pe_options)} PE options for {simplified_type}")
+                        for ep in existing_pe_options:
+                            st.write(f"  - {ep['name']}")
+                        
+                        # Also check for exact matches in the resource
+                        specific_endpoints = self.service.get_existing_private_endpoints_for_resource(
+                            resource.existing_resource_id
+                        )
+                        
+                        st.write(f"🔍 DEBUG: Found {len(specific_endpoints)} specific endpoints")
+                        
+                        # Merge and deduplicate
+                        all_endpoints = existing_pe_options + specific_endpoints
+                        seen_names = set()
+                        existing_pe_options = []
+                        for ep in all_endpoints:
+                            if ep['name'] not in seen_names:
+                                existing_pe_options.append(ep)
+                                seen_names.add(ep['name'])
+                        
+                        st.write(f"🔍 DEBUG: Final merged PE options: {len(existing_pe_options)}")
+                    else:
+                        # Unsupported resource type for private endpoint discovery
+                        existing_pe_options = []
+                        st.write(f"🔍 DEBUG: No resource_type_for_pe found, setting empty list")
+                        
+            except Exception as e:
+                logger.warning(f"Could not retrieve private endpoint suggestions: {e}")
+                existing_pe_options = []
+        
         col1, col2 = st.columns(2)
         
         with col1:
-            resource.create_private_endpoint = st.checkbox(
-                "Create Private Endpoint",
-                value=resource.create_private_endpoint,
-                key=f"{resource_type}_create_pe",
-                help="Create a new private endpoint for this existing resource"
+            # Private endpoint configuration
+            pe_option = st.radio(
+                "Private Endpoint Configuration",
+                options=["Use existing private endpoint", "Create new private endpoint", "No private endpoint"],
+                index=1 if resource.create_private_endpoint else 0,
+                key=f"{resource_type}_pe_option",
+                help="Choose how to configure private endpoint access"
             )
             
-            if resource.create_private_endpoint:
-                st.success("✅ Will create private endpoint")
-            else:
-                st.info("ℹ️ Using existing network configuration")
+            if pe_option == "Create new private endpoint":
+                resource.create_private_endpoint = True
+                resource.existing_private_endpoint_name = ""
+                st.success("✅ Will create new private endpoint")
+            elif pe_option == "Use existing private endpoint":
+                resource.create_private_endpoint = False
+                
+                if existing_pe_options:
+                    # Show dropdown with existing private endpoints
+                    pe_display_names = [f"{ep['name']} (subnet: {ep.get('subnet_name', 'Unknown')})" for ep in existing_pe_options]
+                    pe_display_names.insert(0, "Select existing private endpoint...")
+                    
+                    selected_pe_index = st.selectbox(
+                        "Select Existing Private Endpoint",
+                        options=range(len(pe_display_names)),
+                        format_func=lambda x: pe_display_names[x],
+                        key=f"{resource_type}_existing_pe_select",
+                        help="Select an existing private endpoint for this resource"
+                    )
+                    
+                    if selected_pe_index > 0:
+                        selected_pe = existing_pe_options[selected_pe_index - 1]
+                        resource.existing_private_endpoint_name = selected_pe['name']
+                        st.success(f"✅ Selected: {selected_pe['name']}")
+                        
+                        # Show additional info about selected endpoint
+                        st.info(f"📍 Subnet: {selected_pe.get('subnet_name', 'Unknown')}")
+                        if selected_pe.get('connected_resources'):
+                            st.info(f"🔗 Connected to: {', '.join(selected_pe['connected_resources'])}")
+                    else:
+                        resource.existing_private_endpoint_name = ""
+                        st.warning("Please select an existing private endpoint")
+                else:
+                    # No existing private endpoints found - allow manual entry
+                    st.warning(f"No existing private endpoints found for {title}")
+                    resource.existing_private_endpoint_name = st.text_input(
+                        "Private Endpoint Name",
+                        value=getattr(resource, 'existing_private_endpoint_name', ''),
+                        key=f"{resource_type}_pe_name_manual",
+                        help="Enter the name of an existing private endpoint"
+                    )
+                    
+                    if resource.existing_private_endpoint_name:
+                        st.info(f"ℹ️ Will use existing private endpoint: {resource.existing_private_endpoint_name}")
+                    else:
+                        st.info("ℹ️ Enter private endpoint name above")
+                        
+            else:  # No private endpoint
+                resource.create_private_endpoint = False
+                resource.existing_private_endpoint_name = ""
+                st.info("ℹ️ No private endpoint will be configured")
         
         with col2:
             if resource.create_private_endpoint:

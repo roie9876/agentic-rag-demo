@@ -79,6 +79,19 @@ param azureStorageAccountResourceId string = ''
 @description('The Cosmos DB Account full ARM Resource ID. This is an optional field, and if not provided, the resource will be created.')
 param azureCosmosDBAccountResourceId string = ''
 
+// Existing private endpoint names (if they already exist)
+@description('Name of existing AI Search private endpoint (optional - if exists, will be used instead of creating new)')
+param existingAiSearchPrivateEndpointName string = ''
+
+@description('Name of existing Storage Account private endpoint (optional - if exists, will be used instead of creating new)')
+param existingStoragePrivateEndpointName string = ''
+
+@description('Name of existing Cosmos DB private endpoint (optional - if exists, will be used instead of creating new)')
+param existingCosmosDBPrivateEndpointName string = ''
+
+@description('Name of existing AI Services private endpoint (optional - if exists, will be used instead of creating new)')
+param existingAiServicesPrivateEndpointName string = ''
+
 var projectName = toLower('${firstProjectName}${uniqueSuffix}')
 var cosmosDBName = toLower('${aiServices}${uniqueSuffix}cosmosdb')
 var aiSearchName = toLower('${aiServices}${uniqueSuffix}search')
@@ -224,6 +237,11 @@ module privateEndpointAndDNS 'modules-network-secured/private-endpoint-and-dns.b
       aiSearchResourceGroupName: aiSearchServiceResourceGroupName // Resource Group for AI Search Service
       storageAccountResourceGroupName: azureStorageResourceGroupName // Resource Group for Storage Account
       storageAccountSubscriptionId: azureStorageSubscriptionId // Subscription ID for Storage Account
+      // Pass existing private endpoint names
+      existingAiAccountPrivateEndpointName: existingAiServicesPrivateEndpointName
+      existingAiSearchPrivateEndpointName: existingAiSearchPrivateEndpointName
+      existingStoragePrivateEndpointName: existingStoragePrivateEndpointName
+      existingCosmosDBPrivateEndpointName: existingCosmosDBPrivateEndpointName
     }
     dependsOn: [
     aiSearch      // Ensure AI Search exists

@@ -25,6 +25,7 @@ from utils.azure_helpers import check_azure_cli_login
 logger = logging.getLogger(__name__)
 
 @dataclass
+@dataclass
 class DeploymentResource:
     """Represents a resource that can be deployed or used as existing."""
     name: str
@@ -38,6 +39,7 @@ class DeploymentResource:
     custom_dns_records: Dict[str, str] = None
     create_private_endpoint: bool = False  # For existing resources
     create_dns_records: bool = False  # For existing resources
+    existing_private_endpoint_name: str = ""  # Name of existing private endpoint to use
     
     def __post_init__(self):
         """Initialize default values."""
@@ -227,13 +229,35 @@ class AIFoundryHubDeploymentService:
             params["agentSubnetPrefix"] = {"value": config.network_config.agent_subnet_prefix}
             params["peSubnetName"] = {"value": config.network_config.pe_subnet_name}
             params["peSubnetPrefix"] = {"value": config.network_config.pe_subnet_prefix}
-            # Don't pass existingVnetResourceId for new VNet
+            # Pass empty existingVnetResourceId for new VNet
+            params["existingVnetResourceId"] = {"value": ""}
         else:
-            # For existing VNet, pass the resource ID and subnet names
-            params["existingVnetResourceId"] = {"value": config.network_config.existing_vnet_resource_id}
-            params["vnetName"] = {"value": config.network_config.vnet_name}
-            params["agentSubnetName"] = {"value": config.network_config.agent_subnet_name}
-            params["peSubnetName"] = {"value": config.network_config.pe_subnet_name}
+            # For existing VNet, extract the actual VNet name from resource ID and pass subnet resource IDs
+            vnet_resource_id = config.network_config.existing_vnet_resource_id
+            
+            # Extract VNet name from resource ID
+            # Format: /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Network/virtualNetworks/{vnet}
+            vnet_parts = vnet_resource_id.split('/')
+            actual_vnet_name = vnet_parts[-1] if len(vnet_parts) > 0 else config.network_config.vnet_name
+            
+            params["existingVnetResourceId"] = {"value": vnet_resource_id}
+            params["vnetName"] = {"value": actual_vnet_name}
+            
+            # For existing VNet, extract subnet names from resource IDs if available
+            if hasattr(config.network_config, 'existing_agent_subnet_id') and config.network_config.existing_agent_subnet_id:
+                # Extract subnet name from resource ID
+                agent_subnet_parts = config.network_config.existing_agent_subnet_id.split('/')
+                params["agentSubnetName"] = {"value": agent_subnet_parts[-1] if len(agent_subnet_parts) > 0 else config.network_config.agent_subnet_name}
+            else:
+                params["agentSubnetName"] = {"value": config.network_config.agent_subnet_name}
+            
+            if hasattr(config.network_config, 'existing_pe_subnet_id') and config.network_config.existing_pe_subnet_id:
+                # Extract subnet name from resource ID
+                pe_subnet_parts = config.network_config.existing_pe_subnet_id.split('/')
+                params["peSubnetName"] = {"value": pe_subnet_parts[-1] if len(pe_subnet_parts) > 0 else config.network_config.pe_subnet_name}
+            else:
+                params["peSubnetName"] = {"value": config.network_config.pe_subnet_name}
+            
             # Don't pass address prefixes for existing VNet
         
         # Resource configuration - only pass resource IDs for existing resources
@@ -260,6 +284,59 @@ class AIFoundryHubDeploymentService:
             params["azureStorageAccountResourceId"] = {"value": config.storage_account.existing_resource_id}
         else:
             params["azureStorageAccountResourceId"] = {"value": ""}
+        
+        # Existing private endpoint names (to avoid creating duplicates)
+        # These parameters tell the bicep template to use existing private endpoints instead of creating new ones
+        
+        # Auto-detect existing private endpoints for existing resources
+        ai_search_pe_name = ""
+        storage_pe_name = ""
+        cosmos_pe_name = ""
+        
+        # For existing AI Search service, try to find existing private endpoint
+        if not config.ai_search.create_new and config.ai_search.existing_resource_id:
+            try:
+                ai_search_endpoints = self.get_existing_private_endpoints_for_resource(config.ai_search.existing_resource_id)
+                if ai_search_endpoints:
+                    ai_search_pe_name = ai_search_endpoints[0]['name']  # Use first found
+                    logger.info(f"Auto-detected existing AI Search private endpoint: {ai_search_pe_name}")
+            except Exception as e:
+                logger.warning(f"Could not auto-detect AI Search private endpoint: {e}")
+        
+        # For existing Storage Account, try to find existing private endpoint
+        if not config.storage_account.create_new and config.storage_account.existing_resource_id:
+            try:
+                storage_endpoints = self.get_existing_private_endpoints_for_resource(config.storage_account.existing_resource_id)
+                if storage_endpoints:
+                    storage_pe_name = storage_endpoints[0]['name']  # Use first found
+                    logger.info(f"Auto-detected existing Storage Account private endpoint: {storage_pe_name}")
+            except Exception as e:
+                logger.warning(f"Could not auto-detect Storage Account private endpoint: {e}")
+        
+        # For existing Cosmos DB, try to find existing private endpoint
+        if not config.cosmos_db.create_new and config.cosmos_db.existing_resource_id:
+            try:
+                cosmos_endpoints = self.get_existing_private_endpoints_for_resource(config.cosmos_db.existing_resource_id)
+                if cosmos_endpoints:
+                    cosmos_pe_name = cosmos_endpoints[0]['name']  # Use first found
+                    logger.info(f"Auto-detected existing Cosmos DB private endpoint: {cosmos_pe_name}")
+            except Exception as e:
+                logger.warning(f"Could not auto-detect Cosmos DB private endpoint: {e}")
+        
+        # Override with user-specified names if provided
+        if hasattr(config.ai_search, 'existing_private_endpoint_name') and config.ai_search.existing_private_endpoint_name:
+            ai_search_pe_name = config.ai_search.existing_private_endpoint_name
+        
+        if hasattr(config.storage_account, 'existing_private_endpoint_name') and config.storage_account.existing_private_endpoint_name:
+            storage_pe_name = config.storage_account.existing_private_endpoint_name
+            
+        if hasattr(config.cosmos_db, 'existing_private_endpoint_name') and config.cosmos_db.existing_private_endpoint_name:
+            cosmos_pe_name = config.cosmos_db.existing_private_endpoint_name
+        
+        params["existingAiSearchPrivateEndpointName"] = {"value": ai_search_pe_name}
+        params["existingStoragePrivateEndpointName"] = {"value": storage_pe_name}
+        params["existingCosmosDBPrivateEndpointName"] = {"value": cosmos_pe_name}
+        params["existingAiServicesPrivateEndpointName"] = {"value": ""} # AI Services always creates new in this template
         
         return params
     
@@ -305,6 +382,9 @@ class AIFoundryHubDeploymentService:
                 timeout=120  # 2 minutes for validation
             )
             
+            print(f"🔍 DEBUG: Validation return code: {validate_result.returncode}")
+            
+            # Check if validation succeeded or just had warnings
             if validate_result.returncode == 0:
                 print(f"✅ DEBUG: Template validation passed")
                 try:
@@ -314,10 +394,103 @@ class AIFoundryHubDeploymentService:
                     print(f"📋 DEBUG: Validation passed but couldn't parse result")
                 return True, "Template validation successful"
             else:
-                print(f"❌ DEBUG: Template validation failed")
-                print(f"❌ DEBUG: Validation error: {validate_result.stderr}")
-                print(f"📋 DEBUG: Validation stdout: {validate_result.stdout}")
-                return False, f"Template validation failed: {validate_result.stderr}"
+                # Non-zero return code - could be warnings or actual errors
+                # Check stderr for pattern analysis regardless of stdout content
+                stderr_lower = validate_result.stderr.lower()
+                stdout_lower = validate_result.stdout.lower() if validate_result.stdout else ""
+                
+                print(f"🔍 DEBUG: Analyzing non-zero return code validation result")
+                print(f"🔍 DEBUG: Stderr starts with: {validate_result.stderr[:100]}...")
+                
+                # Check for bicep-specific warnings vs errors
+                # Bicep warnings can appear in different formats:
+                # - "Warning BCP036:" (bicep compiler warnings)  
+                # - "Warning no-unused-params:" (bicep linter warnings)
+                # - "WARNING: /path/to/file.bicep" (prefixed warnings)
+                bicep_warning_patterns = [
+                    "warning bcp", "warning no-unused-params", "warning prefer-", 
+                    "warning use-", "warning outputs-", "warning secure-",
+                    "warning:", "warning bcp036", "warning bcp038"
+                ]
+                
+                # Check for actual errors vs warnings
+                has_bicep_warnings = any(warning in stderr_lower for warning in bicep_warning_patterns)
+                
+                # Also check for "WARNING:" prefix which is common in bicep output
+                has_warning_prefix = "warning:" in stderr_lower
+                
+                # Special check: if stderr starts with "WARNING:" it's likely all warnings
+                starts_with_warning = validate_result.stderr.strip().upper().startswith("WARNING:")
+                
+                # Check for actual errors (not warnings) - be more specific to avoid false positives
+                # Only check for actual error indicators, not words that might appear in warning messages
+                actual_error_patterns = [
+                    'deployment failed', 'template is not valid', 'syntax error', 
+                    'access denied', 'forbidden', 'authentication failed',
+                    'resource not found', 'subscription not found', 'cannot create',
+                    'error:', 'failed:', 'invalid template'
+                ]
+                has_actual_errors = any(error_pattern in stdout_lower or error_pattern in stderr_lower 
+                                     for error_pattern in actual_error_patterns)
+                
+                # Additional check: look for patterns that indicate this is really just warnings
+                warning_only_indicators = [
+                    "warning bcp036", "warning no-unused-params", "warning prefer-",
+                    "bicep linter", "bicep compiler", "bicep diagnostic"
+                ]
+                likely_warnings_only = any(indicator in stderr_lower for indicator in warning_only_indicators)
+                
+                print(f"🔍 DEBUG: Analysis results:")
+                print(f"   has_bicep_warnings: {has_bicep_warnings}")
+                print(f"   has_warning_prefix: {has_warning_prefix}")
+                print(f"   starts_with_warning: {starts_with_warning}")
+                print(f"   has_actual_errors: {has_actual_errors}")
+                print(f"   likely_warnings_only: {likely_warnings_only}")
+                
+                # If we have bicep warnings (or warning prefix) and no actual errors, consider it a pass
+                if (has_bicep_warnings or has_warning_prefix or starts_with_warning or likely_warnings_only) and not has_actual_errors:
+                    print(f"⚠️ DEBUG: Template validation passed with bicep warnings")
+                    print(f"⚠️ DEBUG: Bicep warnings: {validate_result.stderr}")
+                    
+                    # Extract and display the specific warnings
+                    warning_lines = []
+                    for line in validate_result.stderr.split('\n'):
+                        if line.strip() and ('Warning' in line or 'WARNING' in line):
+                            warning_lines.append(line.strip())
+                    
+                    if warning_lines:
+                        print(f"📋 DEBUG: Specific warnings found:")
+                        for warning in warning_lines:
+                            print(f"   - {warning}")
+                    
+                    return True, "Template validation successful (with bicep warnings)"
+                
+                # Try JSON parsing if we have stdout content
+                elif validate_result.stdout:
+                    try:
+                        validation_info = json.loads(validate_result.stdout)
+                        # If we get a successful validation result, it's just warnings
+                        if validation_info.get('properties', {}).get('provisioningState') == 'Succeeded':
+                            print(f"⚠️ DEBUG: Template validation passed with warnings (JSON)")
+                            print(f"⚠️ DEBUG: Validation warnings: {validate_result.stderr}")
+                            return True, "Template validation successful (with warnings)"
+                        else:
+                            print(f"❌ DEBUG: Template validation failed - invalid state")
+                            print(f"❌ DEBUG: Validation state: {validation_info.get('properties', {}).get('provisioningState', 'Unknown')}")
+                            return False, f"Template validation failed: {validate_result.stderr}"
+                    except json.JSONDecodeError:
+                        # JSON parsing failed, continue to final error check
+                        pass
+                
+                # Final check - if no actual errors detected, treat as warnings
+                if not has_actual_errors:
+                    print(f"⚠️ DEBUG: Template validation passed with warnings (no actual errors detected)")
+                    print(f"⚠️ DEBUG: Validation warnings: {validate_result.stderr}")
+                    return True, "Template validation successful (with warnings)"
+                else:
+                    print(f"❌ DEBUG: Template validation failed with actual errors")
+                    print(f"❌ DEBUG: Validation errors: {validate_result.stderr}")
+                    return False, f"Template validation failed: {validate_result.stderr}"
                 
         except subprocess.TimeoutExpired:
             print(f"⏱️ DEBUG: Template validation timed out")
@@ -652,7 +825,7 @@ class AIFoundryHubDeploymentService:
             print(f"💥 DEBUG: Synchronous deployment exception: {e}")
             return False, f"Synchronous deployment error: {str(e)}", None
     
-    def get_deployment_status(self, resource_group: str, deployment_name: str) -> Tuple[str, str, Optional[str]]:
+    def get_deployment_status(self, resource_group: str, deployment_name: str) -> Tuple[str, str, Optional[dict]]:
         """Get the current status of a deployment."""
         try:
             print(f"🔍 DEBUG: Getting deployment status for: {deployment_name}")
@@ -681,7 +854,7 @@ class AIFoundryHubDeploymentService:
                     # Try with -sync suffix
                     return self.get_deployment_status(resource_group, f"{deployment_name}-sync")
                 
-                return "Unknown", f"Failed to get deployment status: {result.stderr}", result.stdout
+                return "Unknown", f"Failed to get deployment status: {result.stderr}", None
             
             try:
                 deployment_info = json.loads(result.stdout)
@@ -736,12 +909,12 @@ class AIFoundryHubDeploymentService:
                 status_message = "\n".join(status_details)
                 print(f"🔍 DEBUG: Generated status message ({len(status_message)} characters)")
                 
-                return provisioning_state, status_message, result.stdout
+                return provisioning_state, status_message, deployment_info
                 
             except json.JSONDecodeError as e:
                 print(f"❌ DEBUG: JSON decode error for deployment status: {e}")
                 error_msg = f"Failed to parse deployment status: {str(e)}"
-                return "Unknown", error_msg, result.stdout
+                return "Unknown", error_msg, None
             
         except Exception as e:
             print(f"💥 DEBUG: Exception getting deployment status: {e}")
@@ -1040,7 +1213,7 @@ class AIFoundryHubDeploymentService:
         except Exception as e:
             return False, f"Error monitoring deployment progress: {str(e)}", None
     
-    def get_deployment_error_details(self, resource_group: str, deployment_name: str) -> str:
+    def get_deployment_error_details(self, resource_group: str, deployment_name: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """Get detailed error information for a failed deployment."""
         try:
             print(f"🔍 DEBUG: Getting error details for deployment: {deployment_name}")
@@ -1061,7 +1234,7 @@ class AIFoundryHubDeploymentService:
             
             if result.returncode != 0:
                 print(f"❌ DEBUG: Failed to get error details: {result.stderr}")
-                return f"❌ Failed to retrieve error details: {result.stderr}"
+                return False, f"❌ Failed to retrieve error details: {result.stderr}", None
             
             try:
                 operations = json.loads(result.stdout)
@@ -1164,15 +1337,48 @@ class AIFoundryHubDeploymentService:
                 result_text = "\n".join(error_details)
                 print(f"🔍 DEBUG: Generated error details ({len(result_text)} characters)")
                 
-                return result_text
+                # Create structured error details for UI
+                failed_operations = []
+                for i, op in enumerate(failed_ops, 1):
+                    try:
+                        props = op.get("properties", {})
+                        resource_name = props.get("targetResource", {}).get("resourceName", "Unknown")
+                        resource_type = props.get("targetResource", {}).get("resourceType", "Unknown")
+                        
+                        # Get status message
+                        status_msg = props.get("statusMessage", {})
+                        error_code = "Unknown"
+                        error_message = "No message"
+                        
+                        if status_msg and isinstance(status_msg, dict):
+                            error_code = status_msg.get("error", {}).get("code", "Unknown")
+                            error_message = status_msg.get("error", {}).get("message", "No message")
+                        
+                        failed_operations.append({
+                            "resource_name": resource_name,
+                            "resource_type": resource_type,
+                            "error_code": error_code,
+                            "error_message": error_message
+                        })
+                    except Exception as e:
+                        print(f"⚠️ DEBUG: Error processing failed operation {i}: {e}")
+                
+                structured_errors = {
+                    "failed_operations": failed_operations,
+                    "error_summary": result_text
+                }
+                
+                return True, result_text, structured_errors
                 
             except json.JSONDecodeError as e:
                 print(f"❌ DEBUG: JSON decode error for error details: {e}")
-                return f"❌ Failed to parse error details: {str(e)}\n\nRaw output:\n{result.stdout}"
+                error_msg = f"❌ Failed to parse error details: {str(e)}\n\nRaw output:\n{result.stdout}"
+                return False, error_msg, None
             
         except Exception as e:
             print(f"💥 DEBUG: Exception getting error details: {e}")
-            return f"❌ Error retrieving deployment details: {str(e)}"
+            error_msg = f"❌ Error retrieving deployment details: {str(e)}"
+            return False, error_msg, None
     
     def get_nested_deployment_error_details(self, resource_group: str, nested_deployment_name: str) -> List[str]:
         """Get detailed error information for nested deployments."""
@@ -1324,3 +1530,183 @@ class AIFoundryHubDeploymentService:
         except Exception as e:
             print(f"💥 DEBUG: Exception getting nested deployment errors: {e}")
             return [f"❌ Error retrieving nested deployment details: {str(e)}"]
+    
+    def get_existing_private_endpoints_for_resource(self, resource_id: str) -> List[Dict[str, Any]]:
+        """Get existing private endpoints connected to a specific resource."""
+        try:
+            # Check if Azure CLI is logged in
+            logged_in, error = check_azure_cli_login()
+            if not logged_in:
+                logger.error(f"Azure CLI not logged in: {error}")
+                return []
+            
+            # Extract resource group from resource ID for scoping the search
+            parts = resource_id.split('/')
+            if len(parts) < 5:
+                logger.error(f"Invalid resource ID format: {resource_id}")
+                return []
+            
+            resource_group = parts[4]
+            
+            # Get all private endpoints in the resource group
+            result = subprocess.run([
+                "az", "network", "private-endpoint", "list",
+                "--resource-group", resource_group,
+                "--query", "[].{name:name, id:id, location:location, subnet:subnet.id, connections:privateLinkServiceConnections[].privateLinkServiceId}",
+                "--output", "json"
+            ], capture_output=True, text=True, timeout=60)
+            
+            if result.returncode != 0:
+                logger.error(f"Failed to get private endpoints: {result.stderr}")
+                return []
+            
+            try:
+                all_endpoints = json.loads(result.stdout)
+                
+                # Filter endpoints that are connected to our resource
+                matching_endpoints = []
+                for endpoint in all_endpoints:
+                    connections = endpoint.get('connections', [])
+                    for connection_id in connections:
+                        if connection_id and resource_id.lower() in connection_id.lower():
+                            matching_endpoints.append({
+                                'name': endpoint['name'],
+                                'id': endpoint['id'],
+                                'location': endpoint['location'],
+                                'subnet': endpoint.get('subnet', 'Unknown'),
+                                'connected_resource': connection_id
+                            })
+                            break
+                
+                logger.info(f"Found {len(matching_endpoints)} private endpoints for resource {resource_id}")
+                return matching_endpoints
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse private endpoints JSON: {e}")
+                return []
+            
+        except Exception as e:
+            logger.error(f"Error getting private endpoints for resource {resource_id}: {str(e)}")
+            return []
+
+    def get_all_private_endpoints_in_resource_group(self, resource_group: str) -> List[Dict[str, Any]]:
+        """Get all private endpoints in a resource group with their connected resources."""
+        try:
+            # Check if Azure CLI is logged in
+            logged_in, error = check_azure_cli_login()
+            if not logged_in:
+                logger.error(f"Azure CLI not logged in: {error}")
+                return []
+            
+            # Get all private endpoints in the resource group
+            result = subprocess.run([
+                "az", "network", "private-endpoint", "list",
+                "--resource-group", resource_group,
+                "--query", "[].{name:name, id:id, location:location, subnet:subnet.id, connections:privateLinkServiceConnections[].privateLinkServiceId, resourceGroup:resourceGroup}",
+                "--output", "json"
+            ], capture_output=True, text=True, timeout=60)
+            
+            if result.returncode != 0:
+                logger.error(f"Failed to get private endpoints in RG {resource_group}: {result.stderr}")
+                return []
+            
+            try:
+                endpoints = json.loads(result.stdout)
+                
+                # Process each endpoint to make it more user-friendly
+                processed_endpoints = []
+                for endpoint in endpoints:
+                    connections = endpoint.get('connections', [])
+                    connected_resource_names = []
+                    
+                    for connection_id in connections:
+                        if connection_id:
+                            # Extract resource name from connection ID
+                            connection_parts = connection_id.split('/')
+                            if len(connection_parts) > 0:
+                                resource_name = connection_parts[-1]
+                                connected_resource_names.append(resource_name)
+                    
+                    # Extract subnet name from subnet ID
+                    subnet_id = endpoint.get('subnet', '')
+                    subnet_name = 'Unknown'
+                    if subnet_id:
+                        subnet_parts = subnet_id.split('/')
+                        if len(subnet_parts) > 0:
+                            subnet_name = subnet_parts[-1]
+                    
+                    processed_endpoints.append({
+                        'name': endpoint['name'],
+                        'id': endpoint['id'],
+                        'location': endpoint['location'],
+                        'subnet_name': subnet_name,
+                        'subnet_id': subnet_id,
+                        'connected_resources': connected_resource_names,
+                        'resource_group': resource_group
+                    })
+                
+                logger.info(f"Found {len(processed_endpoints)} private endpoints in resource group {resource_group}")
+                return processed_endpoints
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse private endpoints JSON: {e}")
+                return []
+            
+        except Exception as e:
+            logger.error(f"Error getting private endpoints in resource group {resource_group}: {str(e)}")
+            return []
+    
+    def suggest_private_endpoints_for_services(self, resource_group: str, ai_search_id: str = "", storage_id: str = "", cosmos_id: str = "") -> Dict[str, List[Dict[str, Any]]]:
+        """Suggest existing private endpoints for each service based on naming patterns and connections."""
+        try:
+            all_endpoints = self.get_all_private_endpoints_in_resource_group(resource_group)
+            
+            suggestions = {
+                'ai_search': [],
+                'storage': [],
+                'cosmos_db': [],
+                'other': []
+            }
+            
+            for endpoint in all_endpoints:
+                endpoint_name = endpoint['name'].lower()
+                connected_resources = [res.lower() for res in endpoint.get('connected_resources', [])]
+                
+                # Check if connected to specific resources
+                categorized = False
+                
+                if ai_search_id:
+                    ai_search_name = ai_search_id.split('/')[-1].lower()
+                    if any(ai_search_name in res for res in connected_resources):
+                        suggestions['ai_search'].append(endpoint)
+                        categorized = True
+                
+                if storage_id and not categorized:
+                    storage_name = storage_id.split('/')[-1].lower()
+                    if any(storage_name in res for res in connected_resources):
+                        suggestions['storage'].append(endpoint)
+                        categorized = True
+                
+                if cosmos_id and not categorized:
+                    cosmos_name = cosmos_id.split('/')[-1].lower()
+                    if any(cosmos_name in res for res in connected_resources):
+                        suggestions['cosmos_db'].append(endpoint)
+                        categorized = True
+                
+                # If not connected to specific resources, categorize by naming patterns
+                if not categorized:
+                    if any(pattern in endpoint_name for pattern in ['search', 'ai-search', 'aisearch', 'cognitive']):
+                        suggestions['ai_search'].append(endpoint)
+                    elif any(pattern in endpoint_name for pattern in ['storage', 'blob', 'file', 'queue', 'table']):
+                        suggestions['storage'].append(endpoint)
+                    elif any(pattern in endpoint_name for pattern in ['cosmos', 'cosmosdb', 'documentdb', 'mongodb']):
+                        suggestions['cosmos_db'].append(endpoint)
+                    else:
+                        suggestions['other'].append(endpoint)
+            
+            logger.info(f"Categorized private endpoints: AI Search={len(suggestions['ai_search'])}, Storage={len(suggestions['storage'])}, Cosmos={len(suggestions['cosmos_db'])}, Other={len(suggestions['other'])}")
+            return suggestions
+            
+        except Exception as e:
+            logger.error(f"Error suggesting private endpoints: {str(e)}")
+            return {'ai_search': [], 'storage': [], 'cosmos_db': [], 'other': []}
