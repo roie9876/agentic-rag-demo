@@ -615,6 +615,9 @@ def run_streamlit_ui() -> None:
         "dbg_chunks": 0,
         "raw_index_json": "",  # last raw JSON from retrieval
         "orchestrator_targets": {},  # mapping: orchestrator agent → retrieval agent
+        "discovered_resources": [],  # <-- ensure this is always initialized
+        "selected_resource": None,  # <-- ensure this is always initialized
+        "show_project_creation_error": False,  # <-- for error handling UI
     }.items():
         st.session_state.setdefault(k, default)
 

@@ -6,7 +6,7 @@ Handles RBAC permission checking and assignment for AI Foundry resources.
 
 import json
 import subprocess
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 import logging
 
@@ -154,7 +154,7 @@ class RBACManager:
         
         return assignments
     
-    def generate_rbac_assignment_commands(self, resource_id: str, resource_type: str, missing_permissions: List[Dict]) -> List[str]:
+    def generate_rbac_assignment_commands(self, resource_id: str, resource_type: str, missing_permissions) -> List[str]:
         """Generate Azure CLI commands to assign missing roles."""
         commands = []
         
@@ -163,17 +163,45 @@ class RBACManager:
         
         user_id = self.current_user_info.get('user_id', '')
         
-        for permission in missing_permissions:
-            if permission['status'] == 'missing' and permission['required']:
-                role_name = permission['role_name']
-                
+        # Handle different input formats
+        if isinstance(missing_permissions, dict) and 'missing_required' in missing_permissions:
+            # Legacy format: {'missing_required': ['role1', 'role2']}
+            role_names = missing_permissions['missing_required']
+            for role_name in role_names:
                 command = f"""az role assignment create \\
   --assignee "{user_id}" \\
   --role "{role_name}" \\
   --scope "{resource_id}" \\
   --description "AI Foundry access for {resource_type}"""
-                
                 commands.append(command)
+        elif isinstance(missing_permissions, list):
+            # New format: [{'role_name': 'role1', 'status': 'missing', 'required': True}, ...]
+            for permission in missing_permissions:
+                if isinstance(permission, dict):
+                    if permission.get('status') == 'missing' and permission.get('required', False):
+                        role_name = permission.get('role_name', '')
+                        if role_name:
+                            command = f"""az role assignment create \\
+  --assignee "{user_id}" \\
+  --role "{role_name}" \\
+  --scope "{resource_id}" \\
+  --description "AI Foundry access for {resource_type}"""
+                            commands.append(command)
+                else:
+                    # Handle simple permission objects that just have role_name
+                    if hasattr(permission, 'role_name'):
+                        role_name = permission.role_name
+                    elif isinstance(permission, str):
+                        role_name = permission
+                    else:
+                        continue
+                    
+                    command = f"""az role assignment create \\
+  --assignee "{user_id}" \\
+  --role "{role_name}" \\
+  --scope "{resource_id}" \\
+  --description "AI Foundry access for {resource_type}"""
+                    commands.append(command)
         
         if not commands:
             commands.append("# No missing required permissions found.")
@@ -206,6 +234,22 @@ class RBACManager:
         
         except Exception as e:
             return False, f"Error assigning role: {str(e)}"
+    
+    def assign_multiple_roles(self, resource_id: str, role_names: List[str], assignee: Optional[str] = None) -> List[Tuple[str, bool, str]]:
+        """
+        Assign multiple roles to a user on a resource.
+        Returns a list of (role_name, success, message) tuples.
+        """
+        results = []
+        
+        for role_name in role_names:
+            try:
+                success, message = self.assign_role(resource_id, role_name, assignee)
+                results.append((role_name, success, message))
+            except Exception as e:
+                results.append((role_name, False, f"Error assigning role: {str(e)}"))
+        
+        return results
     
     def check_subscription_permissions(self, subscription_id: str) -> Tuple[bool, List[str]]:
         """Check if user has necessary permissions at subscription level."""
@@ -333,3 +377,70 @@ class RBACManager:
             checks.append(f"⚠️ Could not check CLI extensions: {e}")
         
         return all_passed, checks
+    
+    def validate_user_permissions(self, resource_id: str, resource_type: str) -> Dict[str, Any]:
+        """
+        Validate if the current user has sufficient permissions to assign roles.
+        Returns a dictionary with validation results.
+        """
+        validation_result = {
+            "can_assign_roles": False,
+            "missing_permissions": [],
+            "recommendations": []
+        }
+        
+        try:
+            # Check if user can list role assignments (indicates some level of access)
+            result = subprocess.run([
+                "az", "role", "assignment", "list",
+                "--scope", resource_id,
+                "--output", "json",
+                "--query", "[0]"
+            ], capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0:
+                validation_result["can_assign_roles"] = True
+                validation_result["recommendations"].append("✅ User has sufficient permissions to manage roles")
+            else:
+                validation_result["missing_permissions"].append("Cannot list role assignments")
+                validation_result["recommendations"].append("❌ User may not have sufficient permissions to assign roles")
+                validation_result["recommendations"].append("💡 Try running: az role assignment create --help")
+        
+        except Exception as e:
+            validation_result["missing_permissions"].append(f"Error checking permissions: {str(e)}")
+        
+        return validation_result
+    
+    def get_role_assignment_status(self, resource_id: str, role_names: List[str]) -> Dict[str, bool]:
+        """
+        Check the current assignment status of multiple roles.
+        Returns a dictionary mapping role names to their assignment status.
+        """
+        status_map = {}
+        
+        if not self.current_user_info:
+            return {role: False for role in role_names}
+        
+        user_id = self.current_user_info.get('user_id', '')
+        
+        for role_name in role_names:
+            try:
+                result = subprocess.run([
+                    "az", "role", "assignment", "list",
+                    "--scope", resource_id,
+                    "--assignee", user_id,
+                    "--role", role_name,
+                    "--output", "json"
+                ], capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0:
+                    assignments = json.loads(result.stdout)
+                    status_map[role_name] = len(assignments) > 0
+                else:
+                    status_map[role_name] = False
+                    
+            except Exception as e:
+                logger.error(f"Error checking role assignment for {role_name}: {e}")
+                status_map[role_name] = False
+        
+        return status_map

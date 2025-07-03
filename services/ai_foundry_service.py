@@ -70,14 +70,38 @@ class AIFoundryService:
         self._initialize_credentials()
     
     def _initialize_credentials(self) -> None:
-        """Initialize Azure credentials."""
+        """Initialize Azure credentials with MSI support."""
         try:
-            self.credential = DefaultAzureCredential()
+            # Try DefaultAzureCredential first (includes MSI)
+            self.credential = DefaultAzureCredential(
+                exclude_interactive_browser_credential=True,  # Don't prompt for browser auth
+                exclude_visual_studio_code_credential=True,   # Don't use VS Code auth
+                exclude_azure_powershell_credential=True,     # Don't use PowerShell auth
+                exclude_shared_token_cache_credential=True,   # Don't use shared cache
+                # This will prioritize: MSI -> Azure CLI -> Environment variables
+            )
+            
+            # Also try CLI credential as fallback
             self.cli_credential = AzureCliCredential()
-            # Test credentials
-            self.credential.get_token("https://management.azure.com/.default")
+            
+            # Test MSI credential first
+            try:
+                token = self.credential.get_token("https://management.azure.com/.default")
+                logger.info("Successfully authenticated with DefaultAzureCredential (MSI support)")
+            except Exception as msi_error:
+                logger.warning(f"DefaultAzureCredential failed: {msi_error}")
+                # Fallback to CLI credential
+                try:
+                    token = self.cli_credential.get_token("https://management.azure.com/.default")
+                    self.credential = self.cli_credential
+                    logger.info("Successfully authenticated with AzureCliCredential")
+                except Exception as cli_error:
+                    logger.error(f"Both credential methods failed: MSI={msi_error}, CLI={cli_error}")
+                    raise
+                    
         except Exception as e:
             logger.warning(f"Failed to initialize credentials: {e}")
+            raise
     
     def check_azure_cli_login(self) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Check if Azure CLI is logged in and return account info."""
@@ -177,14 +201,6 @@ class AIFoundryService:
                     logger.info(f"Found AI Foundry Hub: {workspace['name']} with endpoint: {endpoint}")
         except Exception as e:
             logger.error(f"Failed to get AI Foundry Hubs for subscription {subscription_id}: {e}")
-        
-        return hubs
-                        endpoint=endpoint,
-                        resource_id=workspace['id'],
-                        properties=properties
-                    ))
-        except Exception as e:
-            logger.error(f"Failed to get AI Foundry hubs for subscription {subscription_id}: {e}")
         
         return hubs
     
@@ -373,9 +389,6 @@ class AIFoundryService:
                 errors.append(f"No projects found for {hub_obj.name}. Create a project using the interface above.")
         
         return final_projects, errors
-                errors.append(f"No projects found for {resource_obj.name}. Create a project using the interface above.")
-        
-        return final_projects, errors
     
     def _discover_projects_via_ml_api(self, hub: AIFoundryHub) -> Tuple[List[AIFoundryProject], List[str]]:
         """Discover projects using Azure ML API (for AI Foundry Hubs)."""
@@ -431,7 +444,7 @@ class AIFoundryService:
     
     def create_project(self, hub: Union[AIFoundryHub, Dict[str, Any]], project_name: str, description: str = "") -> Tuple[bool, str, Optional[AIFoundryProject]]:
         """
-        Create a new project in an AI Foundry Hub.
+        Create a new project in an AI Foundry Hub with MSI support.
         Only supports AI Foundry Hubs - AI Foundry Accounts are not supported.
         """
         try:
@@ -449,48 +462,300 @@ class AIFoundryService:
             else:
                 hub_obj = hub
             
+            logger.info(f"Creating project '{project_name}' in AI Foundry Hub '{hub_obj.name}' with MSI support")
             return self._create_hub_project(hub_obj, project_name, description)
+            
         except Exception as e:
             error_msg = f"Failed to create project: {str(e)}"
             logger.error(error_msg)
             return False, error_msg, None
-        
-        logger.info(f"Creating project '{project_name}' in AI Foundry account '{account.name}'")
-        logger.info(f"Account resource ID: {account.resource_id}")
-        
-        # Method 1: Use AI Foundry REST API (primary method)
-        try:
-            logger.info("Attempting project creation via AI Foundry REST API...")
-            
-            rest_result = self._create_project_via_rest_api(
-                account, project_name, description
-            )
-            
-            if rest_result[0]:  # Success
-                logger.info(f"Project created successfully via AI Foundry REST API")
-                return rest_result
-            else:
-                logger.warning(f"AI Foundry REST API method failed: {rest_result[1]}")
-                
-        except Exception as e:
-            logger.warning(f"AI Foundry REST API method failed with exception: {str(e)}")
-        
-        # Method 2: Try ARM API as fallback (may work for some account types)
-        try:
+    
     def _create_hub_project(self, hub: AIFoundryHub, project_name: str, description: str) -> Tuple[bool, str, Optional[AIFoundryProject]]:
-        """Create a project in an AI Foundry Hub using Azure ML API."""
+        """Create a project in an AI Foundry Hub using Azure ML API with MSI support."""
         try:
-            logger.info(f"Creating project '{project_name}' in AI Foundry Hub '{hub.name}'")
+            logger.info(f"Creating project '{project_name}' in AI Foundry Hub '{hub.name}' with MSI support")
+            
+            # Check credential type and MSI availability
+            credential_info = self.get_credential_info()
+            logger.info(f"Credential info: {credential_info}")
             
             token = self.credential.get_token("https://management.azure.com/.default")
             headers = {
                 'Authorization': f'Bearer {token.token}',
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'User-Agent': 'agentic-rag-demo/1.0'
             }
             
-            # Create ML workspace (project) that references the hub
+            # Create comprehensive ML workspace (project) payload with all required dependencies
+            # This addresses the "Missing dependent resources in workspace json" error
             project_data = {
                 "location": hub.location,
+                "identity": {
+                    "type": "SystemAssigned"
+                },
+                "properties": {
+                    "friendlyName": project_name,
+                    "description": description,
+                    "hubResourceId": hub.resource_id,
+                    "kind": "Project",
+                    # Essential properties for project creation
+                    "managedNetwork": {
+                        "isolationMode": "Disabled"
+                    },
+                    "publicNetworkAccess": "Enabled",
+                    "hbiWorkspace": False,
+                    "v1LegacyMode": False,
+                    "allowPublicAccessWhenBehindVnet": False,
+                    # Include hub's storage account if available
+                    "storageAccount": hub.properties.get("storageAccount", ""),
+                    "keyVault": hub.properties.get("keyVault", ""),
+                    "applicationInsights": hub.properties.get("applicationInsights", ""),
+                    "containerRegistry": hub.properties.get("containerRegistry", ""),
+                    # Add dependent resources section to prevent "Missing dependent resources" error
+                    "dependentResources": [
+                        {
+                            "resourceId": hub.resource_id,
+                            "resourceType": "Microsoft.MachineLearningServices/workspaces"
+                        }
+                    ]
+                },
+                "tags": {
+                    "createdBy": "agentic-rag-demo",
+                    "msiEnabled": "true",
+                    "parentHub": hub.name,
+                    "projectType": "aiFoundry"
+                }
+            }
+            
+            # Clean up empty strings from dependent resources
+            if not project_data["properties"]["storageAccount"]:
+                project_data["properties"].pop("storageAccount", None)
+            if not project_data["properties"]["keyVault"]:
+                project_data["properties"].pop("keyVault", None)
+            if not project_data["properties"]["applicationInsights"]:
+                project_data["properties"].pop("applicationInsights", None)
+            if not project_data["properties"]["containerRegistry"]:
+                project_data["properties"].pop("containerRegistry", None)
+            
+            # Use the latest stable API version that supports MSI
+            # Note: Using 2024-10-01 which is the latest available version
+            url = f"https://management.azure.com/subscriptions/{hub.subscription_id}/resourceGroups/{hub.resource_group}/providers/Microsoft.MachineLearningServices/workspaces/{project_name}"
+            
+            logger.info(f"Creating project with comprehensive MSI-compatible payload:")
+            logger.info(f"API version: 2024-10-01")
+            logger.info(f"Hub resource ID: {hub.resource_id}")
+            logger.info(f"Project payload keys: {list(project_data.keys())}")
+            logger.info(f"Project properties keys: {list(project_data['properties'].keys())}")
+            
+            response = requests.put(
+                url,
+                headers=headers,
+                params={"api-version": "2024-10-01"},
+                json=project_data,
+                timeout=120  # Increased timeout for MSI configuration
+            )
+            
+            logger.info(f"Project creation response: {response.status_code}")
+            
+            if response.status_code not in [200, 201]:
+                error_response = response.text
+                logger.error(f"Project creation failed with response: {error_response}")
+                
+                # Check for specific error types
+                if "Missing dependent resources in workspace json" in error_response:
+                    logger.error("Dependency error - attempting with minimal payload")
+                    # Try with minimal payload
+                    return self._create_hub_project_minimal(hub, project_name, description)
+                elif "MSI" in error_response or "Managed Service Identity" in error_response:
+                    error_msg = f"MSI-related error during project creation: {error_response}"
+                    logger.error(error_msg)
+                    # Try alternative MSI approach
+                    return self._create_hub_project_alternative_msi(hub, project_name, description)
+                else:
+                    return False, f"Project creation failed: {response.status_code} - {error_response}", None
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Project '{project_name}' created successfully with MSI support")
+                
+                # Return the created project
+                workspace_data = response.json()
+                properties = workspace_data.get('properties', {})
+                
+                project = AIFoundryProject(
+                    name=project_name,
+                    display_name=properties.get('friendlyName', project_name),
+                    description=properties.get('description', description),
+                    location=hub.location,
+                    resource_group=hub.resource_group,
+                    endpoint=properties.get('workspaceUrl', ''),
+                    parent_hub=hub.name,
+                    properties=properties
+                )
+                
+                return True, f"Project '{project_name}' created successfully in Hub '{hub.name}' with MSI support", project
+            else:
+                error_msg = f"Failed to create project: {response.status_code} - {response.text}"
+                logger.error(error_msg)
+                return False, error_msg, None
+                
+        except Exception as e:
+            error_msg = f"Error creating project in Hub with MSI support: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg, None
+    
+    def _create_hub_project_minimal(self, hub: AIFoundryHub, project_name: str, description: str) -> Tuple[bool, str, Optional[AIFoundryProject]]:
+        """Create a project with minimal payload to avoid dependency issues."""
+        try:
+            logger.info(f"Creating project '{project_name}' with minimal payload")
+            
+            token = self.credential.get_token("https://management.azure.com/.default")
+            headers = {
+                'Authorization': f'Bearer {token.token}',
+                'Content-Type': 'application/json',
+                'User-Agent': 'agentic-rag-demo/1.0'
+            }
+            
+            # Minimal payload to avoid dependency issues
+            minimal_payload = {
+                "location": hub.location,
+                "identity": {
+                    "type": "SystemAssigned"
+                },
+                "properties": {
+                    "friendlyName": project_name,
+                    "description": description,
+                    "hubResourceId": hub.resource_id,
+                    "kind": "Project",
+                    "publicNetworkAccess": "Enabled",
+                    "hbiWorkspace": False
+                }
+            }
+            
+            url = f"https://management.azure.com/subscriptions/{hub.subscription_id}/resourceGroups/{hub.resource_group}/providers/Microsoft.MachineLearningServices/workspaces/{project_name}"
+            
+            logger.info(f"Minimal payload: {json.dumps(minimal_payload, indent=2)}")
+            
+            response = requests.put(
+                url,
+                headers=headers,
+                params={"api-version": "2024-10-01"},
+                json=minimal_payload,
+                timeout=120
+            )
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Project '{project_name}' created successfully with minimal payload")
+                
+                workspace_data = response.json()
+                properties = workspace_data.get('properties', {})
+                
+                project = AIFoundryProject(
+                    name=project_name,
+                    display_name=properties.get('friendlyName', project_name),
+                    description=properties.get('description', description),
+                    location=hub.location,
+                    resource_group=hub.resource_group,
+                    endpoint=properties.get('workspaceUrl', ''),
+                    parent_hub=hub.name,
+                    properties=properties
+                )
+                
+                return True, f"Project '{project_name}' created successfully with minimal payload", project
+            else:
+                error_msg = f"Minimal payload creation failed: {response.status_code} - {response.text}"
+                logger.error(error_msg)
+                return False, error_msg, None
+                
+        except Exception as e:
+            error_msg = f"Minimal payload creation failed: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg, None
+    
+    def _create_hub_project_alternative_msi(self, hub: AIFoundryHub, project_name: str, description: str) -> Tuple[bool, str, Optional[AIFoundryProject]]:
+        """Alternative method for creating a project with MSI using Azure CLI approach."""
+        try:
+            logger.info(f"Attempting alternative MSI project creation for '{project_name}' in Hub '{hub.name}'")
+            
+            # Method 1: Try with Azure CLI if available
+            if self.check_azure_cli_login()[0]:
+                logger.info("Attempting project creation via Azure CLI with MSI support...")
+                
+                # Create project using Azure CLI
+                cli_command = [
+                    "az", "ml", "workspace", "create",
+                    "--resource-group", hub.resource_group,
+                    "--name", project_name,
+                    "--location", hub.location,
+                    "--display-name", project_name,
+                    "--description", description,
+                    "--hub-id", hub.resource_id,
+                    "--kind", "project",
+                    "--identity-type", "SystemAssigned",
+                    "--subscription", hub.subscription_id
+                ]
+                
+                try:
+                    result = subprocess.run(
+                        cli_command,
+                        capture_output=True,
+                        text=True,
+                        timeout=180
+                    )
+                    
+                    if result.returncode == 0:
+                        logger.info("Project created successfully via Azure CLI with MSI")
+                        
+                        # Parse the CLI output to create project object
+                        try:
+                            project_data = json.loads(result.stdout)
+                            project = AIFoundryProject(
+                                name=project_name,
+                                display_name=project_data.get('display_name', project_name),
+                                description=project_data.get('description', description),
+                                location=hub.location,
+                                resource_group=hub.resource_group,
+                                endpoint=project_data.get('workspace_url', ''),
+                                parent_hub=hub.name,
+                                properties=project_data
+                            )
+                            return True, f"Project '{project_name}' created successfully via Azure CLI with MSI", project
+                        except json.JSONDecodeError:
+                            # CLI succeeded but couldn't parse output, still consider it success
+                            project = AIFoundryProject(
+                                name=project_name,
+                                display_name=project_name,
+                                description=description,
+                                location=hub.location,
+                                resource_group=hub.resource_group,
+                                endpoint='',
+                                parent_hub=hub.name,
+                                properties={}
+                            )
+                            return True, f"Project '{project_name}' created successfully via Azure CLI with MSI", project
+                    else:
+                        logger.error(f"Azure CLI project creation failed: {result.stderr}")
+                        
+                except subprocess.TimeoutExpired:
+                    logger.error("Azure CLI project creation timed out")
+                except Exception as cli_error:
+                    logger.error(f"Azure CLI project creation failed with exception: {str(cli_error)}")
+            
+            # Method 2: Try with simplified REST API payload
+            logger.info("Attempting simplified REST API approach with MSI...")
+            
+            token = self.credential.get_token("https://management.azure.com/.default")
+            headers = {
+                'Authorization': f'Bearer {token.token}',
+                'Content-Type': 'application/json',
+                'User-Agent': 'agentic-rag-demo/1.0'
+            }
+            
+            # Simplified payload focusing on MSI essentials
+            simple_payload = {
+                "location": hub.location,
+                "identity": {
+                    "type": "SystemAssigned"
+                },
                 "properties": {
                     "friendlyName": project_name,
                     "description": description,
@@ -501,25 +766,26 @@ class AIFoundryService:
             
             url = f"https://management.azure.com/subscriptions/{hub.subscription_id}/resourceGroups/{hub.resource_group}/providers/Microsoft.MachineLearningServices/workspaces/{project_name}"
             
+            logger.info(f"Simplified MSI payload: {json.dumps(simple_payload, indent=2)}")
+            
             response = requests.put(
                 url,
                 headers=headers,
-                params={"api-version": "2024-10-01"},
-                json=project_data,
-                timeout=60
+                params={"api-version": "2024-04-01"},  # Try earlier API version
+                json=simple_payload,
+                timeout=120
             )
             
             if response.status_code in [200, 201]:
-                logger.info(f"Project '{project_name}' created successfully")
+                logger.info(f"Project '{project_name}' created successfully with simplified MSI approach")
                 
-                # Return the created project
                 workspace_data = response.json()
                 properties = workspace_data.get('properties', {})
                 
                 project = AIFoundryProject(
                     name=project_name,
-                    display_name=project_name,
-                    description=description,
+                    display_name=properties.get('friendlyName', project_name),
+                    description=properties.get('description', description),
                     location=hub.location,
                     resource_group=hub.resource_group,
                     endpoint=properties.get('workspaceUrl', ''),
@@ -527,142 +793,79 @@ class AIFoundryService:
                     properties=properties
                 )
                 
-                return True, f"Project '{project_name}' created successfully in Hub '{hub.name}'", project
+                return True, f"Project '{project_name}' created successfully with simplified MSI approach", project
             else:
-                error_msg = f"Failed to create project: {response.status_code} - {response.text}"
+                error_msg = f"Simplified MSI approach failed: {response.status_code} - {response.text}"
                 logger.error(error_msg)
                 return False, error_msg, None
                 
         except Exception as e:
-            error_msg = f"Error creating project in Hub: {str(e)}"
+            error_msg = f"Alternative MSI project creation failed: {str(e)}"
             logger.error(error_msg)
             return False, error_msg, None
-            token = self.credential.get_token("https://management.azure.com/.default")
-            headers = {
-                'Authorization': f'Bearer {token.token}',
-                'Content-Type': 'application/json'
-            }
-            
-            workspace_data = {
-                "kind": "Project",
-                "location": hub.location,
-                "properties": {
-                    "description": description,
-                    "hubResourceId": hub.resource_id,
-                    "displayName": project_name
-                }
-            }
-            
-            url = f"https://management.azure.com/subscriptions/{hub.subscription_id}/resourceGroups/{hub.resource_group}/providers/Microsoft.MachineLearningServices/workspaces/{project_name}"
-            
-            response = requests.put(
-                url,
-                headers=headers,
-                json=workspace_data,
-                params={"api-version": "2024-04-01"},
-                timeout=60
-            )
-            
-            if response.status_code in [200, 201]:
-                workspace_result = response.json()
-                properties = workspace_result.get('properties', {})
-                
-                project = AIFoundryProject(
-                    name=workspace_result['name'],
-                    display_name=properties.get('displayName', project_name),
-                    description=properties.get('description', description),
-                    location=workspace_result['location'],
-                    resource_group=workspace_result['id'].split('/')[4],
-                    endpoint=properties.get('discoveryUrl', '').replace('/discovery', '') if properties.get('discoveryUrl') else '',
-                    parent_resource=hub.name,
-                    properties=properties
-                )
-                return True, "Project created successfully", project
-            else:
-                return False, f"Failed to create project: {response.status_code} - {response.text}", None
-                
-        except Exception as e:
-            return False, f"Failed to create hub project: {str(e)}", None
-    
-    def _create_project_via_rest_api(self, account: AIFoundryResource, project_name: str, description: str) -> Tuple[bool, str, Optional[AIFoundryProject]]:
-        """Create a project using AI Foundry REST API (for AI Foundry accounts)."""
+
+    def check_msi_availability(self) -> Tuple[bool, str]:
+        """Check if Managed Service Identity (MSI) is available and working."""
         try:
-            # Use AI Foundry REST API endpoint - correct format
-            endpoint = f"https://{account.name}.services.ai.azure.com/api/projects"
+            from azure.identity import ManagedIdentityCredential
             
-            # Get token with AI Foundry scope
-            token = self.credential.get_token("https://ai.azure.com/.default")
+            # Try to get a token using MSI directly
+            msi_credential = ManagedIdentityCredential()
+            token = msi_credential.get_token("https://management.azure.com/.default")
             
-            headers = {
-                "Authorization": f"Bearer {token.token}",
-                "Content-Type": "application/json"
-            }
-            
-            payload = {
-                "name": project_name,
-                "description": description or f"Project created programmatically"
-                # Optional: add quota/network settings when API exposes them
-            }
-            
-            logger.info(f"Creating project via AI Foundry REST API: {endpoint}")
-            logger.info(f"Payload: {payload}")
-            
-            # Call the AI Foundry Projects REST API
-            response = requests.post(
-                endpoint,
-                headers=headers,
-                json=payload,
-                params={"api-version": "2025-05-15-preview"},
-                timeout=120
-            )
-            
-            response.raise_for_status()
-            project_data = response.json()
-            
-            logger.info(f"Project created successfully via AI Foundry REST API")
-            logger.info(f"Response: {project_data}")
-            
-            # Create AIFoundryProject object from REST response
-            project = AIFoundryProject(
-                name=project_data.get('name', project_name),
-                display_name=project_data.get('friendlyName', project_name),
-                description=project_data.get('description', description),
-                location=account.location,
-                resource_group=account.resource_group,
-                endpoint=f"https://{account.name}.services.ai.azure.com/projects/{project_name}",
-                parent_resource=account.name,
-                properties=project_data
-            )
-            
-            return True, f"Project '{project_name}' created successfully via AI Foundry REST API", project
-            
-        except requests.exceptions.HTTPError as e:
-            error_msg = f"AI Foundry REST API error: {e.response.status_code} - {e.response.text}"
-            logger.error(error_msg)
-            
-            # Check for specific error conditions
-            if e.response.status_code == 403:
-                error_msg += "\n\nRequired: Project Administrator role (or higher) on the AI Foundry account"
-            elif e.response.status_code == 409:
-                error_msg += f"\n\nProject '{project_name}' may already exist"
+            if token and token.token:
+                return True, f"MSI is available and working. Token expires: {token.expires_on}"
+            else:
+                return False, "MSI credential returned empty token"
                 
-            return False, error_msg, None
-        except requests.exceptions.ConnectionError as e:
-            error_msg = f"Connection error: Cannot reach AI Foundry endpoint {endpoint}. The account may not support the projects API."
-            logger.error(error_msg)
-            return False, error_msg, None
-        except requests.exceptions.Timeout as e:
-            error_msg = f"Timeout error: AI Foundry endpoint {endpoint} did not respond in time"
-            logger.error(error_msg)
-            return False, error_msg, None
         except Exception as e:
-            error_msg = f"AI Foundry REST API method failed: {str(e)}"
-            logger.error(error_msg)
-            return False, error_msg, None
+            return False, f"MSI not available or failed: {str(e)}"
     
-    def _create_project_via_arm_api(self, account: AIFoundryResource, project_name: str, description: str,
-                                   subscription_id: str, resource_group: str) -> Tuple[bool, str, Optional[AIFoundryProject]]:
-        """Create a project using ARM API (fallback method, primarily for ML workspaces)."""
+    def get_credential_info(self) -> Dict[str, Any]:
+        """Get information about the current credential configuration."""
+        credential_info = {
+            "credential_type": type(self.credential).__name__ if self.credential else "None",
+            "msi_available": False,
+            "cli_available": False,
+            "token_working": False
+        }
+        
+        # Check MSI availability
+        msi_available, msi_message = self.check_msi_availability()
+        credential_info["msi_available"] = msi_available
+        credential_info["msi_message"] = msi_message
+        
+        # Check CLI availability
+        cli_available, cli_account = self.check_azure_cli_login()
+        credential_info["cli_available"] = cli_available
+        if cli_account:
+            credential_info["cli_account"] = cli_account.get("user", {}).get("name", "Unknown")
+        
+        # Test current credential
+        if self.credential:
+            try:
+                token = self.credential.get_token("https://management.azure.com/.default")
+                credential_info["token_working"] = bool(token and token.token)
+                credential_info["token_expires"] = str(token.expires_on) if token else "N/A"
+            except Exception as e:
+                credential_info["token_error"] = str(e)
+        
+        return credential_info
+
+    def get_diagnostic_info(self) -> Dict[str, Any]:
+        """Get comprehensive diagnostic information for troubleshooting."""
+        diagnostics = {
+            "credential_info": self.get_credential_info(),
+            "service_methods": [],
+            "api_availability": {},
+            "common_issues": []
+        }
+        
+        # Check available methods
+        methods = [method for method in dir(self) if not method.startswith('__')]
+        diagnostics["service_methods"] = methods
+        
+        # Check API availability
         try:
             token = self.credential.get_token("https://management.azure.com/.default")
             headers = {
@@ -670,71 +873,86 @@ class AIFoundryService:
                 'Content-Type': 'application/json'
             }
             
-            # Create a Machine Learning workspace that works with AI Foundry
-            project_resource_id = f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.MachineLearningServices/workspaces/{project_name}"
-            logger.info(f"Attempting to create project via ARM API: {project_resource_id}")
-            
-            # Enhanced project data with full MSI support and AI Foundry compatibility
-            project_data = {
-                "location": account.location,
-                "properties": {
-                    "friendlyName": project_name,
-                    "description": description,
-                    # Link to the account via storageAccount property
-                    "storageAccount": f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Storage/storageAccounts/{account.name}storage",
-                    "keyVault": f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.KeyVault/vaults/{account.name}kv",
-                    "applicationInsights": f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Insights/components/{account.name}insights",
-                    "publicNetworkAccess": "Enabled",
-                    "managedNetwork": {
-                        "isolationMode": "Disabled"
-                    },
-                    # Enable system managed identity
-                    "systemDatastoresAuthMode": "identity"
-                },
-                "identity": {
-                    "type": "SystemAssigned"
-                },
-                "kind": "Project",
-                "sku": {
-                    "name": "Basic",
-                    "tier": "Basic"
-                }
+            # Test Management API
+            response = requests.get(
+                "https://management.azure.com/subscriptions",
+                headers=headers,
+                params={"api-version": "2020-01-01"},
+                timeout=10
+            )
+            diagnostics["api_availability"]["management_api"] = {
+                "status": response.status_code,
+                "accessible": response.status_code == 200
             }
             
-            # Use Azure Resource Manager API for project creation
-            arm_url = f"https://management.azure.com{project_resource_id}"
-            
-            response = requests.put(
-                arm_url,
-                headers=headers,
-                json=project_data,
-                params={"api-version": "2024-04-01"},
-                timeout=120
-            )
-            
-            if response.status_code in [200, 201, 202]:
-                response_data = response.json()
-                logger.info(f"Project created successfully via ARM API")
-                
-                # Create AIFoundryProject object
-                project = AIFoundryProject(
-                    name=project_name,
-                    display_name=project_name,
-                    description=description,
-                    location=account.location,
-                    resource_group=resource_group,
-                    endpoint=f"https://{project_name}.{account.location}.api.azureml.ms",
-                    parent_resource=account.name,
-                    properties=response_data.get('properties', {})
-                )
-                
-                return True, f"Project '{project_name}' created successfully via ARM API", project
-            else:
-                error_msg = f"ARM API failed: {response.status_code} - {response.text}"
-                logger.error(error_msg)
-                return False, error_msg, None
-                
         except Exception as e:
-            error_msg = f"ARM API method failed: {str(e)}"
-            logger.error(error_msg)
-            return False, error_msg, None
+            diagnostics["api_availability"]["management_api"] = {
+                "status": "error",
+                "error": str(e),
+                "accessible": False
+            }
+        
+        # Check for common issues
+        credential_info = diagnostics["credential_info"]
+        
+        if not credential_info.get("token_working", False):
+            diagnostics["common_issues"].append("Authentication token not working")
+        
+        if not credential_info.get("msi_available", False):
+            diagnostics["common_issues"].append("MSI not available (expected if not running in Azure)")
+        
+        if not credential_info.get("cli_available", False):
+            diagnostics["common_issues"].append("Azure CLI not logged in")
+        
+        if not diagnostics["api_availability"].get("management_api", {}).get("accessible", False):
+            diagnostics["common_issues"].append("Azure Management API not accessible")
+        
+        return diagnostics
+    
+    def validate_hub_for_project_creation(self, hub: Union[AIFoundryHub, Dict[str, Any]]) -> Tuple[bool, List[str], List[str]]:
+        """Validate that a hub is suitable for project creation."""
+        issues = []
+        warnings = []
+        
+        # Convert dict to AIFoundryHub if needed
+        if isinstance(hub, dict):
+            hub_obj = AIFoundryHub(
+                name=hub.get('name', ''),
+                location=hub.get('location', ''),
+                resource_group=hub.get('resource_group', ''),
+                subscription_id=hub.get('subscription_id', ''),
+                endpoint=hub.get('endpoint', ''),
+                resource_id=hub.get('id', ''),
+                properties=hub.get('properties', {})
+            )
+        else:
+            hub_obj = hub
+        
+        # Check required fields
+        if not hub_obj.name:
+            issues.append("Hub name is missing")
+        if not hub_obj.location:
+            issues.append("Hub location is missing")
+        if not hub_obj.resource_group:
+            issues.append("Hub resource group is missing")
+        if not hub_obj.subscription_id:
+            issues.append("Hub subscription ID is missing")
+        if not hub_obj.resource_id:
+            issues.append("Hub resource ID is missing")
+        
+        # Check hub properties
+        if not hub_obj.properties:
+            warnings.append("Hub properties are missing (may cause dependency issues)")
+        else:
+            # Check for essential dependent resources
+            if not hub_obj.properties.get('storageAccount'):
+                warnings.append("Hub storage account not found (may cause dependency issues)")
+            if not hub_obj.properties.get('keyVault'):
+                warnings.append("Hub key vault not found (may cause dependency issues)")
+        
+        # Check if this is actually a hub
+        if hub_obj.properties.get('kind') != 'Hub':
+            issues.append(f"Resource is not a Hub (kind: {hub_obj.properties.get('kind', 'unknown')})")
+        
+        is_valid = len(issues) == 0
+        return is_valid, issues, warnings

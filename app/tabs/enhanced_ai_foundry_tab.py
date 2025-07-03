@@ -15,6 +15,7 @@ import streamlit as st
 import pandas as pd
 from typing import Dict, List, Any, Optional
 import logging
+from datetime import datetime
 
 # Import the actual services that exist
 from services.ai_foundry_discovery import AIFoundryDiscoveryService
@@ -22,6 +23,7 @@ from services.ai_foundry_rbac import AIFoundryRBACService
 from services.ai_foundry_service import AIFoundryService
 from services.ai_foundry_agent_deployment import AIFoundryAgentDeploymentService
 from utils.ai_foundry_helpers import AIFoundryHelper
+from app.components.rbac_help import render_rbac_help_section, render_permission_summary, render_rbac_status_card
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +92,30 @@ def render_enhanced_ai_foundry_tab(
         st.write(f"- AI Foundry Service: {type(ai_foundry_service).__name__}")
         st.write(f"- Deployment Service: {type(deployment_service).__name__}")
         
-        # Check if the create_project method has been updated
+        # Check if the create_project method has been updated for MSI support
         import inspect
         create_project_source = inspect.getsource(ai_foundry_service.create_project)
-        if "management.azure.com" in create_project_source:
+        if "SystemAssigned" in create_project_source and "identity" in create_project_source:
             st.success("✅ Service is using updated MSI-compatible create_project method")
         else:
-            st.error("❌ Service is using old create_project method")
+            st.error("❌ Service is using old create_project method without MSI support")
+        
+        # Display credential information
+        try:
+            credential_info = ai_foundry_service.get_credential_info()
+            st.write("**Credential Information:**")
+            st.write(f"- Credential Type: {credential_info.get('credential_type', 'Unknown')}")
+            st.write(f"- MSI Available: {'✅' if credential_info.get('msi_available') else '❌'} {credential_info.get('msi_message', '')}")
+            st.write(f"- Azure CLI Available: {'✅' if credential_info.get('cli_available') else '❌'}")
+            if credential_info.get('cli_account'):
+                st.write(f"- CLI Account: {credential_info['cli_account']}")
+            st.write(f"- Token Working: {'✅' if credential_info.get('token_working') else '❌'}")
+            if credential_info.get('token_expires'):
+                st.write(f"- Token Expires: {credential_info['token_expires']}")
+            if credential_info.get('token_error'):
+                st.error(f"- Token Error: {credential_info['token_error']}")
+        except Exception as e:
+            st.error(f"Error getting credential info: {str(e)}")
         
         if st.button("🧪 Test Service Method"):
             try:
@@ -109,15 +128,28 @@ def render_enhanced_ai_foundry_tab(
                 st.write("**Method source snippet:**")
                 st.code(source[:500] + "...", language="python")
                 
-                # Check _create_account_project
-                if hasattr(ai_foundry_service, '_create_account_project'):
-                    account_source = inspect.getsource(ai_foundry_service._create_account_project)
-                    if "management.azure.com" in account_source:
-                        st.success("✅ _create_account_project uses management.azure.com")
+                # Check _create_hub_project (this service only supports AI Foundry Hubs)
+                if hasattr(ai_foundry_service, '_create_hub_project'):
+                    hub_source = inspect.getsource(ai_foundry_service._create_hub_project)
+                    if "management.azure.com" in hub_source:
+                        st.success("✅ _create_hub_project uses management.azure.com")
                     else:
-                        st.error("❌ _create_account_project does NOT use management.azure.com")
+                        st.error("❌ _create_hub_project does NOT use management.azure.com")
+                        
+                    # Check for MSI support
+                    if "SystemAssigned" in hub_source:
+                        st.success("✅ _create_hub_project has MSI support")
+                    else:
+                        st.warning("⚠️ _create_hub_project missing MSI support")
                 else:
-                    st.error("❌ _create_account_project method not found")
+                    st.error("❌ _create_hub_project method not found")
+                    
+                # Note: This service only supports AI Foundry Hubs, not Accounts
+                st.info("ℹ️ This service only supports AI Foundry Hubs (not Accounts)")
+                if hasattr(ai_foundry_service, '_create_account_project'):
+                    st.warning("⚠️ Unexpected: _create_account_project method found (should not exist)")
+                else:
+                    st.success("✅ Correctly configured: No _create_account_project method (as expected)")
                 
                 st.success("✅ Service method accessible")
             except Exception as e:
@@ -196,9 +228,14 @@ def render_resource_discovery_section(discovery_service):
     if hasattr(st.session_state, 'discovered_hubs') and st.session_state.discovered_hubs:
         st.markdown("### 📊 Discovered Resources")
         
-        # Separate accounts and hubs
-        accounts = [r for r in st.session_state.discovered_resources if r['type'] == "AI Foundry Account"]
-        hubs = [r for r in st.session_state.discovered_resources if r['type'] == "AI Foundry Hub"]
+        # Use the correct session state variable and format the data properly
+        hubs = st.session_state.discovered_hubs
+        
+        # Also store in discovered_resources for compatibility with other parts of the app
+        st.session_state.discovered_resources = [{'type': 'AI Foundry Hub', **hub} for hub in hubs]
+        
+        # Display hubs (no accounts in hub-only discovery)
+        accounts = []  # Hub-only discovery doesn't include accounts
         
         if accounts:
             st.markdown("#### 🏢 AI Foundry Accounts")
@@ -223,8 +260,8 @@ def render_resource_discovery_section(discovery_service):
                     "Name": hub['name'],
                     "Location": hub['location'],
                     "Resource Group": hub['resource_group'],
-                    "Kind": hub['kind'],
-                    "Endpoint": hub['endpoint'][:50] + "..." if hub['endpoint'] and len(hub['endpoint']) > 50 else hub['endpoint']
+                    "Kind": hub.get('kind', 'Hub'),  # Default to 'Hub' if not specified
+                    "Endpoint": hub['endpoint'][:50] + "..." if hub.get('endpoint') and len(hub['endpoint']) > 50 else hub.get('endpoint', 'N/A')
                 })
             
             df_hubs = pd.DataFrame(hubs_data)
@@ -243,59 +280,72 @@ def render_resource_discovery_section(discovery_service):
             )
             st.session_state.selected_resource = all_resources[selected_idx]
             
-            # Enhanced resource type guidance
+            # Enhanced resource type guidance (only when a resource is selected)
             resource = st.session_state.selected_resource
-            resource_type = resource['resource_type']
-            resource_id = resource.get('id', '')
-            
-            # Determine actual resource capabilities
-            is_cognitive_services = (
-                'CognitiveServices' in resource_type or 
-                'Microsoft.CognitiveServices' in resource_id or
-                resource_type == 'account'
-            )
-            is_ml_workspace = (
-                'MachineLearningServices' in resource_type or
-                'Microsoft.MachineLearningServices' in resource_id or
-                resource_type == 'hub'
-            )
-            
-            if is_cognitive_services:
-                st.info(
-                    f"ℹ️ **Cognitive Services Account Selected:** {resource['name']}\n\n"
-                    "**Capabilities:**\n"
-                    "✅ Provides AI services (OpenAI, Speech, Vision, etc.)\n"
-                    "✅ Can be connected as a resource to projects\n"
-                    "✅ Project creation via Azure CLI (same as Portal)\n"
-                    "⚠️ ARM API may have limitations\n\n"
-                    "**Project creation will attempt multiple methods for best compatibility.**"
+            if resource:  # Check that resource is not None
+                resource_type = resource.get('resource_type', '')
+                resource_id = resource.get('id', '')
+                
+                # Determine actual resource capabilities
+                is_cognitive_services = (
+                    'CognitiveServices' in resource_type or 
+                    'Microsoft.CognitiveServices' in resource_id or
+                    resource_type == 'account'
                 )
-            elif is_ml_workspace:
-                st.success(
-                    f"✅ **AI Foundry Hub Selected:** {resource['name']}\n\n"
-                    "**Capabilities:**\n"
-                    "✅ Can host AI Foundry projects\n"
-                    "✅ Supports programmatic project creation\n"
-                    "✅ Can contain multiple projects and agents\n\n"
-                    "**This resource type supports all AI Foundry operations.**"
+                is_ml_workspace = (
+                    'MachineLearningServices' in resource_type or
+                    'Microsoft.MachineLearningServices' in resource_id or
+                    resource_type == 'hub'
                 )
-            else:
-                st.info(f"📋 **Selected:** {resource['name']} ({resource_type})")
-            
-            # Add resource details in an expander
-            with st.expander(f"📊 Resource Details: {resource['name']}", expanded=False):
-                st.json(resource)
+                
+                if is_cognitive_services:
+                    st.info(
+                        f"ℹ️ **Cognitive Services Account Selected:** {resource.get('name', 'Unknown')}\n\n"
+                        "**Capabilities:**\n"
+                        "✅ Provides AI services (OpenAI, Speech, Vision, etc.)\n"
+                        "✅ Can be connected as a resource to projects\n"
+                        "✅ Project creation via Azure CLI (same as Portal)\n"
+                        "⚠️ ARM API may have limitations\n\n"
+                        "**Project creation will attempt multiple methods for best compatibility.**"
+                    )
+                elif is_ml_workspace:
+                    st.success(
+                        f"✅ **AI Foundry Hub Selected:** {resource.get('name', 'Unknown')}\n\n"
+                        "**Capabilities:**\n"
+                        "✅ Can host AI Foundry projects\n"
+                        "✅ Supports programmatic project creation\n"
+                        "✅ Can contain multiple projects and agents\n\n"
+                        "**This resource type supports all AI Foundry operations.**"
+                    )
+                else:
+                    st.info(f"📋 **Selected:** {resource.get('name', 'Unknown')} ({resource_type})")
+                
+                # Add resource details in an expander
+                with st.expander(f"📊 Resource Details: {resource.get('name', 'Unknown')}", expanded=False):
+                    st.json(resource)
+        else:
+            st.info("ℹ️ No resources found to select for management.")
+    else:
+        # Show message when no resources are discovered yet
+        if hasattr(st.session_state, 'discovered_hubs') and st.session_state.discovered_hubs == []:
+            st.info("🔍 No AI Foundry Hubs found in the last scan. Try scanning again or check your permissions.")
+        elif not hasattr(st.session_state, 'discovered_hubs'):
+            st.info("🔍 Click 'Scan for AI Foundry Hubs' above to discover resources.")
 
 def render_permissions_section(rbac_service):
     """Render the permissions checking section."""
     st.subheader("🔐 Check RBAC Permissions")
     
-    if not hasattr(st.session_state, 'selected_resource'):
+    if not hasattr(st.session_state, 'selected_resource') or st.session_state.selected_resource is None:
         st.info("👆 Please discover and select a resource first in the 'Discover Resources' tab.")
         return
     
     resource = st.session_state.selected_resource
-    st.markdown(f"**Checking permissions for:** {resource['name']} ({resource['resource_type']})")
+    st.markdown(f"**Checking permissions for:** {resource.get('name', 'Unknown')} ({resource.get('resource_type', 'Unknown')})")
+    
+    # Add help section
+    with st.expander("📚 Need Help with RBAC Permissions?", expanded=False):
+        render_rbac_help_section(resource.get('resource_type', 'hub'))
     
     col1, col2 = st.columns([1, 1])
     
@@ -323,6 +373,7 @@ def render_permissions_section(rbac_service):
                     
                     st.session_state.current_permissions = validated_permissions
                     st.session_state.permission_errors = errors
+                    st.session_state.permissions_last_checked = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
                     if errors:
                         for error in errors:
@@ -332,6 +383,7 @@ def render_permissions_section(rbac_service):
                     st.error(f"❌ Unexpected error during permission check: {str(e)}")
                     st.session_state.current_permissions = []
                     st.session_state.permission_errors = [str(e)]
+                    st.session_state.permissions_last_checked = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     with col2:
         if st.button("🛠️ Validate CLI Setup"):
@@ -345,9 +397,18 @@ def render_permissions_section(rbac_service):
     # Display permission results
     if hasattr(st.session_state, 'current_permissions'):
         permissions = st.session_state.current_permissions
+        last_checked = getattr(st.session_state, 'permissions_last_checked', None)
         
         if permissions:
-            st.markdown("### 📋 Permission Status")
+            st.markdown("### � Permission Status")
+            
+            # Show status card
+            render_rbac_status_card(
+                resource.get('name', 'Unknown'),
+                resource.get('resource_type', 'Unknown'),
+                permissions,
+                last_checked
+            )
             
             # Validate permissions structure
             valid_permissions = []
@@ -390,31 +451,177 @@ def render_permissions_section(rbac_service):
                 for perm in missing_required:
                     st.markdown(f"- **{perm['role_name']}**: {perm['description']}")
                 
-                # Generate assignment commands
+                # Add one-click fix button
+                st.markdown("### 🚀 Quick Fix")
+                
+                col1, col2 = st.columns([1, 1])
+                
+                with col1:
+                    if st.button("🔧 Assign Missing Permissions", type="primary", key="assign_permissions_btn"):
+                        # Pre-validate user permissions for role assignment operation
+                        try:
+                            validation = rbac_service.check_required_permissions(
+                                rbac_service.get_current_user_principal_id() or "",
+                                resource['id'], 
+                                'assign_roles'
+                            )
+                            
+                            if 'error' in validation:
+                                st.error(f"❌ **Permission Check Failed:** {validation['error']}")
+                                st.markdown("Cannot determine if you have permissions to assign roles.")
+                                st.markdown("**Try the manual commands below**")
+                                st.code(f"az role assignment create --assignee $USER_PRINCIPAL_ID --role 'User Access Administrator' --scope '{resource['id']}'")
+                                st.markdown("*Replace $USER_PRINCIPAL_ID with your Azure AD user ID*")
+                            elif not validation.get('has_permission', False):
+                                st.error("❌ **Insufficient Permissions to Assign Roles**")
+                                st.markdown("You don't have sufficient permissions to assign roles to this resource.")
+                                st.markdown("**Required roles for assigning permissions:**")
+                                for role in validation.get('required_roles', ['User Access Administrator', 'Owner']):
+                                    st.markdown(f"- {role}")
+                                st.markdown("**Possible solutions:**")
+                                st.markdown("- Ask an administrator to assign the required roles")
+                                st.markdown("- Use the manual commands below")
+                                
+                                # Show manual assignment commands
+                                with st.expander("📋 Manual Role Assignment Commands", expanded=False):
+                                    st.markdown("Run these commands in Azure CLI to assign the missing roles:")
+                                    for perm in missing_required:
+                                        role_name = perm.get('role_name', 'Unknown')
+                                        st.code(f"az role assignment create --assignee $USER_PRINCIPAL_ID --role '{role_name}' --scope '{resource['id']}'")
+                                    st.markdown("*Replace $USER_PRINCIPAL_ID with your Azure AD user ID*")
+                        except Exception as e:
+                            st.error(f"❌ **Permission validation failed:** {str(e)}")
+                            st.markdown("**Use manual commands below:**")
+                            for perm in missing_required:
+                                role_name = perm.get('role_name', 'Unknown')
+                                st.code(f"az role assignment create --assignee $USER_PRINCIPAL_ID --role '{role_name}' --scope '{resource['id']}'")
+                        else:
+                            with st.spinner("Assigning permissions..."):
+                                # Create progress bar
+                                progress_bar = st.progress(0)
+                                status_text = st.empty()
+                                
+                                assign_results = []
+                                all_success = True
+                                total_roles = len(missing_required)
+                                
+                                for i, perm in enumerate(missing_required):
+                                    try:
+                                        # Update progress
+                                        progress = (i + 1) / total_roles
+                                        progress_bar.progress(progress)
+                                        status_text.text(f"Assigning role: {perm['role_name']}")
+                                        
+                                        success, message = rbac_service.assign_role(
+                                            resource['id'],
+                                            perm['role_name']
+                                        )
+                                        
+                                        if success:
+                                            assign_results.append(f"✅ {perm['role_name']}: {message}")
+                                        else:
+                                            assign_results.append(f"❌ {perm['role_name']}: {message}")
+                                            all_success = False
+                                            
+                                    except Exception as e:
+                                        assign_results.append(f"❌ {perm['role_name']}: Error - {str(e)}")
+                                        all_success = False
+                                
+                                # Clear progress indicators
+                                progress_bar.empty()
+                                status_text.empty()
+                                
+                                # Display results
+                                if all_success:
+                                    st.success("🎉 **All permissions assigned successfully!**")
+                                    st.balloons()
+                                    
+                                    # Auto-refresh permissions after successful assignment
+                                    st.session_state.auto_refresh_permissions = True
+                                    
+                                    # Show success message with next steps
+                                    st.info("✨ **Next Steps:**")
+                                    st.markdown("- Permissions may take a few minutes to propagate")
+                                    st.markdown("- Click 'Refresh Permissions' to verify the changes")
+                                    st.markdown("- You can now proceed with project creation and management")
+                                    
+                                else:
+                                    st.warning("⚠️ **Some permissions could not be assigned**")
+                                    st.markdown("**Possible reasons:**")
+                                    st.markdown("- You may not have permission to assign certain roles")
+                                    st.markdown("- The resource may have specific access restrictions")
+                                    st.markdown("- Azure may be experiencing temporary issues")
+                                
+                                # Show detailed results
+                                st.markdown("**Assignment Results:**")
+                                for result in assign_results:
+                                    if result.startswith("✅"):
+                                        st.success(result)
+                                    else:
+                                        st.error(result)
+                                
+                                # Show retry options for failed assignments
+                                failed_assignments = [r for r in assign_results if r.startswith("❌")]
+                                if failed_assignments:
+                                    st.markdown("### 🔄 Retry Options")
+                                    st.markdown("For failed assignments, you can:")
+                                    st.markdown("1. **Wait 5 minutes** - Azure permissions may need time to propagate")
+                                    st.markdown("2. **Contact your administrator** - They may need to assign roles manually")
+                                    st.markdown("3. **Use the manual commands** - See below for Azure CLI commands")
+                
+                with col2:
+                    if st.button("🔄 Refresh Permissions", key="refresh_permissions_btn"):
+                        # Clear current permissions to force re-check
+                        if hasattr(st.session_state, 'current_permissions'):
+                            del st.session_state.current_permissions
+                        st.success("🔄 Permissions cleared. Click 'Check My Permissions' to refresh.")
+                        st.rerun()
+                
+                # Generate assignment commands for manual execution
                 try:
-                    missing_role_names = [p['role_name'] for p in missing_required]
+                    # Extract just the role names from the permission dictionaries
+                    missing_role_names = [perm['role_name'] for perm in missing_required]
                     commands = rbac_service.generate_rbac_assignment_commands(
                         resource['id'],
                         resource['resource_type'],
-                        {'missing_required': missing_role_names}
+                        missing_role_names
                     )
                 except Exception as e:
                     commands = [f"# Error generating commands: {str(e)}"]
                 
                 if commands and commands[0] != "# No missing required permissions found.":
-                    st.markdown("### 🔧 Assignment Commands")
-                    st.markdown("Run these commands to assign missing permissions:")
+                    st.markdown("### 🔧 Manual Assignment Commands")
+                    st.markdown("Alternatively, run these commands manually:")
                     
                     for cmd in commands:
                         st.code(cmd, language="bash")
                     
-                    st.markdown("**Alternative: Manual Assignment**")
+                    st.markdown("**Alternative: Azure Portal**")
                     guide = rbac_service.get_rbac_setup_guide(resource['resource_type'])
                     
                     for step in guide.get('manual_steps', []):
                         st.markdown(f"- {step}")
             else:
                 st.success("✅ **All required permissions are granted!**")
+                
+                # Show summary of granted permissions
+                granted_permissions = [p for p in permissions if p['status'] == 'granted']
+                if granted_permissions:
+                    st.markdown("**Your granted permissions:**")
+                    for perm in granted_permissions:
+                        st.markdown(f"- ✅ **{perm['role_name']}**: {perm['description']}")
+        
+        # Auto-refresh permissions if flag is set
+        if hasattr(st.session_state, 'auto_refresh_permissions') and st.session_state.auto_refresh_permissions:
+            st.session_state.auto_refresh_permissions = False
+            st.info("🔄 Auto-refreshing permissions in 3 seconds...")
+            import time
+            time.sleep(3)
+            
+            # Clear current permissions to force re-check
+            if hasattr(st.session_state, 'current_permissions'):
+                del st.session_state.current_permissions
+            st.rerun()
     
     # Display errors if any
     if hasattr(st.session_state, 'permission_errors') and st.session_state.permission_errors:
@@ -438,7 +645,7 @@ def render_project_management_section(ai_foundry_service):
     with col1:
         if st.button("📋 Load Projects", type="primary"):
             with st.spinner("Loading projects..."):
-                projects, errors = ai_foundry_service.get_projects_for_resource(resource)
+                projects, errors = ai_foundry_service.get_projects_for_hub(resource)
             
             st.session_state.current_projects = projects
             st.session_state.project_errors = errors
@@ -533,21 +740,27 @@ def render_project_management_section(ai_foundry_service):
                         import inspect
                         method_source = inspect.getsource(ai_foundry_service.create_project)
                         
-                        # Check if the service has the updated delegator method
-                        if "_create_account_project" in method_source and "_create_hub_project" in method_source:
-                            st.write("✅ Service has updated create_project delegator method")
+                        # Check if the service has the updated methods (only _create_hub_project is needed)
+                        if "_create_hub_project" in method_source:
+                            st.write("✅ Service has updated create_project method for AI Foundry Hubs")
                             
-                            # Check the actual implementation methods
+                            # Check the actual implementation method
                             try:
-                                account_source = inspect.getsource(ai_foundry_service._create_account_project)
-                                if "management.azure.com" in account_source:
-                                    st.write("✅ _create_account_project uses management.azure.com")
+                                hub_source = inspect.getsource(ai_foundry_service._create_hub_project)
+                                if "management.azure.com" in hub_source:
+                                    st.write("✅ _create_hub_project uses management.azure.com")
                                 else:
-                                    st.write("❌ _create_account_project does NOT use management.azure.com")
+                                    st.write("❌ _create_hub_project does NOT use management.azure.com")
+                                    
+                                # Check for MSI support
+                                if "SystemAssigned" in hub_source:
+                                    st.write("✅ _create_hub_project has MSI support")
+                                else:
+                                    st.write("❌ _create_hub_project missing MSI support")
                             except:
-                                st.write("⚠️ Could not check _create_account_project method")
+                                st.write("⚠️ Could not check _create_hub_project method")
                         else:
-                            st.write("❌ Service has old create_project method")
+                            st.write("❌ Service create_project method missing _create_hub_project")
                             
                         # Show credential type
                         cred_type = type(ai_foundry_service.credential).__name__
@@ -562,11 +775,12 @@ def render_project_management_section(ai_foundry_service):
                         st.success(f"Project '{project_name}' is now available in {resource.get('name', 'the selected resource')}")
                         st.session_state.show_create_project = False
                         # Refresh projects list
-                        projects, _ = ai_foundry_service.get_projects_for_resource(resource)
+                        projects, _ = ai_foundry_service.get_projects_for_hub(resource)
                         st.session_state.current_projects = projects
                         st.rerun()
                     else:
                         st.error(f"❌ **Project Creation Failed**")
+                        st.session_state.show_project_creation_error = True
                         
                         # Enhanced error display with detailed messaging
                         if "does not support programmatic project creation" in message:
@@ -591,6 +805,30 @@ def render_project_management_section(ai_foundry_service):
                                 - **Accounts** = Service endpoints (OpenAI, Speech, etc.)
                                 - **Hubs** = Project hosting environments
                                 """)
+                        elif "Missing dependent resources in workspace json" in message:
+                            st.error("**Root Cause:** Project creation payload missing required dependencies")
+                            
+                            with st.expander("📋 Why this happened & how to fix it", expanded=True):
+                                st.markdown(f"""
+                                **Error Details:**
+                                ```
+                                {message}
+                                ```
+                                
+                                **What happened:**
+                                Azure requires certain dependent resources (like storage accounts, key vaults) to be properly referenced when creating a project. The Hub may be missing these resources or they weren't properly included in the creation request.
+                                
+                                **How to fix it:**
+                                1. **Check Hub Configuration** - Ensure your AI Foundry Hub has all required services
+                                2. **Run Diagnostics** - Use the "Pre-Creation Diagnostics" above to validate the Hub
+                                3. **Try Manual Creation** - Create the project manually in Azure Portal first
+                                4. **Check Hub Permissions** - Ensure you have proper access to the Hub and its resources
+                                
+                                **Technical Details:**
+                                - The Hub needs associated storage account, key vault, and other resources
+                                - These should be automatically configured when the Hub was created
+                                - If missing, the Hub may need to be recreated or manually configured
+                                """)
                         else:
                             # Display the full error message for other types of errors
                             with st.expander("📋 Error Details", expanded=True):
@@ -605,22 +843,52 @@ def render_project_management_section(ai_foundry_service):
                                     - Insufficient permissions on the resource
                                     - Authentication issues with Azure services
                                     """)
+                                elif "400" in message:
+                                    st.markdown("""
+                                    **This is a 400 Bad Request error.**
+                                    
+                                    Common causes:
+                                    - Invalid request payload or parameters
+                                    - Missing required fields in the request
+                                    - Resource name conflicts or naming rules violations
+                                    - Unsupported configuration options
+                                    """)
+                                elif "401" in message or "403" in message:
+                                    st.markdown("""
+                                    **This is an authentication/authorization error.**
+                                    
+                                    Common causes:
+                                    - Insufficient permissions on the target resource
+                                    - Authentication token expired or invalid
+                                    - Missing RBAC roles (try the RBAC section above)
+                                    """)
+                                else:
+                                    st.markdown("""
+                                    **General troubleshooting steps:**
+                                    1. Run the "Pre-Creation Diagnostics" above
+                                    2. Check your Azure permissions
+                                    3. Try creating the project manually in Azure Portal
+                                    4. Verify the Hub is properly configured
+                                    """)
                         
-                        # Add action buttons
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            if st.button("🔄 Try Different Resource"):
-                                st.session_state.show_create_project = False
-                                st.rerun()
-                        with col2:
-                            if st.button("📖 View Documentation"):
-                                st.markdown("[Azure AI Foundry Documentation](https://docs.microsoft.com/azure/ai-services/)")
-                        with col3:
-                            if st.button("🆘 Get Help"):
-                                st.info("Check the Azure Portal or contact your Azure administrator for assistance.")
-                                
                 elif submitted and not project_name:
                     st.warning("⚠️ Please enter a project name.")
+            
+            # Action buttons outside the form
+            if st.session_state.get('show_project_creation_error', False):
+                st.markdown("---")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    if st.button("🔄 Try Different Resource"):
+                        st.session_state.show_create_project = False
+                        st.session_state.show_project_creation_error = False
+                        st.rerun()
+                with col2:
+                    if st.button("📖 View Documentation"):
+                        st.markdown("[Azure AI Foundry Documentation](https://docs.microsoft.com/azure/ai-services/)")
+                with col3:
+                    if st.button("🆘 Get Help"):
+                        st.info("Check the Azure Portal or contact your Azure administrator for assistance.")
             
             if st.button("❌ Cancel"):
                 st.session_state.show_create_project = False
@@ -744,7 +1012,7 @@ def render_current_agents_section(project, deployment_service):
         else:
             st.info("ℹ️ No agents found in this project.")
 
-def render_deploy_agent_section(project, func_map, func_choices):
+def render_deploy_agent_section(project, func_map, func_choices, deployment_service):
     """Render the deploy new agent section."""
     st.markdown("#### ➕ Deploy New Agent")
     
@@ -921,3 +1189,92 @@ def render_agent_details_section(project, deployment_service):
         st.markdown("### ⚠️ Agent Detail Errors")
         for error in st.session_state.agent_detail_errors:
             st.error(error)
+
+    # Add diagnostic section for project creation
+        with st.expander("🔍 Pre-Creation Diagnostics", expanded=False):
+            if st.button("🧪 Run Diagnostics"):
+                st.write("**Running comprehensive diagnostics...**")
+                
+                # Get diagnostic info
+                try:
+                    diagnostics = ai_foundry_service.get_diagnostic_info()
+                    
+                    # Display credential info
+                    st.write("**Credential Information:**")
+                    cred_info = diagnostics["credential_info"]
+                    if cred_info.get("token_working", False):
+                        st.success("✅ Authentication token working")
+                    else:
+                        st.error("❌ Authentication token not working")
+                        
+                    if cred_info.get("msi_available", False):
+                        st.success("✅ MSI available")
+                    else:
+                        st.info("ℹ️ MSI not available (expected if not running in Azure)")
+                        
+                    if cred_info.get("cli_available", False):
+                        st.success("✅ Azure CLI logged in")
+                    else:
+                        st.warning("⚠️ Azure CLI not logged in")
+                    
+                    # Display API availability
+                    st.write("**API Availability:**")
+                    api_info = diagnostics["api_availability"]
+                    if api_info.get("management_api", {}).get("accessible", False):
+                        st.success("✅ Azure Management API accessible")
+                    else:
+                        st.error("❌ Azure Management API not accessible")
+                    
+                    # Validate hub for project creation
+                    st.write("**Hub Validation:**")
+                    is_valid, issues, warnings = ai_foundry_service.validate_hub_for_project_creation(resource)
+                    
+                    if is_valid:
+                        st.success("✅ Hub is valid for project creation")
+                    else:
+                        st.error("❌ Hub validation failed:")
+                        for issue in issues:
+                            st.error(f"  • {issue}")
+                    
+                    if warnings:
+                        st.warning("⚠️ Hub validation warnings:")
+                        for warning in warnings:
+                            st.warning(f"  • {warning}")
+                    
+                    # Display common issues
+                    if diagnostics["common_issues"]:
+                        st.write("**Potential Issues:**")
+                        for issue in diagnostics["common_issues"]:
+                            st.warning(f"⚠️ {issue}")
+                    
+                    # Show service methods
+                    st.write("**Available Service Methods:**")
+                    methods = diagnostics["service_methods"]
+                    creation_methods = [m for m in methods if 'create' in m.lower()]
+                    if creation_methods:
+                        st.success(f"✅ Creation methods available: {', '.join(creation_methods)}")
+                    else:
+                        st.error("❌ No creation methods found")
+                        
+                except Exception as e:
+                    st.error(f"❌ Diagnostic error: {str(e)}")
+        
+        # Add Hub-specific guidance
+        if resource.get('type') == 'account':
+            st.info(
+                "ℹ️ **Cognitive Services Account Selected**\n\n"
+                f"**Selected Resource:** {resource.get('name', 'Unknown')} (Cognitive Services Account)\n\n"
+                "**Project Creation Methods:**\n"
+                "• ✅ **Azure CLI** - Uses same APIs as Azure Portal (will be tried first)\n"
+                "• ⚠️ **ARM API** - May have limitations for Cognitive Services accounts (fallback)\n\n"
+                "**If creation fails:**\n"
+                "• Ensure Azure CLI is installed and logged in (`az login`)\n"
+                "• Try creating manually in Azure Portal\n"
+                "• Consider using an AI Foundry Hub for guaranteed programmatic support\n\n"
+                "**Proceeding with creation attempt...**"
+            )
+        else:
+            st.success(
+                f"✅ **AI Foundry Hub Selected:** {resource.get('name', 'Unknown')}\n\n"
+                "This resource type has full programmatic support for project creation via Azure Management API."
+            )

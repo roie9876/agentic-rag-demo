@@ -56,6 +56,10 @@ class AIFoundryRBACService:
         'search_integration': [
             'Search Index Data Contributor',
             'Search Service Contributor'
+        ],
+        'assign_roles': [
+            'User Access Administrator',
+            'Owner'
         ]
     }
     
@@ -548,6 +552,9 @@ class AIFoundryRBACService:
         commands = []
         
         try:
+            logger.info(f"Generating RBAC commands for resource: {resource_id}")
+            logger.info(f"Permissions type: {type(permissions)}, content: {permissions}")
+            
             # Get current user's principal ID
             user_principal_id = self.get_current_user_principal_id()
             if not user_principal_id:
@@ -556,9 +563,11 @@ class AIFoundryRBACService:
             # Handle both dict and list formats for permissions
             if isinstance(permissions, dict):
                 missing_roles = permissions.get('missing_required', [])
+                logger.info(f"Extracted missing roles from dict: {missing_roles}")
             elif isinstance(permissions, list):
                 # If it's a list, treat it as the missing roles directly
                 missing_roles = permissions
+                logger.info(f"Using permissions list directly: {missing_roles}")
             else:
                 logger.error(f"Invalid permissions format: {type(permissions)}")
                 return ["# Error: Invalid permissions format"]
@@ -568,21 +577,37 @@ class AIFoundryRBACService:
             
             # Generate assignment commands for each missing role
             for role_name in missing_roles:
-                # Get the role definition ID
-                if role_name in self.ROLE_DEFINITIONS:
-                    role_def_id = self.ROLE_DEFINITIONS[role_name].format(
-                        subscription_id=self._subscription_id
-                    )
+                try:
+                    # Ensure role_name is a string
+                    if isinstance(role_name, dict):
+                        # If it's a dict, try to extract the role name
+                        if 'role_name' in role_name:
+                            actual_role_name = role_name['role_name']
+                        else:
+                            logger.warning(f"Role dict missing 'role_name' key: {role_name}")
+                            commands.append(f"# Error: Invalid role format - {role_name}")
+                            continue
+                    else:
+                        actual_role_name = str(role_name)
                     
-                    command = (
-                        f"az role assignment create "
-                        f"--assignee {user_principal_id} "
-                        f"--role \"{role_def_id}\" "
-                        f"--scope \"{resource_id}\""
-                    )
-                    commands.append(command)
-                else:
-                    commands.append(f"# Unknown role: {role_name}")
+                    # Get the role definition ID
+                    if actual_role_name in self.ROLE_DEFINITIONS:
+                        role_def_id = self.ROLE_DEFINITIONS[actual_role_name].format(
+                            subscription_id=self._subscription_id
+                        )
+                        
+                        command = (
+                            f"az role assignment create "
+                            f"--assignee {user_principal_id} "
+                            f"--role \"{role_def_id}\" "
+                            f"--scope \"{resource_id}\""
+                        )
+                        commands.append(command)
+                    else:
+                        commands.append(f"# Unknown role: {actual_role_name}")
+                except Exception as role_error:
+                    logger.error(f"Error processing role {role_name}: {role_error}")
+                    commands.append(f"# Error processing role {role_name}: {str(role_error)}")
             
         except Exception as e:
             logger.error(f"Error generating RBAC commands: {e}")

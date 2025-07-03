@@ -215,6 +215,11 @@ class TestAgenticRetrievalService:
         # Test implementation
 ```
 
+**Testing Requirements:**
+- Always use `python3` command for running tests and scripts
+- Example: `python3 -m pytest tests/` instead of `python -m pytest tests/`
+- Example: `python3 scripts/validate_architecture.py` instead of `python scripts/validate_architecture.py`
+
 ## 🚫 **What NOT to Add to agentic-rag-demo.py**
 
 1. **New Streamlit Components** - Use `app/components/`
