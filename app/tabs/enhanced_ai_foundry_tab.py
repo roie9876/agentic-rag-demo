@@ -24,6 +24,7 @@ from services.ai_foundry_service import AIFoundryService
 from services.ai_foundry_agent_deployment import AIFoundryAgentDeploymentService
 from utils.ai_foundry_helpers import AIFoundryHelper
 from app.components.rbac_help import render_rbac_help_section, render_permission_summary, render_rbac_status_card
+from app.components.ai_foundry_hub_deployment_ui import render_ai_foundry_hub_deployment_ui
 
 logger = logging.getLogger(__name__)
 
@@ -174,12 +175,16 @@ def render_enhanced_ai_foundry_tab(
         st.sidebar.warning(f"⚠️ Subscription setup issue: {e}")
     
     # Create tabs for different sections
-    tab_discover, tab_permissions, tab_projects, tab_agents = st.tabs([
-        "🔍 Discover Resources",
+    tab_deploy_hub, tab_discover, tab_permissions, tab_projects, tab_agents = st.tabs([
+        "� Deploy New Hub",
+        "�🔍 Discover Resources",
         "🔐 Check Permissions", 
         "📋 Manage Projects",
         "🤖 Deploy Agents"
     ])
+    
+    with tab_deploy_hub:
+        render_ai_foundry_hub_deployment_ui()
     
     with tab_discover:
         render_resource_discovery_section(discovery_service)
@@ -341,11 +346,17 @@ def render_permissions_section(rbac_service):
         return
     
     resource = st.session_state.selected_resource
-    st.markdown(f"**Checking permissions for:** {resource.get('name', 'Unknown')} ({resource.get('resource_type', 'Unknown')})")
+    if resource is None:
+        st.error("❌ No resource selected. Please select a resource first.")
+        return
+    
+    resource_name = resource.get('name', 'Unknown') if isinstance(resource, dict) else 'Unknown'
+    resource_type = resource.get('resource_type', 'Unknown') if isinstance(resource, dict) else 'Unknown'
+    st.markdown(f"**Checking permissions for:** {resource_name} ({resource_type})")
     
     # Add help section
     with st.expander("📚 Need Help with RBAC Permissions?", expanded=False):
-        render_rbac_help_section(resource.get('resource_type', 'hub'))
+        render_rbac_help_section(resource_type)
     
     col1, col2 = st.columns([1, 1])
     
@@ -354,8 +365,8 @@ def render_permissions_section(rbac_service):
             with st.spinner("Checking RBAC permissions..."):
                 try:
                     permissions, errors = rbac_service.check_resource_permissions(
-                        resource['id'], 
-                        resource['resource_type']
+                        resource.get('id', ''), 
+                        resource.get('resource_type', 'hub')
                     )
                     
                     # Validate that permissions is a list
@@ -462,7 +473,7 @@ def render_permissions_section(rbac_service):
                         try:
                             validation = rbac_service.check_required_permissions(
                                 rbac_service.get_current_user_principal_id() or "",
-                                resource['id'], 
+                                resource.get('id', ''), 
                                 'assign_roles'
                             )
                             
@@ -470,7 +481,7 @@ def render_permissions_section(rbac_service):
                                 st.error(f"❌ **Permission Check Failed:** {validation['error']}")
                                 st.markdown("Cannot determine if you have permissions to assign roles.")
                                 st.markdown("**Try the manual commands below**")
-                                st.code(f"az role assignment create --assignee $USER_PRINCIPAL_ID --role 'User Access Administrator' --scope '{resource['id']}'")
+                                st.code(f"az role assignment create --assignee $USER_PRINCIPAL_ID --role 'User Access Administrator' --scope '{resource.get('id', '')}'")
                                 st.markdown("*Replace $USER_PRINCIPAL_ID with your Azure AD user ID*")
                             elif not validation.get('has_permission', False):
                                 st.error("❌ **Insufficient Permissions to Assign Roles**")
@@ -487,14 +498,14 @@ def render_permissions_section(rbac_service):
                                     st.markdown("Run these commands in Azure CLI to assign the missing roles:")
                                     for perm in missing_required:
                                         role_name = perm.get('role_name', 'Unknown')
-                                        st.code(f"az role assignment create --assignee $USER_PRINCIPAL_ID --role '{role_name}' --scope '{resource['id']}'")
+                                        st.code(f"az role assignment create --assignee $USER_PRINCIPAL_ID --role '{role_name}' --scope '{resource.get('id', '')}'")
                                     st.markdown("*Replace $USER_PRINCIPAL_ID with your Azure AD user ID*")
                         except Exception as e:
                             st.error(f"❌ **Permission validation failed:** {str(e)}")
                             st.markdown("**Use manual commands below:**")
                             for perm in missing_required:
                                 role_name = perm.get('role_name', 'Unknown')
-                                st.code(f"az role assignment create --assignee $USER_PRINCIPAL_ID --role '{role_name}' --scope '{resource['id']}'")
+                                st.code(f"az role assignment create --assignee $USER_PRINCIPAL_ID --role '{role_name}' --scope '{resource.get('id', '')}'")
                         else:
                             with st.spinner("Assigning permissions..."):
                                 # Create progress bar
@@ -513,7 +524,7 @@ def render_permissions_section(rbac_service):
                                         status_text.text(f"Assigning role: {perm['role_name']}")
                                         
                                         success, message = rbac_service.assign_role(
-                                            resource['id'],
+                                            resource.get('id', ''),
                                             perm['role_name']
                                         )
                                         
@@ -582,8 +593,8 @@ def render_permissions_section(rbac_service):
                     # Extract just the role names from the permission dictionaries
                     missing_role_names = [perm['role_name'] for perm in missing_required]
                     commands = rbac_service.generate_rbac_assignment_commands(
-                        resource['id'],
-                        resource['resource_type'],
+                        resource.get('id', ''),
+                        resource.get('resource_type', 'hub'),
                         missing_role_names
                     )
                 except Exception as e:
@@ -597,7 +608,7 @@ def render_permissions_section(rbac_service):
                         st.code(cmd, language="bash")
                     
                     st.markdown("**Alternative: Azure Portal**")
-                    guide = rbac_service.get_rbac_setup_guide(resource['resource_type'])
+                    guide = rbac_service.get_rbac_setup_guide(resource.get('resource_type', 'hub'))
                     
                     for step in guide.get('manual_steps', []):
                         st.markdown(f"- {step}")
@@ -633,12 +644,18 @@ def render_project_management_section(ai_foundry_service):
     """Render the project management section."""
     st.subheader("📋 Manage Projects")
     
-    if not hasattr(st.session_state, 'selected_resource'):
+    if not hasattr(st.session_state, 'selected_resource') or st.session_state.selected_resource is None:
         st.info("👆 Please discover and select a resource first in the 'Discover Resources' tab.")
         return
     
     resource = st.session_state.selected_resource
-    st.markdown(f"**Managing projects for:** {resource['name']} ({resource['resource_type']})")
+    if resource is None:
+        st.error("❌ No resource selected. Please select a resource first.")
+        return
+    
+    resource_name = resource.get('name', 'Unknown') if isinstance(resource, dict) else 'Unknown'
+    resource_type = resource.get('resource_type', 'Unknown') if isinstance(resource, dict) else 'Unknown'
+    st.markdown(f"**Managing projects for:** {resource_name} ({resource_type})")
     
     col1, col2 = st.columns([1, 1])
     
@@ -1278,3 +1295,21 @@ def render_agent_details_section(project, deployment_service):
                 f"✅ **AI Foundry Hub Selected:** {resource.get('name', 'Unknown')}\n\n"
                 "This resource type has full programmatic support for project creation via Azure Management API."
             )
+
+def render_hub_deployment_section():
+    """Render the AI Foundry Hub deployment section."""
+    st.subheader("🚀 Deploy New AI Foundry Hub")
+    
+    st.info("""
+    **🏗️ Hub Deployment**: Deploy a new AI Foundry Hub with network isolation and private endpoints.
+    
+    **Features:**
+    - ✅ Network-secured deployment with private endpoints
+    - ✅ Choose between new and existing resources
+    - ✅ Automated DNS configuration
+    - ✅ Built-in RBAC setup
+    - ✅ Ready for agent deployment
+    """)
+    
+    # Render the deployment interface using our new UI
+    render_ai_foundry_hub_deployment_ui()
