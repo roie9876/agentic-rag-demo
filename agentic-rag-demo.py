@@ -49,6 +49,9 @@ from test_retrieval import render_test_retrieval_tab
 from studio2foundry_tab import render_studio2foundry_tab
 from app.ui.sharepoint_reports_tab import render_sharepoint_reports_tab, render_sharepoint_purge_section
 
+# Import enhanced AI Foundry components
+from app.tabs.enhanced_ai_foundry_tab import render_enhanced_ai_foundry_tab
+
 # Import extracted modules
 from utils.azure_helpers import (
     get_search_credential,
@@ -687,7 +690,7 @@ def run_streamlit_ui() -> None:
         "📁 SharePoint Index",
         "3️⃣ Test Retrieval",
         "⚙️ Function Config",
-        "🤖 AI Foundry Agent",
+        "🏭 AI Foundry Hub",
         "🏭 Studio2Foundry"
     ])
 
@@ -2029,90 +2032,15 @@ def run_streamlit_ui() -> None:
                 else:
                     st.error(message)
 
-    # ─────────────────── Tab 6 – AI Foundry Agent ────────────────────────
+    # ─────────────────── Tab 7 – AI Foundry Hub ──────────────────────────
     with tab_ai:
         health_block()
-        st.header("🤖 Create AI Foundry Agent")
-
-        func_map     = st.session_state.get("func_map", {})
-        func_choices = st.session_state.get("func_choices", [])
-
-        if not func_choices:
-            st.info("Go to **Function Config** tab first and load settings.")
-            st.stop()
-
-        func_sel = st.selectbox("Function App to invoke", func_choices, index=0)
-        func_name, func_rg = func_map[func_sel]
-        base_url = f"https://{func_name}.azurewebsites.net/api"
-
-        # Detect Foundry projects the CLI user can access
-        cli_cred = AzureCliCredential()
-        logged_in, _ = check_azure_cli_login()
-        if not logged_in:
-            st.error("🔑 Run `az login` before using this feature.")
-            st.stop()
-
-        projects = get_ai_foundry_projects(cli_cred)
         
-        # If no projects found, show helpful message
-        if not projects:
-            st.warning("No AI Foundry projects found via Azure CLI.")
-            
-            # Check for PROJECT_ENDPOINT in .env
-            project_endpoint_env = os.getenv("PROJECT_ENDPOINT", "").strip()
-            if project_endpoint_env:
-                projects = [{
-                    "name": project_endpoint_env.split('/')[-1][:30] or "env-project",
-                    "location": "env",
-                    "endpoint": project_endpoint_env,
-                    "resource_group": "env",
-                    "hub_name": "env",
-                }]
-                st.success(f"Using PROJECT_ENDPOINT from .env: {project_endpoint_env}")
-            else:
-                # Allow manual entry
-                st.info(
-                    "You can either:\n"
-                    "1. Create a project in Azure AI Studio\n"
-                    "2. Set the PROJECT_ENDPOINT environment variable in your .env file\n"
-                    "3. Make sure you have access to at least one AI Foundry project"
-                )
-                
-                manual_endpoint = st.text_input(
-                    "Or enter Project Endpoint manually:",
-                    placeholder="https://my-project.api.region.ai.azure.com/"
-                )
-                if manual_endpoint:
-                    projects = [{
-                        "name": "manual-project",
-                        "location": "manual",
-                        "endpoint": manual_endpoint,
-                        "resource_group": "manual",
-                        "hub_name": "manual",
-                    }]
-                else:
-                    st.stop()
-
-        proj_labels = [f"{p['name']} – {p['location']}" for p in projects]
-        sel = st.selectbox("Choose Foundry project", proj_labels, index=0)
-        project_endpoint = projects[proj_labels.index(sel)]['endpoint']
-        st.caption(f"🔗 Endpoint: {project_endpoint}")
-
-        agent_name = st.text_input("Agent name", placeholder="function‑assistant")
-        if st.button("🚀 Create Agent") and agent_name:
-            # Use the refactored function instead of inline code
-            success, message, agent = create_ai_foundry_agent(
-                project_endpoint=project_endpoint,
-                agent_name=agent_name,
-                base_url=base_url,
-                function_key=FUNCTION_KEY
-            )
-            
-            if success:
-                st.success(f"✅ Agent **{agent.name}** created (ID: {agent.id})")
-            else:
-                st.error("Failed to create agent via SDK:")
-                st.error(message)
+        # Use the enhanced AI Foundry Hub tab
+        from app.tabs.enhanced_ai_foundry_tab import render_enhanced_ai_foundry_tab
+        render_enhanced_ai_foundry_tab(
+            session_state=st.session_state
+        )
 
     # ── Studio2Foundry Tab ────────────────────────────────────────────────
     with tab_studio2foundry:

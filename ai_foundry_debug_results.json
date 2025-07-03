@@ -1,0 +1,678 @@
+{
+  "account_info": {
+    "name": "aiagenticservicesfgtt",
+    "endpoint": "https://aiagenticservicesfgtt.services.ai.azure.com",
+    "original_endpoint": "https://aiagenticservicesfgtt.cognitiveservices.azure.com/",
+    "location": "swedencentral",
+    "sku": "S0",
+    "resource_type": "Microsoft.CognitiveServices/accounts"
+  },
+  "token_scopes": {
+    "https://ai.azure.com/.default": {
+      "success": true,
+      "token_length": 1979,
+      "expires_on": 1751539060
+    },
+    "https://cognitiveservices.azure.com/.default": {
+      "success": true,
+      "token_length": 2116,
+      "expires_on": 1751541165
+    },
+    "https://management.azure.com/.default": {
+      "success": true,
+      "token_length": 2155,
+      "expires_on": 1751538935
+    },
+    "https://aiagenticservicesfgtt.cognitiveservices.azure.com/.default": {
+      "success": false,
+      "error": "ERROR: AADSTS500011: The resource principal named https://aiagenticservicesfgtt.cognitiveservices.azure.com was not found in the tenant named Contoso. This can happen if the application has not been installed by the administrator of the tenant or consented to by any user in the tenant. You might have sent your authentication request to the wrong tenant. Trace ID: 597a82b5-9d22-4094-b56f-14c11caf4d00 Correlation ID: d56f4c56-7a8b-46ff-adf2-370f8cf3da3c Timestamp: 2025-07-03 09:59:17Z\nInteractive authentication is needed. Please run:\naz login --scope https://aiagenticservicesfgtt.cognitiveservices.azure.com/.default\n"
+    },
+    "https://aiagenticservicesfgtt.services.ai.azure.com/.default": {
+      "success": false,
+      "error": "ERROR: AADSTS500011: The resource principal named https://aiagenticservicesfgtt.services.ai.azure.com was not found in the tenant named Contoso. This can happen if the application has not been installed by the administrator of the tenant or consented to by any user in the tenant. You might have sent your authentication request to the wrong tenant. Trace ID: d590c69d-0f1e-48ae-a010-bb5206a63d00 Correlation ID: e93fc897-3fe3-454e-963c-d6eed46c8f29 Timestamp: 2025-07-03 09:59:18Z\nInteractive authentication is needed. Please run:\naz login --scope https://aiagenticservicesfgtt.services.ai.azure.com/.default\n"
+    }
+  },
+  "api_endpoints": {
+    "https://aiagenticservicesfgtt.services.ai.azure.com/api/projects": {
+      "2025-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-07-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-05-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-04-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-02-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2022-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "v1": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      }
+    },
+    "https://aiagenticservicesfgtt.services.ai.azure.com/projects": {
+      "2025-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-07-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-05-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-04-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-02-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2022-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "v1": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      }
+    },
+    "https://aiagenticservicesfgtt.services.ai.azure.com/v1/projects": {
+      "2025-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-07-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-05-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-04-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-02-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2022-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "v1": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      }
+    },
+    "https://aiagenticservicesfgtt.services.ai.azure.com/api/v1/projects": {
+      "2025-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-07-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-05-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-04-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-02-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2022-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "v1": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      }
+    },
+    "https://aiagenticservicesfgtt.cognitiveservices.azure.com/api/projects": {
+      "2025-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-07-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-05-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-04-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-02-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2022-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "v1": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      }
+    },
+    "https://aiagenticservicesfgtt.cognitiveservices.azure.com/projects": {
+      "2025-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-07-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-05-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-04-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-02-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2022-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "v1": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      }
+    },
+    "https://swedencentral.api.azureml.ms/projects": {
+      "2025-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 0,
+        "content_type": "",
+        "response_preview": "",
+        "has_projects": false
+      },
+      "2024-07-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 0,
+        "content_type": "",
+        "response_preview": "",
+        "has_projects": false
+      },
+      "2024-05-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 0,
+        "content_type": "",
+        "response_preview": "",
+        "has_projects": false
+      },
+      "2024-04-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 0,
+        "content_type": "",
+        "response_preview": "",
+        "has_projects": false
+      },
+      "2024-02-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 0,
+        "content_type": "",
+        "response_preview": "",
+        "has_projects": false
+      },
+      "2023-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 0,
+        "content_type": "",
+        "response_preview": "",
+        "has_projects": false
+      },
+      "2023-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 0,
+        "content_type": "",
+        "response_preview": "",
+        "has_projects": false
+      },
+      "2022-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 0,
+        "content_type": "",
+        "response_preview": "",
+        "has_projects": false
+      },
+      "v1": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 0,
+        "content_type": "",
+        "response_preview": "",
+        "has_projects": false
+      }
+    },
+    "https://swedencentral.api.cognitive.microsoft.com/projects": {
+      "2025-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-07-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-05-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-04-01-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2024-02-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-15-preview": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2023-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "2022-05-01": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      },
+      "v1": {
+        "status_code": 404,
+        "success": false,
+        "response_size": 56,
+        "content_type": "application/json",
+        "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+        "has_projects": false
+      }
+    }
+  },
+  "management_api": {
+    "https://management.azure.com/subscriptions/7aa77d2e-cbec-48b4-8518-9802543b25af/resourceGroups/private-rg/providers/Microsoft.CognitiveServices/accounts/aiagenticservicesfgtt/projects": {
+      "status_code": 404,
+      "response_preview": "{\"error\":{\"code\":\"InvalidResourceType\",\"message\":\"The resource type 'accounts/projects' could not be found in the namespace 'Microsoft.CognitiveServices' for api version '2024-07-01-preview'. The supp",
+      "subscription_id": "7aa77d2e-cbec-48b4-8518-9802543b25af",
+      "resource_group": "private-rg"
+    },
+    "https://management.azure.com/subscriptions/7aa77d2e-cbec-48b4-8518-9802543b25af/resourceGroups/private-rg/providers/Microsoft.MachineLearningServices/workspaces": {
+      "status_code": 200,
+      "response_preview": "{\"value\":[]}",
+      "subscription_id": "7aa77d2e-cbec-48b4-8518-9802543b25af",
+      "resource_group": "private-rg"
+    }
+  },
+  "discovery_endpoints": {
+    "https://aiagenticservicesfgtt.services.ai.azure.com/discovery": {
+      "status_code": 404,
+      "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+      "content_type": "application/json",
+      "has_discovery_data": false
+    },
+    "https://aiagenticservicesfgtt.services.ai.azure.com/api/discovery": {
+      "status_code": 404,
+      "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+      "content_type": "application/json",
+      "has_discovery_data": false
+    },
+    "https://aiagenticservicesfgtt.services.ai.azure.com/api/workspaces": {
+      "status_code": 404,
+      "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+      "content_type": "application/json",
+      "has_discovery_data": false
+    },
+    "https://aiagenticservicesfgtt.services.ai.azure.com/workspaces": {
+      "status_code": 404,
+      "response_preview": "{\"error\":{\"code\":\"404\",\"message\": \"Resource not found\"}}",
+      "content_type": "application/json",
+      "has_discovery_data": false
+    },
+    "https://api.azureml.ms/discovery/v1.0/Subscription/subscriptions": {
+      "error": "HTTPSConnectionPool(host='api.azureml.ms', port=443): Max retries exceeded with url: /discovery/v1.0/Subscription/subscriptions (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7cfe568d7940>: Failed to establish a new connection: [Errno -5] No address associated with hostname'))"
+    },
+    "https://swedencentral.api.azureml.ms/discovery": {
+      "status_code": 200,
+      "response_preview": "{\n  \"api\": \"https://swedencentral.api.azureml.ms\",\n  \"catalog\": \"https://catalog.cortanaanalytics.com\",\n  \"experimentation\": \"https://swedencentral.api.azureml.ms\",\n  \"gallery\": \"https://gallery.cortanaintelligence.com/project\",\n  \"history\": \"https://swedencentral.api.azureml.ms\",\n  \"hyperdrive\": \"h",
+      "content_type": "application/json; charset=utf-8",
+      "has_discovery_data": true
+    }
+  }
+}

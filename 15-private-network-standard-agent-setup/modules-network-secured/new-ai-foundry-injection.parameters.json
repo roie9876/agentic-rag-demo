@@ -1,0 +1,51 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "swedencentral"
+    },
+    "aiFoundryAccountName": {
+      "value": "ai-foundry-injection"
+    },
+    "existingVnetName": {
+      "value": "private-main-vnet"
+    },
+    "existingAgentSubnetName": {
+      "value": "AgentSubnet"
+    },
+    "existingPrivateEndpointSubnetName": {
+      "value": "PrivateEndpointSubnet"
+    },
+    "existingStorageAccountName": {
+      "value": "aiservicesjlbbstorage"
+    },
+    "existingAiSearchName": {
+      "value": "aiservicesjlbbsearch"
+    },
+    "existingCosmosDbName": {
+      "value": "aiservicesjlbbcosmosdb"
+    },
+    "existingResourceGroupName": {
+      "value": "private-rg"
+    },
+    "enableNetworkInjection": {
+      "value": true
+    },
+    "modelName": {
+      "value": "gpt-4o"
+    },
+    "modelFormat": {
+      "value": "OpenAI"
+    },
+    "modelVersion": {
+      "value": "2024-11-20"
+    },
+    "modelSkuName": {
+      "value": "GlobalStandard"
+    },
+    "modelCapacity": {
+      "value": 30
+    }
+  }
+}

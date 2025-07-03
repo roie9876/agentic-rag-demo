@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "swedencentral"
+    },
+    "aiServices": {
+      "value": "ai-netinject"
+    },
+    "vnetResourceId": {
+      "value": "/subscriptions/YOUR_SUBSCRIPTION_ID/resourceGroups/YOUR_RESOURCE_GROUP/providers/Microsoft.Network/virtualNetworks/YOUR_VNET_NAME"
+    },
+    "agentSubnetName": {
+      "value": "snet-agent"
+    },
+    "modelName": {
+      "value": "gpt-4o"
+    },
+    "modelFormat": {
+      "value": "OpenAI"
+    },
+    "modelVersion": {
+      "value": "2024-11-20"
+    },
+    "modelSkuName": {
+      "value": "GlobalStandard"
+    },
+    "modelCapacity": {
+      "value": 30
+    }
+  }
+}

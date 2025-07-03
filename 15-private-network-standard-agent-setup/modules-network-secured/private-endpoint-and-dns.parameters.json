@@ -1,0 +1,75 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "aiAccountName": {
+      "value": "Private-Foundry-Agentic"
+    },
+    "aiSearchName": {
+      "value": "private-ai-search"
+    },
+    "storageName": {
+      "value": "privateblogagenticimages"
+    },
+    "cosmosDBName": {
+      "value": "skip-cosmos-db"
+    },
+    "vnetName": {
+      "value": "private-main-vnet"
+    },
+    "peSubnetName": {
+      "value": "PrivateEndpointSubnet"
+    },
+    "suffix": {
+      "value": "priv01"
+    },
+    "existingAiAccountPrivateEndpointName": {
+      "value": "Foundry-PE"
+    },
+    "existingAiSearchPrivateEndpointName": {
+      "value": ""
+    },
+    "existingStoragePrivateEndpointName": {
+      "value": "blob-images-pe"
+    },
+    "existingCosmosDBPrivateEndpointName": {
+      "value": "skip-cosmos-db"
+    },
+    "skipCosmosDB": {
+      "value": true
+    },
+    "skipDnsZoneCreation": {
+      "value": true
+    },
+    "skipDnsZoneLinks": {
+      "value": true
+    },
+    "skipExistingPrivateEndpointDnsGroups": {
+      "value": true
+    },
+    "vnetResourceGroupName": {
+      "value": "private-rg"
+    },
+    "vnetSubscriptionId": {
+      "value": "7aa77d2e-cbec-48b4-8518-9802543b25af"
+    },
+    "storageAccountResourceGroupName": {
+      "value": "private-rg"
+    },
+    "storageAccountSubscriptionId": {
+      "value": "7aa77d2e-cbec-48b4-8518-9802543b25af"
+    },
+    "aiSearchSubscriptionId": {
+      "value": "7aa77d2e-cbec-48b4-8518-9802543b25af"
+    },
+    "aiSearchResourceGroupName": {
+      "value": "private-rg"
+    },
+    "cosmosDBSubscriptionId": {
+      "value": "7aa77d2e-cbec-48b4-8518-9802543b25af"
+    },
+    "cosmosDBResourceGroupName": {
+      "value": "private-rg"
+    }
+  }
+}

@@ -129,3 +129,18 @@ def env(var: str) -> str:
         import sys
         sys.exit(f"❌ Missing env var: {var}")
     return v
+
+def check_azure_cli_login() -> tuple[bool, dict | None]:
+    """
+    Check if Azure CLI is logged in and return account info.
+    Returns (logged_in, account_info).
+    """
+    try:
+        out = subprocess.check_output(
+            ["az", "account", "show", "--output", "json"], 
+            text=True, 
+            timeout=10
+        )
+        return True, json.loads(out)
+    except Exception:
+        return False, None
