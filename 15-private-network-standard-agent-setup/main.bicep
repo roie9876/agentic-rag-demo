@@ -81,6 +81,8 @@ param aiSearchResourceId string = ''
 param azureStorageAccountResourceId string = ''
 @description('The Cosmos DB Account full ARM Resource ID. This is an optional field, and if not provided, the resource will be created.')
 param azureCosmosDBAccountResourceId string = ''
+@description('Skip Cosmos DB deployment entirely. When true, no Cosmos DB will be created or used.')
+param skipCosmosDBDeployment bool = false
 
 // Existing private endpoint names (if they already exist)
 @description('Name of existing AI Search private endpoint (optional - if exists, will be used instead of creating new)')
@@ -103,7 +105,7 @@ var azureStorageName = toLower('${aiServices}${uniqueSuffix}storage')
 // Check if existing resources have been passed in
 var storagePassedIn = azureStorageAccountResourceId != ''
 var searchPassedIn = aiSearchResourceId != ''
-var cosmosPassedIn = azureCosmosDBAccountResourceId != ''
+var cosmosPassedIn = azureCosmosDBAccountResourceId != '' && !skipCosmosDBDeployment
 var existingVnetPassedIn = existingVnetResourceId != ''
 
 
@@ -198,6 +200,7 @@ module aiDependencies 'modules-network-secured/standard-dependent-resources.bice
     // Cosmos DB Account
     cosmosDBResourceId: azureCosmosDBAccountResourceId
     cosmosDBExists: validateExistingResources.outputs.cosmosDBExists
+    skipCosmosDBDeployment: skipCosmosDBDeployment
     }
 }
 
@@ -212,7 +215,7 @@ resource aiSearch 'Microsoft.Search/searchServices@2023-11-01' existing = {
   scope: resourceGroup(aiDependencies.outputs.aiSearchServiceSubscriptionId, aiDependencies.outputs.aiSearchServiceResourceGroupName)
 }
 
-resource cosmosDB 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' existing = {
+resource cosmosDB 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' existing = if (!skipCosmosDBDeployment) {
   name: aiDependencies.outputs.cosmosDBName
   scope: resourceGroup(cosmosDBSubscriptionId, cosmosDBResourceGroupName)
 }
@@ -246,6 +249,7 @@ module privateEndpointAndDNS 'modules-network-secured/private-endpoint-and-dns.b
       existingAiSearchPrivateEndpointName: existingAiSearchPrivateEndpointName
       existingStoragePrivateEndpointName: existingStoragePrivateEndpointName
       existingCosmosDBPrivateEndpointName: existingCosmosDBPrivateEndpointName
+      skipCosmosDB: skipCosmosDBDeployment
     }
     dependsOn: [
     aiSearch      // Ensure AI Search exists
@@ -312,7 +316,7 @@ module storageAccountRoleAssignment 'modules-network-secured/azure-storage-accou
 }
 
 // The Comos DB Operator role must be assigned before the caphost is created
-module cosmosAccountRoleAssignments 'modules-network-secured/cosmosdb-account-role-assignment.bicep' = {
+module cosmosAccountRoleAssignments 'modules-network-secured/cosmosdb-account-role-assignment.bicep' = if (!skipCosmosDBDeployment) {
   name: 'cosmos-account-ra-${projectName}-${uniqueSuffix}-deployment'
   scope: resourceGroup(cosmosDBSubscriptionId, cosmosDBResourceGroupName)
   params: {

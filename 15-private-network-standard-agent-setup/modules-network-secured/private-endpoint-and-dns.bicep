@@ -102,7 +102,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing 
   scope: resourceGroup(storageAccountSubscriptionId, storageAccountResourceGroupName)
 }
 
-resource cosmosDBAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' existing = if (existingCosmosDBPrivateEndpointName != '' && existingCosmosDBPrivateEndpointName != 'skip-cosmos-db') {
+resource cosmosDBAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' existing = if (existingCosmosDBPrivateEndpointName != '' && !skipCosmosDB) {
   name: cosmosDBName
   scope: resourceGroup(cosmosDBSubscriptionId, cosmosDBResourceGroupName)
 }
@@ -216,7 +216,7 @@ resource storagePrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' 
 /*--------------------------------------------- Cosmos DB Private Endpoint -------------------------------------*/
 
 // Private endpoint for Cosmos DB (only create if not provided as existing and not skipped)
-resource cosmosDBPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (existingCosmosDBPrivateEndpointName == '' && existingCosmosDBPrivateEndpointName != 'skip-cosmos-db') {
+resource cosmosDBPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (existingCosmosDBPrivateEndpointName == '' && !skipCosmosDB) {
   name: '${cosmosDBName}-private-endpoint'
   location: resourceGroup().location
   properties: {
@@ -260,7 +260,7 @@ resource storagePrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' ex
   name: 'privatelink.blob.${environment().suffixes.storage}'
 }
 
-resource cosmosDBPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' existing = if (existingCosmosDBPrivateEndpointName != 'skip-cosmos-db') {
+resource cosmosDBPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' existing = if (!skipCosmosDB) {
   name: 'privatelink.documents.azure.com'
 }
 
@@ -390,7 +390,7 @@ resource existingStorageDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZ
 
 // Cosmos DB DNS Zone Groups - only if not skipped
 // 3) DNS Zone Group for Cosmos DB - New Private Endpoint
-resource cosmosDBDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (existingCosmosDBPrivateEndpointName == '' && existingCosmosDBPrivateEndpointName != 'skip-cosmos-db') {
+resource cosmosDBDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (existingCosmosDBPrivateEndpointName == '' && !skipCosmosDB) {
   parent: cosmosDBPrivateEndpoint
   name: '${cosmosDBName}-dns-group'
   properties: {
@@ -406,7 +406,7 @@ resource cosmosDBDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGrou
 }
 
 // 3) DNS Zone Group for Cosmos DB - Existing Private Endpoint
-resource existingCosmosDBDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (existingCosmosDBPrivateEndpointName != '' && existingCosmosDBPrivateEndpointName != 'skip-cosmos-db') {
+resource existingCosmosDBDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (existingCosmosDBPrivateEndpointName != '' && !skipCosmosDB) {
   parent: existingCosmosDBPrivateEndpoint
   name: '${cosmosDBName}-dns-group-existing'
   properties: {

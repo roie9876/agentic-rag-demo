@@ -244,6 +244,24 @@ class AIFoundryHubDeploymentService:
             has_existing_subnets = (hasattr(config.network_config, 'existing_agent_subnet_id') and config.network_config.existing_agent_subnet_id) or \
                                  (hasattr(config.network_config, 'existing_pe_subnet_id') and config.network_config.existing_pe_subnet_id)
             
+            # If no explicit subnet IDs were provided, try to auto-detect existing subnets by name
+            if not has_existing_subnets and vnet_resource_id:
+                try:
+                    existing_subnets = self.get_vnet_subnets(vnet_resource_id)
+                    subnet_names = [s.get('name', '') for s in existing_subnets]
+                    
+                    # Check if both required subnet names already exist
+                    agent_exists = config.network_config.agent_subnet_name in subnet_names
+                    pe_exists = config.network_config.pe_subnet_name in subnet_names
+                    
+                    if agent_exists and pe_exists:
+                        has_existing_subnets = True
+                        logger.info(f"Auto-detected existing subnets: {config.network_config.agent_subnet_name}, {config.network_config.pe_subnet_name}")
+                    elif agent_exists or pe_exists:
+                        logger.warning(f"Partial subnet overlap detected - agent_exists: {agent_exists}, pe_exists: {pe_exists}")
+                except Exception as e:
+                    logger.warning(f"Could not auto-detect existing subnets: {e}")
+            
             params["createSubnetsInExistingVnet"] = {"value": not has_existing_subnets}
             
             # Subnet configuration
@@ -260,13 +278,15 @@ class AIFoundryHubDeploymentService:
         
         # Cosmos DB
         if config.cosmos_db.skip_deployment:
-            # For now, the bicep template doesn't support skipping Cosmos DB
-            # We'll pass empty string to create new, but this needs bicep template update
+            # Pass the skip parameter to bicep template
             params["azureCosmosDBAccountResourceId"] = {"value": ""}
+            params["skipCosmosDBDeployment"] = {"value": True}
         elif not config.cosmos_db.create_new and config.cosmos_db.existing_resource_id:
             params["azureCosmosDBAccountResourceId"] = {"value": config.cosmos_db.existing_resource_id}
+            params["skipCosmosDBDeployment"] = {"value": False}
         else:
             params["azureCosmosDBAccountResourceId"] = {"value": ""}
+            params["skipCosmosDBDeployment"] = {"value": False}
         
         # AI Search
         if not config.ai_search.create_new and config.ai_search.existing_resource_id:
@@ -423,10 +443,13 @@ class AIFoundryHubDeploymentService:
                     'deployment failed', 'template is not valid', 'syntax error', 
                     'access denied', 'forbidden', 'authentication failed',
                     'resource not found', 'subscription not found', 'cannot create',
-                    'error:', 'failed:', 'invalid template'
+                    'error bcp', 'failed:', 'invalid template'
                 ]
                 has_actual_errors = any(error_pattern in stdout_lower or error_pattern in stderr_lower 
                                      for error_pattern in actual_error_patterns)
+                
+                # Check for bicep compilation errors specifically 
+                has_bicep_errors = "error bcp" in stderr_lower or "error:" in stderr_lower
                 
                 # Additional check: look for patterns that indicate this is really just warnings
                 warning_only_indicators = [
@@ -440,10 +463,17 @@ class AIFoundryHubDeploymentService:
                 print(f"   has_warning_prefix: {has_warning_prefix}")
                 print(f"   starts_with_warning: {starts_with_warning}")
                 print(f"   has_actual_errors: {has_actual_errors}")
+                print(f"   has_bicep_errors: {has_bicep_errors}")
                 print(f"   likely_warnings_only: {likely_warnings_only}")
                 
+                # If we have actual bicep errors, fail validation
+                if has_bicep_errors:
+                    print(f"❌ DEBUG: Template validation failed with bicep errors")
+                    print(f"❌ DEBUG: Bicep errors: {validate_result.stderr}")
+                    return False, f"Template validation failed with bicep errors: {validate_result.stderr}"
+                
                 # If we have bicep warnings (or warning prefix) and no actual errors, consider it a pass
-                if (has_bicep_warnings or has_warning_prefix or starts_with_warning or likely_warnings_only) and not has_actual_errors:
+                elif (has_bicep_warnings or has_warning_prefix or starts_with_warning or likely_warnings_only) and not has_actual_errors:
                     print(f"⚠️ DEBUG: Template validation passed with bicep warnings")
                     print(f"⚠️ DEBUG: Bicep warnings: {validate_result.stderr}")
                     

@@ -25,13 +25,12 @@ param agentSubnetPrefix string
 @description('Address prefix for the new private endpoint subnet')
 param peSubnetPrefix string
 
-// Reference the existing virtual network
+// Reference the existing virtual network (no scope when in same RG as deployment)
 resource existingVNet 'Microsoft.Network/virtualNetworks@2024-05-01' existing = {
   name: vnetName
-  scope: resourceGroup(vnetResourceGroupName)
 }
 
-// Create new agent subnet in existing VNet
+// Create new agent subnet in existing VNet (using parent property for better syntax)
 resource newAgentSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
   name: agentSubnetName
   parent: existingVNet
@@ -48,7 +47,7 @@ resource newAgentSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' =
   }
 }
 
-// Create new private endpoint subnet in existing VNet
+// Create new private endpoint subnet in existing VNet (using parent property for better syntax)
 resource newPeSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
   name: peSubnetName
   parent: existingVNet

@@ -24,6 +24,9 @@ param azureStorageAccountResourceId string
 @description('The Cosmos DB Account full ARM Resource ID. This is an optional field, and if not provided, the resource will be created.')
 param cosmosDBResourceId string
 
+@description('Skip Cosmos DB deployment entirely. When true, no Cosmos DB will be created.')
+param skipCosmosDBDeployment bool = false
+
 // param aiServiceExists bool
 param aiSearchExists bool
 param azureStorageExists bool
@@ -40,7 +43,7 @@ resource existingCosmosDB 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' exi
 
 var canaryRegions = ['eastus2euap', 'centraluseuap']
 var cosmosDbRegion = contains(canaryRegions, location) ? 'westus' : location
-resource cosmosDB 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = if(!cosmosDBExists) {
+resource cosmosDB 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = if(!cosmosDBExists && !skipCosmosDBDeployment) {
   name: cosmosDBName
   location: cosmosDbRegion
   kind: 'GlobalDocumentDB'
@@ -141,8 +144,8 @@ output azureStorageId string =  azureStorageExists ? existingAzureStorageAccount
 output azureStorageResourceGroupName string = azureStorageExists ? azureStorageParts[4] : resourceGroup().name
 output azureStorageSubscriptionId string = azureStorageExists ? azureStorageParts[2] : subscription().subscriptionId
 
-output cosmosDBName string = cosmosDBExists ? existingCosmosDB.name : cosmosDB.name
-output cosmosDBId string = cosmosDBExists ? existingCosmosDB.id : cosmosDB.id
-output cosmosDBResourceGroupName string = cosmosDBExists ? cosmosParts[4] : resourceGroup().name
-output cosmosDBSubscriptionId string = cosmosDBExists ? cosmosParts[2] : subscription().subscriptionId
+output cosmosDBName string = skipCosmosDBDeployment ? '' : (cosmosDBExists ? existingCosmosDB.name : cosmosDB.name)
+output cosmosDBId string = skipCosmosDBDeployment ? '' : (cosmosDBExists ? existingCosmosDB.id : cosmosDB.id)
+output cosmosDBResourceGroupName string = skipCosmosDBDeployment ? '' : (cosmosDBExists ? cosmosParts[4] : resourceGroup().name)
+output cosmosDBSubscriptionId string = skipCosmosDBDeployment ? '' : (cosmosDBExists ? cosmosParts[2] : subscription().subscriptionId)
 // output keyvaultId string = keyVault.id

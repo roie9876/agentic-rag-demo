@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {"value": "swedencentral"},
+    "aiServices": {"value": "test-ai-services"},
+    "firstProjectName": {"value": "test-project"},
+    "projectDescription": {"value": "Test deployment"},
+    "displayName": {"value": "Test AI Foundry Hub"},
+    "modelName": {"value": "gpt-4o"},
+    "modelFormat": {"value": "OpenAI"},
+    "modelVersion": {"value": "2024-11-20"},
+    "modelSkuName": {"value": "GlobalStandard"},
+    "modelCapacity": {"value": 30},
+    "existingVnetResourceId": {"value": "/subscriptions/7aa77d2e-cbec-48b4-8518-9802543b25af/resourceGroups/private-rg/providers/Microsoft.Network/virtualNetworks/private-main-vnet"},
+    "vnetName": {"value": "test-fallback"},
+    "createSubnetsInExistingVnet": {"value": true},
+    "agentSubnetName": {"value": "agent-subnet"},
+    "agentSubnetPrefix": {"value": "10.0.5.0/24"},
+    "peSubnetName": {"value": "pe-subnet"},
+    "peSubnetPrefix": {"value": "10.0.6.0/24"},
+    "aiSearchResourceId": {"value": "/subscriptions/7aa77d2e-cbec-48b4-8518-9802543b25af/resourceGroups/private-rg/providers/Microsoft.Search/searchServices/private-ai-search"},
+    "azureStorageAccountResourceId": {"value": ""},
+    "azureCosmosDBAccountResourceId": {"value": ""},
+    "existingAiSearchPrivateEndpointName": {"value": ""},
+    "existingStoragePrivateEndpointName": {"value": ""},
+    "existingCosmosDBPrivateEndpointName": {"value": ""},
+    "existingAiServicesPrivateEndpointName": {"value": ""}
+  }
+}
