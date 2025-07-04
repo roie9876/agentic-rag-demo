@@ -282,9 +282,20 @@ class AIFoundryHubDeploymentUI:
                 
                 if vnets:
                     vnet_options = {f"{vnet['name']} ({vnet['resourceGroup']})": vnet['id'] for vnet in vnets}
+                    
+                    # Find the current selection index based on saved configuration
+                    current_index = 0
+                    if config.network_config.existing_vnet_resource_id:
+                        for i, (option_text, vnet_id) in enumerate(vnet_options.items()):
+                            if vnet_id == config.network_config.existing_vnet_resource_id:
+                                current_index = i
+                                break
+                    
                     selected_vnet = st.selectbox(
                         "Select VNet",
                         list(vnet_options.keys()),
+                        index=current_index,
+                        key="vnet_selector",
                         help="Select an existing Virtual Network"
                     )
                     
@@ -306,9 +317,20 @@ class AIFoundryHubDeploymentUI:
                             
                             with col1:
                                 st.markdown("**Agent Subnet:**")
+                                
+                                # Find current agent subnet index
+                                agent_subnet_index = 0
+                                if config.network_config.existing_agent_subnet_id:
+                                    for i, (option_text, subnet_id) in enumerate(subnet_options.items()):
+                                        if subnet_id == config.network_config.existing_agent_subnet_id:
+                                            agent_subnet_index = i
+                                            break
+                                
                                 selected_agent_subnet = st.selectbox(
                                     "Select Agent Subnet",
                                     list(subnet_options.keys()),
+                                    index=agent_subnet_index,
+                                    key="agent_subnet_selector",
                                     help="Subnet for AI Foundry agents and compute resources"
                                 )
                                 
@@ -324,9 +346,20 @@ class AIFoundryHubDeploymentUI:
                             
                             with col2:
                                 st.markdown("**Private Endpoint Subnet:**")
+                                
+                                # Find current PE subnet index
+                                pe_subnet_index = 0
+                                if config.network_config.existing_pe_subnet_id:
+                                    for i, (option_text, subnet_id) in enumerate(subnet_options.items()):
+                                        if subnet_id == config.network_config.existing_pe_subnet_id:
+                                            pe_subnet_index = i
+                                            break
+                                
                                 selected_pe_subnet = st.selectbox(
                                     "Select PE Subnet",
                                     list(subnet_options.keys()),
+                                    index=pe_subnet_index,
+                                    key="pe_subnet_selector",
                                     help="Subnet for private endpoints"
                                 )
                                 
@@ -339,6 +372,7 @@ class AIFoundryHubDeploymentUI:
                                     selected_subnet_info = next(s for s in subnets if s['id'] == config.network_config.existing_pe_subnet_id)
                                     st.success(f"✅ PE Subnet: {selected_subnet_info['name']}")
                                     st.caption(f"Address: {selected_subnet_info['addressPrefix']}")
+                        
                         else:
                             st.warning("No subnets found in the selected VNet")
                             # Fallback to manual input
@@ -357,6 +391,10 @@ class AIFoundryHubDeploymentUI:
                                     value=config.network_config.pe_subnet_name,
                                     help="Name of existing subnet for private endpoints"
                                 )
+                        
+                        # Show existing private endpoints in the selected VNet resource group
+                        if hasattr(config.network_config, 'existing_vnet_resource_id') and config.network_config.existing_vnet_resource_id:
+                            self._render_existing_private_endpoints_for_vnet(config.network_config.existing_vnet_resource_id)
                 else:
                     st.warning("No Virtual Networks found in the subscription")
                     config.network_config.existing_vnet_resource_id = st.text_input(
@@ -471,6 +509,23 @@ class AIFoundryHubDeploymentUI:
         # Enhanced Private Endpoint and DNS Configuration for existing resources
         st.markdown("**Network Configuration:**")
         
+        # Check for VNet-level private endpoint selections first
+        vnet_selection_key = None
+        if resource_type == 'Microsoft.Search/searchServices':
+            vnet_selection_key = 'ai_search_pe'
+        elif resource_type == 'Microsoft.Storage/storageAccounts':
+            vnet_selection_key = 'storage_pe'
+        elif resource_type == 'Microsoft.DocumentDB/databaseAccounts':
+            vnet_selection_key = 'cosmos_pe'
+        
+        # Check if there's a VNet-level selection for this resource type
+        vnet_selected_pe = ""
+        if (vnet_selection_key and 
+            'vnet_pe_selections' in st.session_state and 
+            st.session_state.vnet_pe_selections.get(vnet_selection_key)):
+            vnet_selected_pe = st.session_state.vnet_pe_selections[vnet_selection_key]
+            st.info(f"🔗 **VNet Selection:** {vnet_selected_pe} was selected in the network configuration above.")
+        
         # Check for existing private endpoints if resource ID is provided
         existing_pe_options = []
         if resource.existing_resource_id:
@@ -481,52 +536,29 @@ class AIFoundryHubDeploymentUI:
                     resource_group = resource_parts[4]
                     
                     # Get private endpoint suggestions for this resource type
-                    # Map from Azure resource type to simplified type for private endpoint discovery
-                    resource_type_for_pe = None
-                    simplified_type = None
+                    pe_suggestions = self.service.suggest_private_endpoints_for_services(
+                        resource_group=resource_group,
+                        ai_search_id=resource.existing_resource_id if resource_type == 'Microsoft.Search/searchServices' else "",
+                        storage_id=resource.existing_resource_id if resource_type == 'Microsoft.Storage/storageAccounts' else "",
+                        cosmos_id=resource.existing_resource_id if resource_type == 'Microsoft.DocumentDB/databaseAccounts' else ""
+                    )
                     
-                    st.write(f"🔍 DEBUG: Processing resource type: {resource_type}")
+                    # Get suggestions for this resource type
+                    # Map from Azure resource type to internal key
+                    azure_resource_type_mapping = {
+                        'Microsoft.Search/searchServices': 'ai_search',
+                        'Microsoft.Storage/storageAccounts': 'storage', 
+                        'Microsoft.DocumentDB/databaseAccounts': 'cosmos_db'
+                    }
                     
-                    if resource_type == "Microsoft.Search/searchServices":
-                        resource_type_for_pe = "search"
-                        simplified_type = "ai_search"
-                        st.write(f"🔍 DEBUG: Mapped AI Search to: {resource_type_for_pe} -> {simplified_type}")
-                    elif resource_type == "Microsoft.Storage/storageAccounts":
-                        resource_type_for_pe = "storage"
-                        simplified_type = "storage"
-                        st.write(f"🔍 DEBUG: Mapped Storage to: {resource_type_for_pe} -> {simplified_type}")
-                    elif resource_type == "Microsoft.DocumentDB/databaseAccounts":
-                        resource_type_for_pe = "cosmos"
-                        simplified_type = "cosmos_db"
-                        st.write(f"🔍 DEBUG: Mapped Cosmos to: {resource_type_for_pe} -> {simplified_type}")
-                    else:
-                        st.write(f"🔍 DEBUG: No mapping found for resource type: {resource_type}")
-                    
-                    if resource_type_for_pe:
-                        st.write(f"🔍 DEBUG: Calling PE suggestions with: resource_type_for_pe={resource_type_for_pe}, simplified_type={simplified_type}")
-                        
-                        pe_suggestions = self.service.suggest_private_endpoints_for_services(
-                            resource_group=resource_group,
-                            ai_search_id=resource.existing_resource_id if resource_type_for_pe == 'search' else "",
-                            storage_id=resource.existing_resource_id if resource_type_for_pe == 'storage' else "",
-                            cosmos_id=resource.existing_resource_id if resource_type_for_pe == 'cosmos' else ""
-                        )
-                        
-                        st.write(f"🔍 DEBUG: PE suggestions result: {pe_suggestions}")
-                        
-                        # Get suggestions for this resource type
-                        existing_pe_options = pe_suggestions.get(simplified_type, [])
-                        
-                        st.write(f"🔍 DEBUG: Found {len(existing_pe_options)} PE options for {simplified_type}")
-                        for ep in existing_pe_options:
-                            st.write(f"  - {ep['name']}")
+                    if resource_type in azure_resource_type_mapping:
+                        key = azure_resource_type_mapping[resource_type]
+                        existing_pe_options = pe_suggestions.get(key, [])
                         
                         # Also check for exact matches in the resource
                         specific_endpoints = self.service.get_existing_private_endpoints_for_resource(
                             resource.existing_resource_id
                         )
-                        
-                        st.write(f"🔍 DEBUG: Found {len(specific_endpoints)} specific endpoints")
                         
                         # Merge and deduplicate
                         all_endpoints = existing_pe_options + specific_endpoints
@@ -537,14 +569,11 @@ class AIFoundryHubDeploymentUI:
                                 existing_pe_options.append(ep)
                                 seen_names.add(ep['name'])
                         
-                        st.write(f"🔍 DEBUG: Final merged PE options: {len(existing_pe_options)}")
-                    else:
-                        # Unsupported resource type for private endpoint discovery
-                        existing_pe_options = []
-                        st.write(f"🔍 DEBUG: No resource_type_for_pe found, setting empty list")
+                        logger.info(f"Found {len(existing_pe_options)} private endpoints for {resource_type}: {[ep['name'] for ep in existing_pe_options]}")
                         
             except Exception as e:
                 logger.warning(f"Could not retrieve private endpoint suggestions: {e}")
+                logger.debug(f"Error details for resource {resource.existing_resource_id}: {str(e)}")
                 existing_pe_options = []
         
         col1, col2 = st.columns(2)
@@ -566,8 +595,59 @@ class AIFoundryHubDeploymentUI:
             elif pe_option == "Use existing private endpoint":
                 resource.create_private_endpoint = False
                 
-                if existing_pe_options:
-                    # Show dropdown with existing private endpoints
+                # Check if there's a VNet-level selection for this resource type first
+                if vnet_selected_pe:
+                    # Show VNet selection as priority option
+                    use_vnet_selection = st.checkbox(
+                        f"Use VNet selection: {vnet_selected_pe}",
+                        value=True,
+                        key=f"{resource_type}_use_vnet_pe",
+                        help="Use the private endpoint selected in the network configuration"
+                    )
+                    
+                    if use_vnet_selection:
+                        resource.existing_private_endpoint_name = vnet_selected_pe
+                        st.success(f"✅ Using VNet selection: {vnet_selected_pe}")
+                        st.info("🔗 This private endpoint was selected in the network configuration above.")
+                    else:
+                        # Fall back to manual selection
+                        if existing_pe_options:
+                            # Show dropdown with existing private endpoints
+                            pe_display_names = [f"{ep['name']} (subnet: {ep.get('subnet_name', 'Unknown')})" for ep in existing_pe_options]
+                            pe_display_names.insert(0, "Select existing private endpoint...")
+                            
+                            selected_pe_index = st.selectbox(
+                                "Select Existing Private Endpoint",
+                                options=range(len(pe_display_names)),
+                                format_func=lambda x: pe_display_names[x],
+                                key=f"{resource_type}_existing_pe_select",
+                                help="Select an existing private endpoint for this resource"
+                            )
+                            
+                            if selected_pe_index > 0:
+                                selected_pe = existing_pe_options[selected_pe_index - 1]
+                                resource.existing_private_endpoint_name = selected_pe['name']
+                                st.success(f"✅ Selected: {selected_pe['name']}")
+                                
+                                # Show additional info about selected endpoint
+                                st.info(f"📍 Subnet: {selected_pe.get('subnet_name', 'Unknown')}")
+                                if selected_pe.get('connected_resources'):
+                                    st.info(f"🔗 Connected to: {', '.join(selected_pe['connected_resources'])}")
+                            else:
+                                resource.existing_private_endpoint_name = ""
+                                st.warning("Please select an existing private endpoint")
+                        else:
+                            # No existing private endpoints found - allow manual entry
+                            st.warning(f"No other private endpoints found for {title}")
+                            resource.existing_private_endpoint_name = st.text_input(
+                                "Private Endpoint Name",
+                                value=getattr(resource, 'existing_private_endpoint_name', ''),
+                                key=f"{resource_type}_pe_name_manual",
+                                help="Enter the name of an existing private endpoint"
+                            )
+                
+                elif existing_pe_options:
+                    # No VNet selection, show dropdown with existing private endpoints
                     pe_display_names = [f"{ep['name']} (subnet: {ep.get('subnet_name', 'Unknown')})" for ep in existing_pe_options]
                     pe_display_names.insert(0, "Select existing private endpoint...")
                     
@@ -1035,6 +1115,198 @@ class AIFoundryHubDeploymentUI:
             st.markdown("### 📋 Deployment Output")
             with st.expander("View Output", expanded=False):
                 st.code(deployment['output'], language="json" if deployment.get('success', False) else "text")
+    
+    def _render_existing_private_endpoints_for_vnet(self, vnet_resource_id: str) -> None:
+        """Render existing private endpoints available in the VNet's resource group."""
+        try:
+            # Extract resource group from VNet resource ID
+            vnet_parts = vnet_resource_id.split('/')
+            if len(vnet_parts) >= 5:
+                resource_group = vnet_parts[4]
+                
+                st.markdown("### 🔗 Existing Private Endpoints")
+                st.info("📍 Private endpoints found in the selected VNet's resource group that you can reference or avoid conflicts with:")
+                
+                # Get all private endpoints in the resource group
+                all_pe_suggestions = self.service.suggest_private_endpoints_for_services(
+                    resource_group=resource_group,
+                    ai_search_id="",  # Get all PEs, not filtered by resource
+                    storage_id="", 
+                    cosmos_id=""
+                )
+                
+                # Combine all private endpoints
+                all_endpoints = []
+                for category, endpoints in all_pe_suggestions.items():
+                    all_endpoints.extend(endpoints)
+                
+                if all_endpoints:
+                    st.markdown(f"**Found {len(all_endpoints)} private endpoints in resource group `{resource_group}`:**")
+                    
+                    # Group by service type for better display
+                    pe_by_type = {
+                        'ai_search': [],
+                        'storage': [],
+                        'cosmos_db': [],
+                        'other': []
+                    }
+                    
+                    for endpoint in all_endpoints:
+                        # Categorize by connected resources or naming patterns
+                        connected_resources = endpoint.get('connected_resources', [])
+                        endpoint_name = endpoint['name'].lower()
+                        
+                        categorized = False
+                        for resource in connected_resources:
+                            resource_lower = resource.lower()
+                            if any(pattern in resource_lower for pattern in ['search', 'cognitive']):
+                                pe_by_type['ai_search'].append(endpoint)
+                                categorized = True
+                                break
+                            elif any(pattern in resource_lower for pattern in ['storage', 'blob']):
+                                pe_by_type['storage'].append(endpoint)
+                                categorized = True
+                                break
+                            elif any(pattern in resource_lower for pattern in ['cosmos', 'documentdb']):
+                                pe_by_type['cosmos_db'].append(endpoint)
+                                categorized = True
+                                break
+                        
+                        if not categorized:
+                            # Try to categorize by endpoint name
+                            if any(pattern in endpoint_name for pattern in ['search', 'ai-search', 'cognitive']):
+                                pe_by_type['ai_search'].append(endpoint)
+                            elif any(pattern in endpoint_name for pattern in ['storage', 'blob', 'file', 'queue', 'table']):
+                                pe_by_type['storage'].append(endpoint)
+                            elif any(pattern in endpoint_name for pattern in ['cosmos', 'documentdb']):
+                                pe_by_type['cosmos_db'].append(endpoint)
+                            else:
+                                pe_by_type['other'].append(endpoint)
+                    
+                    # Display by category
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if pe_by_type['ai_search']:
+                            st.markdown("**🔍 AI Search Private Endpoints:**")
+                            for pe in pe_by_type['ai_search']:
+                                subnet_name = pe.get('subnet_name', 'Unknown')
+                                connected = ', '.join(pe.get('connected_resources', ['Unknown']))
+                                st.write(f"• `{pe['name']}` (subnet: {subnet_name}, connected: {connected})")
+                        
+                        if pe_by_type['storage']:
+                            st.markdown("**💾 Storage Private Endpoints:**")
+                            for pe in pe_by_type['storage']:
+                                subnet_name = pe.get('subnet_name', 'Unknown')
+                                connected = ', '.join(pe.get('connected_resources', ['Unknown']))
+                                st.write(f"• `{pe['name']}` (subnet: {subnet_name}, connected: {connected})")
+                    
+                    with col2:
+                        if pe_by_type['cosmos_db']:
+                            st.markdown("**🌌 Cosmos DB Private Endpoints:**")
+                            for pe in pe_by_type['cosmos_db']:
+                                subnet_name = pe.get('subnet_name', 'Unknown')
+                                connected = ', '.join(pe.get('connected_resources', ['Unknown']))
+                                st.write(f"• `{pe['name']}` (subnet: {subnet_name}, connected: {connected})")
+                        
+                        if pe_by_type['other']:
+                            st.markdown("**🔧 Other Private Endpoints:**")
+                            for pe in pe_by_type['other']:
+                                subnet_name = pe.get('subnet_name', 'Unknown')
+                                connected = ', '.join(pe.get('connected_resources', ['Unknown']))
+                                st.write(f"• `{pe['name']}` (subnet: {subnet_name}, connected: {connected})")
+                    
+                    # Add interactive selection for private endpoints
+                    st.markdown("---")
+                    st.markdown("### 📋 Select Private Endpoints for Deployment")
+                    st.info("💡 **Optional:** Select existing private endpoints to reference in your deployment and avoid conflicts.")
+                    
+                    # Store selections in session state if not already present
+                    if 'vnet_pe_selections' not in st.session_state:
+                        st.session_state.vnet_pe_selections = {
+                            'ai_search_pe': "",
+                            'storage_pe': "",
+                            'cosmos_pe': ""
+                        }
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        if pe_by_type['ai_search']:
+                            st.markdown("**🔍 AI Search PE:**")
+                            ai_search_options = ["None (Auto-detect)"] + [pe['name'] for pe in pe_by_type['ai_search']]
+                            selected_ai_search_pe = st.selectbox(
+                                "Select AI Search Private Endpoint",
+                                ai_search_options,
+                                key="vnet_ai_search_pe",
+                                help="Choose existing AI Search private endpoint to reference"
+                            )
+                            if selected_ai_search_pe != "None (Auto-detect)":
+                                st.session_state.vnet_pe_selections['ai_search_pe'] = selected_ai_search_pe
+                                st.success(f"✅ Selected: {selected_ai_search_pe}")
+                            else:
+                                st.session_state.vnet_pe_selections['ai_search_pe'] = ""
+                    
+                    with col2:
+                        if pe_by_type['storage']:
+                            st.markdown("**💾 Storage PE:**")
+                            storage_options = ["None (Auto-detect)"] + [pe['name'] for pe in pe_by_type['storage']]
+                            selected_storage_pe = st.selectbox(
+                                "Select Storage Private Endpoint",
+                                storage_options,
+                                key="vnet_storage_pe",
+                                help="Choose existing Storage private endpoint to reference"
+                            )
+                            if selected_storage_pe != "None (Auto-detect)":
+                                st.session_state.vnet_pe_selections['storage_pe'] = selected_storage_pe
+                                st.success(f"✅ Selected: {selected_storage_pe}")
+                            else:
+                                st.session_state.vnet_pe_selections['storage_pe'] = ""
+                    
+                    with col3:
+                        if pe_by_type['cosmos_db']:
+                            st.markdown("**🌌 Cosmos DB PE:**")
+                            cosmos_options = ["None (Auto-detect)"] + [pe['name'] for pe in pe_by_type['cosmos_db']]
+                            selected_cosmos_pe = st.selectbox(
+                                "Select Cosmos DB Private Endpoint",
+                                cosmos_options,
+                                key="vnet_cosmos_pe",
+                                help="Choose existing Cosmos DB private endpoint to reference"
+                            )
+                            if selected_cosmos_pe != "None (Auto-detect)":
+                                st.session_state.vnet_pe_selections['cosmos_pe'] = selected_cosmos_pe
+                                st.success(f"✅ Selected: {selected_cosmos_pe}")
+                            else:
+                                st.session_state.vnet_pe_selections['cosmos_pe'] = ""
+                    
+                    # Show summary of selections
+                    if any(st.session_state.vnet_pe_selections.values()):
+                        st.markdown("### 📋 Selected Private Endpoints Summary:")
+                        selection_summary = []
+                        if st.session_state.vnet_pe_selections['ai_search_pe']:
+                            selection_summary.append(f"🔍 AI Search: `{st.session_state.vnet_pe_selections['ai_search_pe']}`")
+                        if st.session_state.vnet_pe_selections['storage_pe']:
+                            selection_summary.append(f"💾 Storage: `{st.session_state.vnet_pe_selections['storage_pe']}`")
+                        if st.session_state.vnet_pe_selections['cosmos_pe']:
+                            selection_summary.append(f"🌌 Cosmos DB: `{st.session_state.vnet_pe_selections['cosmos_pe']}`")
+                        
+                        if selection_summary:
+                            st.info("**Selected Private Endpoints:**\n" + "\n".join(selection_summary))
+                            st.success("✅ These private endpoints will be referenced in the deployment to avoid conflicts!")
+                
+                else:
+                    st.info(f"No private endpoints found in resource group `{resource_group}`. New private endpoints will be created as needed.")
+                    # Clear any previous selections
+                    if 'vnet_pe_selections' in st.session_state:
+                        st.session_state.vnet_pe_selections = {
+                            'ai_search_pe': "",
+                            'storage_pe': "",
+                            'cosmos_pe': ""
+                        }
+                    
+        except Exception as e:
+            st.warning(f"Could not retrieve private endpoints for VNet: {str(e)}")
+            logger.warning(f"Error getting private endpoints for VNet {vnet_resource_id}: {str(e)}")
 
 def render_ai_foundry_hub_deployment_ui() -> None:
     """Wrapper function to render the AI Foundry Hub deployment UI."""
