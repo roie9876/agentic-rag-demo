@@ -7,6 +7,9 @@ param vnetName string
 @description('Indicates if an existing VNet should be used')
 param useExistingVnet bool = false
 
+@description('Indicates if subnets should be created in existing VNet (false = use existing subnets)')
+param createSubnetsInExistingVnet bool = false
+
 @description('Subscription ID of the existing VNet (if different from current subscription)')
 param existingVnetSubscriptionId string = subscription().subscriptionId
 
@@ -42,8 +45,8 @@ module newVNet 'vnet.bicep' = if (!useExistingVnet) {
   }
 }
 
-// Use existing VNet if requested
-module existingVNet 'existing-vnet.bicep' = if (useExistingVnet) {
+// Use existing VNet with existing subnets
+module existingVNet 'existing-vnet.bicep' = if (useExistingVnet && !createSubnetsInExistingVnet) {
   name: 'existing-vnet-deployment'
   params: {
     vnetName: vnetName
@@ -56,12 +59,26 @@ module existingVNet 'existing-vnet.bicep' = if (useExistingVnet) {
   }
 }
 
+// Use existing VNet but create new subnets (YOUR SCENARIO)
+module existingVNetNewSubnets 'existing-vnet-new-subnets.bicep' = if (useExistingVnet && createSubnetsInExistingVnet) {
+  name: 'existing-vnet-new-subnets-deployment'
+  params: {
+    vnetName: vnetName
+    vnetResourceGroupName: existingVnetResourceGroupName
+    vnetSubscriptionId: existingVnetSubscriptionId
+    agentSubnetName: agentSubnetName
+    peSubnetName: peSubnetName
+    agentSubnetPrefix: agentSubnetPrefix
+    peSubnetPrefix: peSubnetPrefix
+  }
+}
+
 // Provide unified outputs regardless of which module was used
-output virtualNetworkName string = useExistingVnet ? existingVNet.outputs.virtualNetworkName : newVNet.outputs.virtualNetworkName
-output virtualNetworkId string = useExistingVnet ? existingVNet.outputs.virtualNetworkId : newVNet.outputs.virtualNetworkId
-output virtualNetworkSubscriptionId string = useExistingVnet ? existingVNet.outputs.virtualNetworkSubscriptionId : newVNet.outputs.virtualNetworkSubscriptionId
-output virtualNetworkResourceGroup string = useExistingVnet ? existingVNet.outputs.virtualNetworkResourceGroup : newVNet.outputs.virtualNetworkResourceGroup
+output virtualNetworkName string = useExistingVnet ? (createSubnetsInExistingVnet ? existingVNetNewSubnets.outputs.virtualNetworkName : existingVNet.outputs.virtualNetworkName) : newVNet.outputs.virtualNetworkName
+output virtualNetworkId string = useExistingVnet ? (createSubnetsInExistingVnet ? existingVNetNewSubnets.outputs.virtualNetworkId : existingVNet.outputs.virtualNetworkId) : newVNet.outputs.virtualNetworkId
+output virtualNetworkSubscriptionId string = useExistingVnet ? (createSubnetsInExistingVnet ? existingVNetNewSubnets.outputs.virtualNetworkSubscriptionId : existingVNet.outputs.virtualNetworkSubscriptionId) : newVNet.outputs.virtualNetworkSubscriptionId
+output virtualNetworkResourceGroup string = useExistingVnet ? (createSubnetsInExistingVnet ? existingVNetNewSubnets.outputs.virtualNetworkResourceGroup : existingVNet.outputs.virtualNetworkResourceGroup) : newVNet.outputs.virtualNetworkResourceGroup
 output agentSubnetName string = agentSubnetName
 output peSubnetName string = peSubnetName
-output agentSubnetId string = useExistingVnet ? existingVNet.outputs.agentSubnetId : newVNet.outputs.agentSubnetId
-output peSubnetId string = useExistingVnet ? existingVNet.outputs.peSubnetId : newVNet.outputs.peSubnetId
+output agentSubnetId string = useExistingVnet ? (createSubnetsInExistingVnet ? existingVNetNewSubnets.outputs.agentSubnetId : existingVNet.outputs.agentSubnetId) : newVNet.outputs.agentSubnetId
+output peSubnetId string = useExistingVnet ? (createSubnetsInExistingVnet ? existingVNetNewSubnets.outputs.peSubnetId : existingVNet.outputs.peSubnetId) : newVNet.outputs.peSubnetId

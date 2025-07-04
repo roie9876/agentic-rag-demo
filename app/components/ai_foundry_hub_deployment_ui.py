@@ -307,94 +307,213 @@ class AIFoundryHubDeploymentUI:
                         st.info(f"Selected VNet: {selected_vnet_info['name']} in {selected_vnet_info['location']}")
                         
                         # Get subnets for the selected VNet
-                        st.markdown("**Select Subnets:**")
+                        st.markdown("**Subnet Configuration:**")
                         subnets = self.service.get_vnet_subnets(config.network_config.existing_vnet_resource_id)
                         
                         if subnets:
-                            subnet_options = {f"{subnet['name']} ({subnet['addressPrefix']})": subnet['id'] for subnet in subnets}
+                            # Show subnet usage option
+                            subnet_choice = st.radio(
+                                "How would you like to configure subnets?",
+                                ["Use existing subnets", "Create new subnets"],
+                                index=0 if hasattr(config.network_config, 'existing_agent_subnet_id') and config.network_config.existing_agent_subnet_id else 1,
+                                help="Choose whether to use existing subnets or create new ones in the VNet"
+                            )
                             
-                            col1, col2 = st.columns(2)
-                            
-                            with col1:
-                                st.markdown("**Agent Subnet:**")
+                            if subnet_choice == "Use existing subnets":
+                                # Clear new subnet fields when switching to existing
+                                if not hasattr(config.network_config, 'existing_agent_subnet_id'):
+                                    config.network_config.existing_agent_subnet_id = ""
+                                    config.network_config.existing_pe_subnet_id = ""
                                 
-                                # Find current agent subnet index
-                                agent_subnet_index = 0
-                                if config.network_config.existing_agent_subnet_id:
-                                    for i, (option_text, subnet_id) in enumerate(subnet_options.items()):
-                                        if subnet_id == config.network_config.existing_agent_subnet_id:
-                                            agent_subnet_index = i
-                                            break
+                                subnet_options = {f"{subnet['name']} ({subnet['addressPrefix']})": subnet['id'] for subnet in subnets}
                                 
-                                selected_agent_subnet = st.selectbox(
-                                    "Select Agent Subnet",
-                                    list(subnet_options.keys()),
-                                    index=agent_subnet_index,
-                                    key="agent_subnet_selector",
-                                    help="Subnet for AI Foundry agents and compute resources"
-                                )
+                                col1, col2 = st.columns(2)
                                 
-                                if selected_agent_subnet:
-                                    config.network_config.existing_agent_subnet_id = subnet_options[selected_agent_subnet]
-                                    # Extract subnet name from selection
-                                    config.network_config.agent_subnet_name = selected_agent_subnet.split(' (')[0]
+                                with col1:
+                                    st.markdown("**Agent Subnet:**")
                                     
-                                    # Show subnet details
-                                    selected_subnet_info = next(s for s in subnets if s['id'] == config.network_config.existing_agent_subnet_id)
-                                    st.success(f"✅ Agent Subnet: {selected_subnet_info['name']}")
-                                    st.caption(f"Address: {selected_subnet_info['addressPrefix']}")
-                            
-                            with col2:
-                                st.markdown("**Private Endpoint Subnet:**")
-                                
-                                # Find current PE subnet index
-                                pe_subnet_index = 0
-                                if config.network_config.existing_pe_subnet_id:
-                                    for i, (option_text, subnet_id) in enumerate(subnet_options.items()):
-                                        if subnet_id == config.network_config.existing_pe_subnet_id:
-                                            pe_subnet_index = i
-                                            break
-                                
-                                selected_pe_subnet = st.selectbox(
-                                    "Select PE Subnet",
-                                    list(subnet_options.keys()),
-                                    index=pe_subnet_index,
-                                    key="pe_subnet_selector",
-                                    help="Subnet for private endpoints"
-                                )
-                                
-                                if selected_pe_subnet:
-                                    config.network_config.existing_pe_subnet_id = subnet_options[selected_pe_subnet]
-                                    # Extract subnet name from selection
-                                    config.network_config.pe_subnet_name = selected_pe_subnet.split(' (')[0]
+                                    # Find current agent subnet index
+                                    agent_subnet_index = 0
+                                    if config.network_config.existing_agent_subnet_id:
+                                        for i, (option_text, subnet_id) in enumerate(subnet_options.items()):
+                                            if subnet_id == config.network_config.existing_agent_subnet_id:
+                                                agent_subnet_index = i
+                                                break
                                     
-                                    # Show subnet details
-                                    selected_subnet_info = next(s for s in subnets if s['id'] == config.network_config.existing_pe_subnet_id)
-                                    st.success(f"✅ PE Subnet: {selected_subnet_info['name']}")
-                                    st.caption(f"Address: {selected_subnet_info['addressPrefix']}")
+                                    selected_agent_subnet = st.selectbox(
+                                        "Select Agent Subnet",
+                                        list(subnet_options.keys()),
+                                        index=agent_subnet_index,
+                                        key="agent_subnet_selector",
+                                        help="Subnet for AI Foundry agents and compute resources"
+                                    )
+                                    
+                                    if selected_agent_subnet:
+                                        config.network_config.existing_agent_subnet_id = subnet_options[selected_agent_subnet]
+                                        # Extract subnet name from selection
+                                        config.network_config.agent_subnet_name = selected_agent_subnet.split(' (')[0]
+                                        
+                                        # Show subnet details
+                                        selected_subnet_info = next(s for s in subnets if s['id'] == config.network_config.existing_agent_subnet_id)
+                                        st.success(f"✅ Agent Subnet: {selected_subnet_info['name']}")
+                                        st.caption(f"Address: {selected_subnet_info['addressPrefix']}")
+                                
+                                with col2:
+                                    st.markdown("**Private Endpoint Subnet:**")
+                                    
+                                    # Find current PE subnet index
+                                    pe_subnet_index = 0
+                                    if config.network_config.existing_pe_subnet_id:
+                                        for i, (option_text, subnet_id) in enumerate(subnet_options.items()):
+                                            if subnet_id == config.network_config.existing_pe_subnet_id:
+                                                pe_subnet_index = i
+                                                break
+                                    
+                                    selected_pe_subnet = st.selectbox(
+                                        "Select PE Subnet",
+                                        list(subnet_options.keys()),
+                                        index=pe_subnet_index,
+                                        key="pe_subnet_selector",
+                                        help="Subnet for private endpoints"
+                                    )
+                                    
+                                    if selected_pe_subnet:
+                                        config.network_config.existing_pe_subnet_id = subnet_options[selected_pe_subnet]
+                                        # Extract subnet name from selection
+                                        config.network_config.pe_subnet_name = selected_pe_subnet.split(' (')[0]
+                                        
+                                        # Show subnet details
+                                        selected_subnet_info = next(s for s in subnets if s['id'] == config.network_config.existing_pe_subnet_id)
+                                        st.success(f"✅ PE Subnet: {selected_subnet_info['name']}")
+                                        st.caption(f"Address: {selected_subnet_info['addressPrefix']}")
+                            
+                            else:  # Create new subnets
+                                # Clear existing subnet IDs when switching to new
+                                config.network_config.existing_agent_subnet_id = ""
+                                config.network_config.existing_pe_subnet_id = ""
+                                
+                                st.info("ℹ️ New subnets will be created in your existing VNet")
+                                
+                                # Option to create new subnets with address prefixes
+                                col1, col2 = st.columns(2)
+                                
+                                with col1:
+                                    st.markdown("**Agent Subnet (New):**")
+                                    config.network_config.agent_subnet_name = st.text_input(
+                                        "Agent Subnet Name",
+                                        value=config.network_config.agent_subnet_name,
+                                        help="Name for new subnet for agents"
+                                    )
+                                    config.network_config.agent_subnet_prefix = st.text_input(
+                                        "Agent Subnet Address Prefix",
+                                        value=config.network_config.agent_subnet_prefix,
+                                        help="Address prefix for agent subnet (e.g., 10.0.5.0/24)"
+                                    )
+                                
+                                with col2:
+                                    st.markdown("**Private Endpoint Subnet (New):**")
+                                    config.network_config.pe_subnet_name = st.text_input(
+                                        "Private Endpoint Subnet Name",
+                                        value=config.network_config.pe_subnet_name,
+                                        help="Name for new subnet for private endpoints"
+                                    )
+                                    config.network_config.pe_subnet_prefix = st.text_input(
+                                        "Private Endpoint Subnet Address Prefix",
+                                        value=config.network_config.pe_subnet_prefix,
+                                        help="Address prefix for PE subnet (e.g., 10.0.6.0/24)"
+                                    )
                         
                         else:
                             st.warning("No subnets found in the selected VNet")
-                            # Fallback to manual input
+                            st.info("ℹ️ The deployment will create new subnets in your existing VNet")
+                            
+                            # Clear existing subnet IDs since no subnets exist
+                            config.network_config.existing_agent_subnet_id = ""
+                            config.network_config.existing_pe_subnet_id = ""
+                            
+                            # Option to create new subnets with address prefixes
                             col1, col2 = st.columns(2)
                             
                             with col1:
+                                st.markdown("**Agent Subnet (New):**")
                                 config.network_config.agent_subnet_name = st.text_input(
                                     "Agent Subnet Name",
                                     value=config.network_config.agent_subnet_name,
-                                    help="Name of existing subnet for agents"
+                                    help="Name for new subnet for agents"
+                                )
+                                config.network_config.agent_subnet_prefix = st.text_input(
+                                    "Agent Subnet Address Prefix",
+                                    value=config.network_config.agent_subnet_prefix,
+                                    help="Address prefix for agent subnet (e.g., 10.0.5.0/24)"
                                 )
                             
                             with col2:
+                                st.markdown("**Private Endpoint Subnet (New):**")
                                 config.network_config.pe_subnet_name = st.text_input(
                                     "Private Endpoint Subnet Name",
                                     value=config.network_config.pe_subnet_name,
-                                    help="Name of existing subnet for private endpoints"
+                                    help="Name for new subnet for private endpoints"
+                                )
+                                config.network_config.pe_subnet_prefix = st.text_input(
+                                    "PE Subnet Address Prefix",
+                                    value=config.network_config.pe_subnet_prefix,
+                                    help="Address prefix for PE subnet (e.g., 10.0.6.0/24)"
                                 )
                         
-                        # Show existing private endpoints in the selected VNet resource group
-                        if hasattr(config.network_config, 'existing_vnet_resource_id') and config.network_config.existing_vnet_resource_id:
-                            self._render_existing_private_endpoints_for_vnet(config.network_config.existing_vnet_resource_id)
+                        # Add option to create new subnets even when existing subnets are found
+                        if subnets:
+                            st.markdown("---")
+                            st.markdown("**Alternative: Create New Subnets**")
+                            create_new_subnets = st.checkbox(
+                                "Create new subnets instead of using existing ones",
+                                key="create_new_subnets_option",
+                                help="Check this to create new dedicated subnets for AI Foundry Hub"
+                            )
+                            
+                            if create_new_subnets:
+                                # Clear existing subnet selections
+                                config.network_config.existing_agent_subnet_id = ""
+                                config.network_config.existing_pe_subnet_id = ""
+                                
+                                col1, col2 = st.columns(2)
+                                
+                                with col1:
+                                    st.markdown("**New Agent Subnet:**")
+                                    config.network_config.agent_subnet_name = st.text_input(
+                                        "New Agent Subnet Name",
+                                        value="AIFoundryAgentSubnet",
+                                        key="new_agent_subnet_name",
+                                        help="Name for new subnet for agents"
+                                    )
+                                    config.network_config.agent_subnet_prefix = st.text_input(
+                                        "New Agent Subnet Address Prefix",
+                                        value="",
+                                        key="new_agent_subnet_prefix",
+                                        help="Address prefix for agent subnet (e.g., 10.0.5.0/24)"
+                                    )
+                                
+                                with col2:
+                                    st.markdown("**New Private Endpoint Subnet:**")
+                                    config.network_config.pe_subnet_name = st.text_input(
+                                        "New PE Subnet Name",
+                                        value="AIFoundryPESubnet",
+                                        key="new_pe_subnet_name",
+                                        help="Name for new subnet for private endpoints"
+                                    )
+                                    config.network_config.pe_subnet_prefix = st.text_input(
+                                        "New PE Subnet Address Prefix",
+                                        value="",
+                                        key="new_pe_subnet_prefix",
+                                        help="Address prefix for PE subnet (e.g., 10.0.6.0/24)"
+                                    )
+                                
+                                if config.network_config.agent_subnet_prefix and config.network_config.pe_subnet_prefix:
+                                    st.success("✅ Ready to create new subnets in existing VNet")
+                                else:
+                                    st.warning("⚠️ Please specify address prefixes for both subnets")
+                        
+                        # Note: Private endpoint configuration is handled in Resource Configuration section
+                        # Each resource (AI Search, Storage, Cosmos DB) has its own PE selection there
                 else:
                     st.warning("No Virtual Networks found in the subscription")
                     config.network_config.existing_vnet_resource_id = st.text_input(

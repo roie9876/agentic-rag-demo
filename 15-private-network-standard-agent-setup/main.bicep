@@ -72,6 +72,9 @@ param agentSubnetPrefix string = ''
 @description('Address prefix for the private endpoint subnet')
 param peSubnetPrefix string = ''
 
+@description('Create new subnets in existing VNet (true) or use existing subnets (false). Only relevant when using existing VNet.')
+param createSubnetsInExistingVnet bool = true
+
 @description('The AI Search Service full ARM Resource ID. This is an optional field, and if not provided, the resource will be created.')
 param aiSearchResourceId string = ''
 @description('The AI Storage Account full ARM Resource ID. This is an optional field, and if not provided, the resource will be created.')
@@ -132,6 +135,7 @@ module vnet 'modules-network-secured/network-agent-vnet.bicep' = {
     location: location
     vnetName: trimVnetName
     useExistingVnet: existingVnetPassedIn
+    createSubnetsInExistingVnet: createSubnetsInExistingVnet
     existingVnetResourceGroupName: vnetResourceGroupName
     agentSubnetName: agentSubnetName
     peSubnetName: peSubnetName

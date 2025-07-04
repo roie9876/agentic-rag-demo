@@ -231,34 +231,29 @@ class AIFoundryHubDeploymentService:
             params["peSubnetPrefix"] = {"value": config.network_config.pe_subnet_prefix}
             # Pass empty existingVnetResourceId for new VNet
             params["existingVnetResourceId"] = {"value": ""}
+            params["createSubnetsInExistingVnet"] = {"value": False}
         else:
-            # For existing VNet, extract the actual VNet name from resource ID and pass subnet resource IDs
+            # For existing VNet, pass the full resource ID and let bicep extract the name
             vnet_resource_id = config.network_config.existing_vnet_resource_id
             
-            # Extract VNet name from resource ID
-            # Format: /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Network/virtualNetworks/{vnet}
-            vnet_parts = vnet_resource_id.split('/')
-            actual_vnet_name = vnet_parts[-1] if len(vnet_parts) > 0 else config.network_config.vnet_name
-            
             params["existingVnetResourceId"] = {"value": vnet_resource_id}
-            params["vnetName"] = {"value": actual_vnet_name}
+            # Pass vnetName for new VNet creation scenarios, bicep will use extracted name for existing VNet
+            params["vnetName"] = {"value": config.network_config.vnet_name}
             
-            # For existing VNet, extract subnet names from resource IDs if available
-            if hasattr(config.network_config, 'existing_agent_subnet_id') and config.network_config.existing_agent_subnet_id:
-                # Extract subnet name from resource ID
-                agent_subnet_parts = config.network_config.existing_agent_subnet_id.split('/')
-                params["agentSubnetName"] = {"value": agent_subnet_parts[-1] if len(agent_subnet_parts) > 0 else config.network_config.agent_subnet_name}
-            else:
-                params["agentSubnetName"] = {"value": config.network_config.agent_subnet_name}
+            # Check if we're creating new subnets or using existing ones
+            has_existing_subnets = (hasattr(config.network_config, 'existing_agent_subnet_id') and config.network_config.existing_agent_subnet_id) or \
+                                 (hasattr(config.network_config, 'existing_pe_subnet_id') and config.network_config.existing_pe_subnet_id)
             
-            if hasattr(config.network_config, 'existing_pe_subnet_id') and config.network_config.existing_pe_subnet_id:
-                # Extract subnet name from resource ID
-                pe_subnet_parts = config.network_config.existing_pe_subnet_id.split('/')
-                params["peSubnetName"] = {"value": pe_subnet_parts[-1] if len(pe_subnet_parts) > 0 else config.network_config.pe_subnet_name}
-            else:
-                params["peSubnetName"] = {"value": config.network_config.pe_subnet_name}
+            params["createSubnetsInExistingVnet"] = {"value": not has_existing_subnets}
             
-            # Don't pass address prefixes for existing VNet
+            # Subnet configuration
+            params["agentSubnetName"] = {"value": config.network_config.agent_subnet_name}
+            params["peSubnetName"] = {"value": config.network_config.pe_subnet_name}
+            
+            # Only pass address prefixes when creating new subnets
+            if not has_existing_subnets:
+                params["agentSubnetPrefix"] = {"value": config.network_config.agent_subnet_prefix}
+                params["peSubnetPrefix"] = {"value": config.network_config.pe_subnet_prefix}
         
         # Resource configuration - only pass resource IDs for existing resources
         # The bicep template uses empty string to indicate "create new"
