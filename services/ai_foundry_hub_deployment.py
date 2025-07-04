@@ -25,7 +25,6 @@ from utils.azure_helpers import check_azure_cli_login
 logger = logging.getLogger(__name__)
 
 @dataclass
-@dataclass
 class DeploymentResource:
     """Represents a resource that can be deployed or used as existing."""
     name: str
@@ -71,12 +70,13 @@ class AIFoundryHubDeploymentConfig:
     project_description: str = "A project for the AI Foundry account with network secured deployed Agent"
     display_name: str = "network secured agent project"
     
-    # Model settings
+    # Model settings (OpenAI deployment)
     model_name: str = "gpt-4o"
     model_format: str = "OpenAI"
     model_version: str = "2024-11-20"
     model_sku_name: str = "GlobalStandard"
     model_capacity: int = 30
+    skip_openai_deployment: bool = True  # Default to skip OpenAI deployment
     
     # Network configuration
     network_config: NetworkConfig = None
@@ -217,7 +217,8 @@ class AIFoundryHubDeploymentService:
             "modelFormat": {"value": config.model_format},
             "modelVersion": {"value": config.model_version},
             "modelSkuName": {"value": config.model_sku_name},
-            "modelCapacity": {"value": config.model_capacity}
+            "modelCapacity": {"value": config.model_capacity},
+            "skipOpenAIDeployment": {"value": config.skip_openai_deployment}
         }
         
         # Network configuration
@@ -241,35 +242,50 @@ class AIFoundryHubDeploymentService:
             params["vnetName"] = {"value": config.network_config.vnet_name}
             
             # Check if we're creating new subnets or using existing ones
-            has_existing_subnets = (hasattr(config.network_config, 'existing_agent_subnet_id') and config.network_config.existing_agent_subnet_id) or \
-                                 (hasattr(config.network_config, 'existing_pe_subnet_id') and config.network_config.existing_pe_subnet_id)
+            has_explicit_subnet_ids = (hasattr(config.network_config, 'existing_agent_subnet_id') and config.network_config.existing_agent_subnet_id) or \
+                                     (hasattr(config.network_config, 'existing_pe_subnet_id') and config.network_config.existing_pe_subnet_id)
+            
+            # Initialize subnet existence flags
+            agent_subnet_exists = False
+            pe_subnet_exists = False
             
             # If no explicit subnet IDs were provided, try to auto-detect existing subnets by name
-            if not has_existing_subnets and vnet_resource_id:
+            if not has_explicit_subnet_ids and vnet_resource_id:
                 try:
                     existing_subnets = self.get_vnet_subnets(vnet_resource_id)
                     subnet_names = [s.get('name', '') for s in existing_subnets]
                     
-                    # Check if both required subnet names already exist
-                    agent_exists = config.network_config.agent_subnet_name in subnet_names
-                    pe_exists = config.network_config.pe_subnet_name in subnet_names
+                    # Check individual subnet existence
+                    agent_subnet_exists = config.network_config.agent_subnet_name in subnet_names
+                    pe_subnet_exists = config.network_config.pe_subnet_name in subnet_names
                     
-                    if agent_exists and pe_exists:
-                        has_existing_subnets = True
+                    if agent_subnet_exists and pe_subnet_exists:
                         logger.info(f"Auto-detected existing subnets: {config.network_config.agent_subnet_name}, {config.network_config.pe_subnet_name}")
-                    elif agent_exists or pe_exists:
-                        logger.warning(f"Partial subnet overlap detected - agent_exists: {agent_exists}, pe_exists: {pe_exists}")
+                    elif agent_subnet_exists or pe_subnet_exists:
+                        logger.info(f"Partial subnet overlap detected - agent_exists: {agent_subnet_exists}, pe_exists: {pe_subnet_exists}")
+                    else:
+                        logger.info(f"No existing subnets found, will create both: {config.network_config.agent_subnet_name}, {config.network_config.pe_subnet_name}")
                 except Exception as e:
                     logger.warning(f"Could not auto-detect existing subnets: {e}")
+            elif has_explicit_subnet_ids:
+                # If explicit subnet IDs are provided, check which ones exist
+                agent_subnet_exists = hasattr(config.network_config, 'existing_agent_subnet_id') and config.network_config.existing_agent_subnet_id
+                pe_subnet_exists = hasattr(config.network_config, 'existing_pe_subnet_id') and config.network_config.existing_pe_subnet_id
             
-            params["createSubnetsInExistingVnet"] = {"value": not has_existing_subnets}
+            # Determine what needs to be created
+            has_all_existing_subnets = agent_subnet_exists and pe_subnet_exists
+            needs_subnet_creation = not has_all_existing_subnets
+            
+            params["createSubnetsInExistingVnet"] = {"value": needs_subnet_creation}
+            params["createAgentSubnet"] = {"value": not agent_subnet_exists}
+            params["createPeSubnet"] = {"value": not pe_subnet_exists}
             
             # Subnet configuration
             params["agentSubnetName"] = {"value": config.network_config.agent_subnet_name}
             params["peSubnetName"] = {"value": config.network_config.pe_subnet_name}
             
             # Only pass address prefixes when creating new subnets
-            if not has_existing_subnets:
+            if needs_subnet_creation:
                 params["agentSubnetPrefix"] = {"value": config.network_config.agent_subnet_prefix}
                 params["peSubnetPrefix"] = {"value": config.network_config.pe_subnet_prefix}
         

@@ -54,6 +54,9 @@ param existingCosmosDBPrivateEndpointName string = ''
 @description('Skip Cosmos DB deployment entirely (set to true if no Cosmos DB needed)')
 param skipCosmosDB bool = false
 
+@description('Skip OpenAI deployment entirely (set to true if no OpenAI/AI Services needed)')
+param skipOpenAI bool = true
+
 @description('Skip DNS zone creation if they already exist (set to true to avoid conflicts)')
 param skipDnsZoneCreation bool = true
 
@@ -87,7 +90,7 @@ param cosmosDBSubscriptionId string = subscription().subscriptionId
 @description('Resource group name for Cosmos DB account')
 param cosmosDBResourceGroupName string = resourceGroup().name
 // Reference existing services that need private endpoints
-resource aiAccount 'Microsoft.CognitiveServices/accounts@2023-05-01' existing = {
+resource aiAccount 'Microsoft.CognitiveServices/accounts@2023-05-01' existing = if (!skipOpenAI) {
   name: aiAccountName
   scope: resourceGroup()
 }
@@ -119,7 +122,7 @@ resource peSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existin
 }
 
 // Reference existing private endpoints if they exist
-resource existingAiAccountPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' existing = if (existingAiAccountPrivateEndpointName != '') {
+resource existingAiAccountPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' existing = if (existingAiAccountPrivateEndpointName != '' && !skipOpenAI) {
   name: existingAiAccountPrivateEndpointName
 }
 
@@ -140,7 +143,7 @@ resource existingCosmosDBPrivateEndpoint 'Microsoft.Network/privateEndpoints@202
 // Private endpoint for AI Services account (only create if not provided as existing)
 // - Creates network interface in customer hub subnet
 // - Establishes private connection to AI Services account
-resource aiAccountPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (existingAiAccountPrivateEndpointName == '') {
+resource aiAccountPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (existingAiAccountPrivateEndpointName == '' && !skipOpenAI) {
   name: '${aiAccountName}-private-endpoint'
   location: resourceGroup().location
   properties: {
@@ -267,7 +270,7 @@ resource cosmosDBPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' e
 // DNS Zone Groups for AI Services - skip VNet links since they already exist
 
 // 3) DNS Zone Group for AI Services - New Private Endpoint
-resource aiServicesDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (existingAiAccountPrivateEndpointName == '') {
+resource aiServicesDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (existingAiAccountPrivateEndpointName == '' && !skipOpenAI) {
   parent: aiAccountPrivateEndpoint
   name: '${aiAccountName}-dns-group'
   properties: {
@@ -295,7 +298,7 @@ resource aiServicesDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGr
 }
 
 // 3) DNS Zone Group for AI Services - Existing Private Endpoint (skip if already configured)
-resource existingAiServicesDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (existingAiAccountPrivateEndpointName != '' && !skipExistingPrivateEndpointDnsGroups) {
+resource existingAiServicesDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (existingAiAccountPrivateEndpointName != '' && !skipExistingPrivateEndpointDnsGroups && !skipOpenAI) {
   parent: existingAiAccountPrivateEndpoint
   name: '${aiAccountName}-dns-group-existing'
   properties: {

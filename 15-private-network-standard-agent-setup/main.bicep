@@ -75,6 +75,12 @@ param peSubnetPrefix string = ''
 @description('Create new subnets in existing VNet (true) or use existing subnets (false). Only relevant when using existing VNet.')
 param createSubnetsInExistingVnet bool = true
 
+@description('Create agent subnet (true) or use existing (false). Only relevant when using existing VNet.')
+param createAgentSubnet bool = true
+
+@description('Create private endpoint subnet (true) or use existing (false). Only relevant when using existing VNet.')
+param createPeSubnet bool = true
+
 @description('The AI Search Service full ARM Resource ID. This is an optional field, and if not provided, the resource will be created.')
 param aiSearchResourceId string = ''
 @description('The AI Storage Account full ARM Resource ID. This is an optional field, and if not provided, the resource will be created.')
@@ -83,6 +89,9 @@ param azureStorageAccountResourceId string = ''
 param azureCosmosDBAccountResourceId string = ''
 @description('Skip Cosmos DB deployment entirely. When true, no Cosmos DB will be created or used.')
 param skipCosmosDBDeployment bool = false
+
+@description('Skip OpenAI model deployment. When true, no OpenAI model will be deployed.')
+param skipOpenAIDeployment bool = true
 
 // Existing private endpoint names (if they already exist)
 @description('Name of existing AI Search private endpoint (optional - if exists, will be used instead of creating new)')
@@ -138,6 +147,8 @@ module vnet 'modules-network-secured/network-agent-vnet.bicep' = {
     vnetName: trimVnetName
     useExistingVnet: existingVnetPassedIn
     createSubnetsInExistingVnet: createSubnetsInExistingVnet
+    createAgentSubnet: createAgentSubnet
+    createPeSubnet: createPeSubnet
     existingVnetResourceGroupName: vnetResourceGroupName
     agentSubnetName: agentSubnetName
     peSubnetName: peSubnetName
@@ -149,9 +160,9 @@ module vnet 'modules-network-secured/network-agent-vnet.bicep' = {
 }
 
 /*
-  Create the AI Services account and gpt-4o model deployment
+  Create the AI Services account and gpt-4o model deployment (conditional)
 */
-module aiAccount 'modules-network-secured/ai-account-identity.bicep' = {
+module aiAccount 'modules-network-secured/ai-account-identity.bicep' = if (!skipOpenAIDeployment) {
   name: 'ai-${accountName}-${uniqueSuffix}-deployment'
   params: {
     // workspace organization
@@ -229,7 +240,7 @@ resource cosmosDB 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' existing = 
 module privateEndpointAndDNS 'modules-network-secured/private-endpoint-and-dns.bicep' = {
     name: '${uniqueSuffix}-private-endpoint'
     params: {
-      aiAccountName: aiAccount.outputs.accountName    // AI Services to secure
+      aiAccountName: skipOpenAIDeployment ? '' : aiAccount.outputs.accountName    // AI Services to secure (empty if skipped)
       aiSearchName: aiDependencies.outputs.aiSearchName       // AI Search to secure
       storageName: aiDependencies.outputs.azureStorageName        // Storage to secure
       cosmosDBName:aiDependencies.outputs.cosmosDBName
@@ -250,6 +261,7 @@ module privateEndpointAndDNS 'modules-network-secured/private-endpoint-and-dns.b
       existingStoragePrivateEndpointName: existingStoragePrivateEndpointName
       existingCosmosDBPrivateEndpointName: existingCosmosDBPrivateEndpointName
       skipCosmosDB: skipCosmosDBDeployment
+      skipOpenAI: skipOpenAIDeployment
     }
     dependsOn: [
     aiSearch      // Ensure AI Search exists
@@ -259,9 +271,9 @@ module privateEndpointAndDNS 'modules-network-secured/private-endpoint-and-dns.b
   }
 
 /*
-  Creates a new project (sub-resource of the AI Services account)
+  Creates a new project (sub-resource of the AI Services account) - only if OpenAI is not skipped
 */
-module aiProject 'modules-network-secured/ai-project-identity.bicep' = {
+module aiProject 'modules-network-secured/ai-project-identity.bicep' = if (!skipOpenAIDeployment) {
   name: 'ai-${projectName}-${uniqueSuffix}-deployment'
   params: {
     // workspace organization
@@ -282,7 +294,7 @@ module aiProject 'modules-network-secured/ai-project-identity.bicep' = {
     azureStorageSubscriptionId: aiDependencies.outputs.azureStorageSubscriptionId
     azureStorageResourceGroupName: aiDependencies.outputs.azureStorageResourceGroupName
     // dependent resources
-    accountName: aiAccount.outputs.accountName
+    accountName: skipOpenAIDeployment ? '' : aiAccount.outputs.accountName
   }
   dependsOn: [
      privateEndpointAndDNS
@@ -292,7 +304,7 @@ module aiProject 'modules-network-secured/ai-project-identity.bicep' = {
   ]
 }
 
-module formatProjectWorkspaceId 'modules-network-secured/format-project-workspace-id.bicep' = {
+module formatProjectWorkspaceId 'modules-network-secured/format-project-workspace-id.bicep' = if (!skipOpenAIDeployment) {
   name: 'format-project-workspace-id-${uniqueSuffix}-deployment'
   params: {
     projectWorkspaceId: aiProject.outputs.projectWorkspaceId
@@ -302,7 +314,7 @@ module formatProjectWorkspaceId 'modules-network-secured/format-project-workspac
 /*
   Assigns the project SMI the storage blob data contributor role on the storage account
 */
-module storageAccountRoleAssignment 'modules-network-secured/azure-storage-account-role-assignment.bicep' = {
+module storageAccountRoleAssignment 'modules-network-secured/azure-storage-account-role-assignment.bicep' = if (!skipOpenAIDeployment) {
   name: 'storage-${azureStorageName}-${uniqueSuffix}-deployment'
   scope: resourceGroup(azureStorageSubscriptionId, azureStorageResourceGroupName)
   params: {
@@ -316,7 +328,7 @@ module storageAccountRoleAssignment 'modules-network-secured/azure-storage-accou
 }
 
 // The Comos DB Operator role must be assigned before the caphost is created
-module cosmosAccountRoleAssignments 'modules-network-secured/cosmosdb-account-role-assignment.bicep' = if (!skipCosmosDBDeployment) {
+module cosmosAccountRoleAssignments 'modules-network-secured/cosmosdb-account-role-assignment.bicep' = if (!skipCosmosDBDeployment && !skipOpenAIDeployment) {
   name: 'cosmos-account-ra-${projectName}-${uniqueSuffix}-deployment'
   scope: resourceGroup(cosmosDBSubscriptionId, cosmosDBResourceGroupName)
   params: {

@@ -25,13 +25,19 @@ param agentSubnetPrefix string
 @description('Address prefix for the new private endpoint subnet')
 param peSubnetPrefix string
 
+@description('Create agent subnet (true) or use existing (false)')
+param createAgentSubnet bool = true
+
+@description('Create private endpoint subnet (true) or use existing (false)')
+param createPeSubnet bool = true
+
 // Reference the existing virtual network (no scope when in same RG as deployment)
 resource existingVNet 'Microsoft.Network/virtualNetworks@2024-05-01' existing = {
   name: vnetName
 }
 
-// Create new agent subnet in existing VNet (using parent property for better syntax)
-resource newAgentSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
+// Create new agent subnet in existing VNet (only if needed)
+resource newAgentSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = if (createAgentSubnet) {
   name: agentSubnetName
   parent: existingVNet
   properties: {
@@ -47,8 +53,14 @@ resource newAgentSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' =
   }
 }
 
-// Create new private endpoint subnet in existing VNet (using parent property for better syntax)
-resource newPeSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
+// Reference existing agent subnet if not creating new one
+resource existingAgentSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = if (!createAgentSubnet) {
+  name: agentSubnetName
+  parent: existingVNet
+}
+
+// Create new private endpoint subnet in existing VNet (only if needed)
+resource newPeSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = if (createPeSubnet) {
   name: peSubnetName
   parent: existingVNet
   properties: {
@@ -56,11 +68,17 @@ resource newPeSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
   }
 }
 
+// Reference existing private endpoint subnet if not creating new one
+resource existingPeSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = if (!createPeSubnet) {
+  name: peSubnetName
+  parent: existingVNet
+}
+
 // Output variables
 output peSubnetName string = peSubnetName
 output agentSubnetName string = agentSubnetName
-output agentSubnetId string = newAgentSubnet.id
-output peSubnetId string = newPeSubnet.id
+output agentSubnetId string = createAgentSubnet ? newAgentSubnet.id : existingAgentSubnet.id
+output peSubnetId string = createPeSubnet ? newPeSubnet.id : existingPeSubnet.id
 output virtualNetworkName string = existingVNet.name
 output virtualNetworkId string = existingVNet.id
 output virtualNetworkResourceGroup string = vnetResourceGroupName

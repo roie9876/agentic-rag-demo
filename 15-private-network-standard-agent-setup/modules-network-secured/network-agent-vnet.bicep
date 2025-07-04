@@ -10,6 +10,12 @@ param useExistingVnet bool = false
 @description('Indicates if subnets should be created in existing VNet (false = use existing subnets)')
 param createSubnetsInExistingVnet bool = false
 
+@description('Create agent subnet (true) or use existing (false). Only relevant when using existing VNet.')
+param createAgentSubnet bool = true
+
+@description('Create private endpoint subnet (true) or use existing (false). Only relevant when using existing VNet.')
+param createPeSubnet bool = true
+
 @description('Subscription ID of the existing VNet (if different from current subscription)')
 param existingVnetSubscriptionId string = subscription().subscriptionId
 
@@ -70,6 +76,8 @@ module existingVNetNewSubnets 'existing-vnet-new-subnets.bicep' = if (useExistin
     peSubnetName: peSubnetName
     agentSubnetPrefix: agentSubnetPrefix
     peSubnetPrefix: peSubnetPrefix
+    createAgentSubnet: createAgentSubnet
+    createPeSubnet: createPeSubnet
   }
 }
 

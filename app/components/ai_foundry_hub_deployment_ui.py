@@ -174,40 +174,53 @@ class AIFoundryHubDeploymentUI:
         
         # Model Configuration
         with st.expander("🧠 Model Configuration", expanded=False):
-            col1, col2 = st.columns(2)
+            # OpenAI Deployment Option
+            config.skip_openai_deployment = st.checkbox(
+                "⚠️ Skip OpenAI Model Deployment", 
+                value=config.skip_openai_deployment,
+                help="Check this to skip Azure OpenAI deployment (faster deployment, no models). Uncheck to deploy OpenAI models."
+            )
             
-            with col1:
-                config.model_name = st.selectbox(
-                    "Model Name",
-                    ["gpt-4o", "gpt-4", "gpt-35-turbo"],
-                    index=0 if config.model_name == "gpt-4o" else 1
-                )
+            if not config.skip_openai_deployment:
+                st.info("🔄 OpenAI models will be deployed (adds ~5-10 minutes to deployment)")
                 
-                config.model_format = st.selectbox(
-                    "Model Format",
-                    ["OpenAI"],
-                    index=0
-                )
+                col1, col2 = st.columns(2)
                 
-                config.model_version = st.text_input(
-                    "Model Version",
-                    value=config.model_version
-                )
-            
-            with col2:
-                config.model_sku_name = st.selectbox(
-                    "Model SKU",
-                    ["GlobalStandard", "Standard"],
-                    index=0 if config.model_sku_name == "GlobalStandard" else 1
-                )
+                with col1:
+                    config.model_name = st.selectbox(
+                        "Model Name",
+                        ["gpt-4o", "gpt-4", "gpt-35-turbo"],
+                        index=0 if config.model_name == "gpt-4o" else 1
+                    )
+                    
+                    config.model_format = st.selectbox(
+                        "Model Format",
+                        ["OpenAI"],
+                        index=0
+                    )
+                    
+                    config.model_version = st.text_input(
+                        "Model Version",
+                        value=config.model_version
+                    )
                 
-                config.model_capacity = st.number_input(
-                    "Model Capacity (TPM)",
-                    min_value=1,
-                    max_value=1000,
-                    value=config.model_capacity,
-                    help="Tokens per minute"
-                )
+                with col2:
+                    config.model_sku_name = st.selectbox(
+                        "Model SKU",
+                        ["GlobalStandard", "Standard"],
+                        index=0 if config.model_sku_name == "GlobalStandard" else 1
+                    )
+                    
+                    config.model_capacity = st.number_input(
+                        "Model Capacity (TPM)",
+                        min_value=1,
+                        max_value=1000,
+                        value=config.model_capacity,
+                        help="Tokens per minute"
+                    )
+            else:
+                st.success("✅ OpenAI deployment will be skipped - faster Hub setup!")
+                st.info("💡 You can deploy models later using the Azure portal or Azure CLI")
         
         # Network Configuration
         self._render_network_config(config)
@@ -904,11 +917,21 @@ class AIFoundryHubDeploymentUI:
                 
                 # Always created
                 st.write("- ✅ AI Foundry Hub")
-                st.write("- ✅ Initial Project")
+                
+                if not config.skip_openai_deployment:
+                    st.write("- ✅ Azure OpenAI Service")
+                    st.write("- ✅ Initial Project")
+                    create_count += 2
+                else:
+                    st.write("- ⚠️ Azure OpenAI Service (SKIPPED)")
+                    st.write("- ⚠️ Initial Project (SKIPPED)")
+                    st.info("💡 OpenAI deployment skipped - faster setup!")
+                
                 st.write("- ✅ Private Endpoints")
                 st.write("- ✅ DNS Zones")
                 
-                st.info(f"Total new resources: {create_count + 4}")
+                base_resources = 2  # Private endpoints + DNS zones
+                st.info(f"Total new resources: {create_count + base_resources}")
             
             with col2:
                 st.markdown("**Existing Resources to Use:**")
