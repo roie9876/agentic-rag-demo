@@ -26,14 +26,20 @@ class AIFoundryDiscoveryService:
         self._resource_client = None
     
     def set_subscription(self, subscription_id: str) -> None:
-        """Set the subscription ID and initialize clients."""
+        """Set the subscription ID (clients initialized lazily when needed)."""
         self._subscription_id = subscription_id
-        if subscription_id:
+        # Don't initialize clients here - do it lazily when needed
+        self._cognitive_services_client = None
+        self._resource_client = None
+    
+    def _ensure_clients_initialized(self) -> None:
+        """Initialize Azure clients if not already done."""
+        if self._subscription_id and not self._cognitive_services_client:
             self._cognitive_services_client = CognitiveServicesManagementClient(
-                self.credential, subscription_id
+                self.credential, self._subscription_id
             )
             self._resource_client = ResourceManagementClient(
-                self.credential, subscription_id
+                self.credential, self._subscription_id
             )
     
     def get_subscription_id(self) -> Optional[str]:
@@ -77,6 +83,7 @@ class AIFoundryDiscoveryService:
     
     def discover_ai_foundry_accounts(self) -> List[Dict[str, Any]]:
         """Discover AI Foundry accounts in the current subscription."""
+        self._ensure_clients_initialized()
         if not self._cognitive_services_client:
             return []
         
@@ -129,6 +136,7 @@ class AIFoundryDiscoveryService:
     
     def discover_ai_foundry_hubs(self) -> List[Dict[str, Any]]:
         """Discover AI Foundry hubs (ML workspaces) in the current subscription."""
+        self._ensure_clients_initialized()
         if not self._resource_client:
             return []
         
