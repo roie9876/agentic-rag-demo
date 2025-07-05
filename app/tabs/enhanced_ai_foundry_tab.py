@@ -14,6 +14,8 @@ import os
 import traceback
 import time
 import datetime
+import subprocess
+import json
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
@@ -23,7 +25,7 @@ def render_enhanced_ai_foundry_tab(
 ) -> None:
     """Render the enhanced AI Foundry account management tab."""
     
-    # Track timing for performance monitoring
+    # Track timing for performance monitoring - initialize at function start
     tab_start_time = time.time()
     
     st.header("🏭 AI Foundry Account Management (Accounts Only)")
@@ -125,7 +127,7 @@ def render_enhanced_ai_foundry_tab(
         "🤖 Deploy Agents"
     ])
     
-    # Show performance info in debug section only
+    # Show performance info in debug section only (calculate after tabs are created)
     total_time = time.time() - tab_start_time
     if total_time > 1.0:  # Only show if tab loading took more than 1 second
         with st.expander("⏱️ Performance Info", expanded=False):
@@ -138,7 +140,35 @@ def render_enhanced_ai_foundry_tab(
         render_resource_discovery_section(discovery_service)
     
     with tab_agents:
-        render_agent_deployment_section(get_deployment_service())
+        st.subheader("🤖 Deploy Agents")
+        st.info("🎯 **Agent deployment is now integrated into the 'Discover AI Accounts' tab!**")
+        st.markdown("""
+        **How to deploy agents:**
+        
+        1. **Go to 'Discover AI Accounts' tab**
+        2. **Scan for AI Foundry Accounts** 
+        3. **Select an account** and enter a **project name**
+        4. **Use the 'Create AI Foundry Agent' section** to deploy Function Apps as agents
+        
+        **What you need:**
+        - ✅ Azure Function App (configured in 'Function Config' tab)
+        - ✅ AI Foundry Account discovered
+        - ✅ Project name specified
+        - ✅ `AGENT_FUNC_KEY` environment variable set
+        """)
+        
+        # Show current function apps for reference
+        func_choices = getattr(st.session_state, 'func_choices', [])
+        if func_choices:
+            st.success(f"✅ **{len(func_choices)} Function App(s) ready for deployment:**")
+            for func in func_choices:
+                st.markdown(f"• {func}")
+        else:
+            st.warning("⚠️ **No Function Apps configured.** Go to 'Function Config' tab first.")
+            
+        # Quick link to discovery tab
+        st.markdown("---")
+        st.markdown("🚀 **Ready to deploy?** Click 'Discover AI Accounts' tab above to start!")
 
 def render_resource_discovery_section(discovery_service):
     """Render the AI Foundry resource discovery section."""
@@ -292,9 +322,10 @@ def render_resource_discovery_section(discovery_service):
                             st.session_state.ready_for_agent_deployment = True
                             st.success("✅ Ready for agent deployment! Go to 'Deploy Agents' tab.")
                     
-                    # =================== AGENT DEPLOYMENT SECTION ===================
+                    # =================== AI FOUNDRY AGENT CREATION ===================
                     st.markdown("---")
-                    st.markdown("#### 🤖 Deploy Agent to This Project")
+                    st.markdown("#### 🤖 Create AI Foundry Agent")
+                    st.info("💡 **Deploy Azure Functions as AI Foundry Agents** - Connect your Function Apps to AI Foundry projects")
                     
                     # Initialize deployment service (lazy loading)
                     if 'ai_foundry_deployment_service' not in st.session_state:
@@ -303,109 +334,212 @@ def render_resource_discovery_section(discovery_service):
                     
                     deployment_service = st.session_state.ai_foundry_deployment_service
                     
-                    # Set project endpoint on the deployment service
-                    deployment_service.set_project_endpoint(project_endpoint)
+                    # Load Function Apps (from the main session state)
+                    func_map = getattr(st.session_state, 'func_map', {})
+                    func_choices = getattr(st.session_state, 'func_choices', [])
                     
-                    # Agent deployment form
-                    with st.form(f"deploy_agent_form_{i}"):
-                        st.markdown("**Create New Agent**")
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            agent_name = st.text_input(
-                                "Agent Name",
-                                placeholder="my-search-agent",
-                                help="Enter a unique name for your agent",
-                                key=f"agent_name_{i}"
-                            )
-                        
-                        with col2:
-                            agent_model = st.selectbox(
-                                "Model",
-                                ["gpt-4", "gpt-4o", "gpt-3.5-turbo"],
-                                help="Select the OpenAI model for the agent",
-                                key=f"agent_model_{i}"
-                            )
-                        
-                        # Agent instructions
-                        agent_instructions = st.text_area(
-                            "Agent Instructions",
-                            placeholder="You are a helpful AI assistant...",
-                            help="Provide instructions for what this agent should do",
-                            height=100,
-                            key=f"agent_instructions_{i}"
+                    if not func_choices:
+                        st.warning("⚠️ No Function Apps found. Please go to 'Function Config' tab first to configure your Azure Functions.")
+                        if st.button("🔄 Refresh Function Apps", key=f"refresh_func_{i}"):
+                            # Try to load function apps
+                            try:
+                                from azure_function_helper import list_function_apps
+                                # Get subscription_id from discovery service or environment
+                                subscription_id = discovery_service.get_subscription_id() if discovery_service else None
+                                if not subscription_id:
+                                    subscription_id = os.getenv('AZURE_SUBSCRIPTION_ID')
+                                if subscription_id:
+                                    func_choices_new, func_map_new = list_function_apps(subscription_id)
+                                    st.session_state.func_map = func_map_new
+                                    st.session_state.func_choices = func_choices_new
+                                    st.success("✅ Function Apps refreshed!")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ No subscription ID available for refreshing Function Apps")
+                            except Exception as e:
+                                st.error(f"❌ Failed to load Function Apps: {e}")
+                    else:
+                        # Function App selection dropdown (like the original)
+                        st.markdown("**Function App to invoke**")
+                        func_sel = st.selectbox(
+                            "Function App to invoke",
+                            func_choices,
+                            index=0,
+                            key=f"func_sel_{i}",
+                            label_visibility="collapsed"
                         )
                         
-                        # Optional: Azure Search integration
-                        with st.expander("🔍 Azure Search Integration (Optional)", expanded=False):
-                            enable_search = st.checkbox(
-                                "Enable Azure Search Integration",
-                                help="Connect this agent to an Azure Search index for retrieval",
-                                key=f"enable_search_{i}"
-                            )
-                            
-                            if enable_search:
-                                search_endpoint = st.text_input(
-                                    "Azure Search Endpoint",
-                                    placeholder="https://your-search.search.windows.net",
-                                    help="Your Azure Search service endpoint",
-                                    key=f"search_endpoint_{i}"
-                                )
+                        # Choose Foundry project dropdown  
+                        st.markdown("**Choose Foundry project**")
+                        project_display_name = f"{account_name} - {project_name} - env"
+                        st.selectbox(
+                            "Choose Foundry project",
+                            [project_display_name],
+                            index=0,
+                            key=f"project_sel_{i}",
+                            disabled=True,  # Only one option available
+                            label_visibility="collapsed"
+                        )
+                        
+                        # Show endpoint info
+                        st.markdown("🔗 **Endpoint:**")
+                        st.text(project_endpoint)
+                        
+                        # Agent name input
+                        st.markdown("**Agent name**")
+                        agent_name = st.text_input(
+                            "Agent name",
+                            value="function-assistant",
+                            key=f"func_agent_name_{i}",
+                            label_visibility="collapsed"
+                        )
+                        
+                        # Create Agent button
+                        if st.button("🚀 Create Agent", key=f"create_func_agent_{i}", type="primary"):
+                            if func_sel and agent_name:
+                                # Pre-flight checks before creating agent
+                                st.markdown("**🔍 Pre-flight Checks**")
                                 
-                                index_name = st.text_input(
-                                    "Index Name",
-                                    placeholder="my-index",
-                                    help="Name of the search index to use",
-                                    key=f"index_name_{i}"
-                                )
-                        
-                        # Deploy button
-                        deploy_submitted = st.form_submit_button("🚀 Deploy Agent", type="primary")
-                        
-                        if deploy_submitted:
-                            if agent_name and agent_instructions:
+                                # Check 1: Azure AI SDK availability
                                 try:
-                                    with st.spinner(f"Deploying agent '{agent_name}' to {project_name}..."):
-                                        # Create agent configuration
-                                        if enable_search and search_endpoint and index_name:
-                                            # Create retrieval agent with Azure Search integration
-                                            success, message, agent_data = deployment_service.create_retrieval_agent(
-                                                agent_name=agent_name,
-                                                index_name=index_name,
-                                                azure_search_endpoint=search_endpoint,
-                                                instructions=agent_instructions
-                                            )
-                                        else:
-                                            # Create standard agent
-                                            agent_config = {
-                                                'name': agent_name,
-                                                'instructions': agent_instructions,
-                                                'model': agent_model,
-                                                'tools': [],
-                                                'metadata': {
-                                                    'created_from': 'agentic_rag_demo',
-                                                    'project': project_name,
-                                                    'account': account_name
-                                                }
-                                            }
-                                            success, message, agent_data = deployment_service.create_agent(agent_config)
+                                    from azure.ai.projects import AIProjectClient
+                                    st.success("✅ Azure AI SDK is available")
+                                except ImportError:
+                                    st.error("❌ Azure AI SDK not available")
+                                    st.markdown("""
+                                    **To fix this issue:**
+                                    ```bash
+                                    pip install azure-ai-projects
+                                    ```
+                                    """)
+                                    st.stop()
+                                
+                                # Check 2: MODEL_DEPLOYMENT_NAME environment variable
+                                model_deployment_name = os.getenv("MODEL_DEPLOYMENT_NAME")
+                                if model_deployment_name:
+                                    st.success(f"✅ MODEL_DEPLOYMENT_NAME: {model_deployment_name}")
+                                else:
+                                    st.error("❌ MODEL_DEPLOYMENT_NAME environment variable not set")
+                                    st.markdown("""
+                                    **To fix this issue:**
+                                    1. Add `MODEL_DEPLOYMENT_NAME=your-model-deployment-name` to your `.env` file
+                                    2. The deployment name should match a deployed model in your AI Foundry project
+                                    3. Common values: `gpt-4`, `gpt-35-turbo`, or your custom deployment name
+                                    """)
+                                    st.stop()
+                                
+                                # Check 3: Function App authentication key
+                                function_key = os.getenv('AGENT_FUNC_KEY', '')
+                                if function_key:
+                                    st.success("✅ AGENT_FUNC_KEY is set")
+                                else:
+                                    st.error("❌ AGENT_FUNC_KEY environment variable not set")
+                                    st.markdown("""
+                                    **To fix this issue:**
+                                    1. Get your Function App host key from the Azure portal
+                                    2. Add `AGENT_FUNC_KEY=your-function-key` to your `.env` file
+                                    """)
+                                    st.stop()
+                                
+                                st.markdown("---")
+                                
+                                try:
+                                    with st.spinner(f"Creating AI Foundry agent '{agent_name}' from Function App '{func_sel}'..."):
+                                        # Get function app details
+                                        app_name, resource_group = func_map[func_sel]
+                                        
+                                        # Build function URL (basic pattern - may need adjustment based on function structure)
+                                        func_url = f"https://{app_name}.azurewebsites.net/api"
+                                        
+                                        # Create AI Foundry agent using the Function App
+                                        print(f"🔍 DEBUG: Creating agent with parameters:")
+                                        print(f"   - project_endpoint: {project_endpoint}")
+                                        print(f"   - agent_name: {agent_name}")
+                                        print(f"   - base_url: {func_url}")
+                                        print(f"   - function_key: {'***' if function_key else 'NOT SET'}")
+                                        
+                                        success, message, agent_data = deployment_service.create_ai_foundry_agent(
+                                            project_endpoint=project_endpoint,
+                                            agent_name=agent_name,
+                                            base_url=func_url,
+                                            function_key=function_key
+                                        )
+                                        
+                                        print(f"🔍 DEBUG: Agent creation result:")
+                                        print(f"   - success: {success}")
+                                        print(f"   - message: {message}")
+                                        print(f"   - agent_data: {agent_data}")
                                         
                                         if success:
-                                            st.success(f"✅ {message}")
-                                            st.markdown("**Agent Details:**")
-                                            st.json(agent_data)
+                                            st.success(message)
+                                            st.markdown("**🎉 Agent Created Successfully!**")
                                             
-                                            # Show project endpoint for reference
-                                            st.info(f"🔗 **Agent deployed to**: {project_endpoint}")
+                                            # Show agent details
+                                            st.markdown("**Agent Details:**")
+                                            agent_info = {
+                                                "Agent Name": agent_name,
+                                                "Function App": func_sel,
+                                                "Function URL": func_url,
+                                                "Project Endpoint": project_endpoint,
+                                                "Type": "Function App Agent"
+                                            }
+                                            st.json(agent_info)
+                                            
+                                            # Show usage instructions
+                                            st.markdown("**💬 How to use this agent:**")
+                                            st.markdown(f"""
+                                            1. Go to [Azure AI Foundry Studio]({project_endpoint.replace('/api/projects/', '/studio/projects/')})
+                                            2. Find your agent: **{agent_name}**
+                                            3. Start a conversation - the agent will automatically call your Function App for answers
+                                            4. Your RAG system (via the Function App) will provide responses with citations
+                                            """)
+                                            
                                         else:
-                                            st.error(f"❌ {message}")
+                                            st.error(message)
+                                            
+                                            # Add specific guidance for 401 errors
+                                            if "401" in message or "unauthorized" in message.lower():
+                                                st.error("🔒 **401 Unauthorized Error Detected!**")
+                                                st.markdown("""
+                                                **This means you don't have permission to create agents in this AI Foundry project.**
+                                                
+                                                **🔧 Quick Fix:**
+                                                1. **Grant yourself permissions** using the commands below
+                                                2. **Or ask your Azure admin** to grant you `Cognitive Services Contributor` role
+                                                3. **Try the permission checker** to diagnose the issue
+                                                """)
+                                                
+                                                # Show the exact Azure CLI command to fix the issue
+                                                subscription_id = os.getenv('AZURE_SUBSCRIPTION_ID') or discovery_service.get_subscription_id()
+                                                if subscription_id:
+                                                    st.markdown("**🚀 Run this command to fix the issue:**")
+                                                    st.code(f"""
+# Grant yourself Cognitive Services Contributor role
+az role assignment create \\
+  --assignee $(az ad signed-in-user show --query id -o tsv) \\
+  --role "Cognitive Services Contributor" \\
+  --scope "/subscriptions/{subscription_id}/resourceGroups/{account_rg}/providers/Microsoft.CognitiveServices/accounts/{account_name}"
+                                                    """)
+                                            
+                                            st.markdown("**🔍 Troubleshooting:**")
+                                            st.markdown("""
+                                            - Ensure your Function App is running and accessible
+                                            - Check that AGENT_FUNC_KEY is correctly set
+                                            - Verify Azure CLI is logged in: `az login`
+                                            - Confirm you have permissions to create agents in the AI Foundry project
+                                            """)
+                                            
+                                            # Add permission diagnostic button
+                                            if st.button("🔍 Check My Permissions", key=f"check_perms_{i}"):
+                                                with st.spinner("Checking Azure permissions..."):
+                                                    check_ai_foundry_permissions(account_name, account_rg)
                                             
                                 except Exception as e:
-                                    st.error(f"❌ Failed to deploy agent: {str(e)}")
+                                    st.error(f"❌ Failed to create AI Foundry agent: {str(e)}")
                                     with st.expander("🔍 Error Details", expanded=False):
                                         st.code(traceback.format_exc())
                             else:
-                                st.warning("⚠️ Please fill in Agent Name and Instructions")
+                                st.warning("⚠️ Please select a Function App and provide an agent name")
     else:
         if hasattr(st.session_state, 'discovered_accounts'):
             st.info("⚠️ No AI Foundry Accounts found in your subscription")
@@ -524,7 +658,7 @@ def render_resource_discovery_section(discovery_service):
         else:
             st.info("🔍 Click 'Scan for AI Foundry Accounts' above to discover resources.")
 
-def render_agent_deployment_section(deployment_service):
+def render_agent_deployment_section(deployment_service, discovery_service):
     """Render the agent deployment section."""
     st.subheader("🤖 Deploy Agents")
     
@@ -547,6 +681,8 @@ def render_agent_deployment_section(deployment_service):
         **Option 1:** Use **Discover AI Accounts** tab → Select AI Foundry Account → Generate PROJECT_ENDPOINT
         
         **Option 2:** Enter a PROJECT_ENDPOINT manually below
+        
+        **Option 3:** Use Function Apps to deploy agents (advanced)
         """)
         
         # Manual endpoint input
@@ -583,9 +719,20 @@ def render_agent_deployment_section(deployment_service):
         else:
             st.markdown("**Endpoint**: Not configured")
     
+    # Add Function Apps section for advanced deployment
+    st.markdown("---")
+    st.markdown("### 🔧 Advanced: Deploy via Function Apps")
+    
+    with st.expander("🚀 Function App Agent Deployment", expanded=False):
+        render_function_app_agent_deployment(discovery_service, deployment_endpoint)
+    
+    # Get Function Apps data if available
+    func_map = st.session_state.get('function_apps', {}).get('map', {})
+    func_choices = st.session_state.get('function_apps', {}).get('choices', [])
+    
     # Render the actual agent deployment sections
     render_current_agents_section(deployment_endpoint, deployment_service)
-    render_deploy_agent_section(deployment_endpoint, {}, [], deployment_service)
+    render_deploy_agent_section(deployment_endpoint, func_map, func_choices, deployment_service)
     render_agent_details_section(deployment_endpoint, deployment_service)
 
 def render_current_agents_section(deployment_endpoint, deployment_service):
@@ -756,3 +903,274 @@ def render_ai_foundry_hub_deployment_ui():
             st.session_state.hub_ui_loaded = False
             if st.button("🔄 Retry Loading"):
                 st.rerun()
+
+def render_function_app_agent_deployment(discovery_service, deployment_endpoint):
+    """Render the Function App agent deployment section."""
+    st.subheader("🔧 Deploy Function Apps as AI Foundry Agents")
+    
+    st.info("""
+    **Advanced Feature**: Deploy your Azure Function Apps as AI Foundry agents.
+    This allows your functions to be called by AI assistants in conversations.
+    """)
+    
+    if not deployment_endpoint:
+        st.warning("⚠️ **Function App deployment requires a project endpoint.** Please configure one first.")
+        return
+    
+    # Get subscription ID for Function App discovery
+    subscription_id = os.getenv('AZURE_SUBSCRIPTION_ID')
+    if not subscription_id:
+        # Try to get from discovery service
+        try:
+            discovery_service._ensure_credential_initialized()
+            subscriptions = discovery_service.list_subscriptions()
+            if subscriptions:
+                subscription_id = subscriptions[0]['id']
+            else:
+                st.error("❌ No subscription found. Set AZURE_SUBSCRIPTION_ID or ensure you have access to subscriptions.")
+                return
+        except Exception as e:
+            st.error(f"❌ Failed to get subscription: {e}")
+            return
+    
+    # Load Function Apps
+    if 'function_apps' not in st.session_state:
+        with st.spinner("Loading Function Apps..."):
+            try:
+                from azure_function_helper import list_function_apps
+                func_choices, func_map = list_function_apps(subscription_id)
+                st.session_state.function_apps = {
+                    'choices': func_choices,
+                    'map': func_map
+                }
+            except Exception as e:
+                st.error(f"❌ Failed to load Function Apps: {e}")
+                st.session_state.function_apps = {'choices': [], 'map': {}}
+                return
+    
+    func_choices = st.session_state.function_apps['choices']
+    func_map = st.session_state.function_apps['map']
+    
+    if not func_choices:
+        st.warning("⚠️ No Function Apps found in your subscription.")
+        if st.button("🔄 Refresh Function Apps"):
+            if 'function_apps' in st.session_state:
+                del st.session_state['function_apps']
+            st.rerun()
+        return
+    
+    # Function App selection and deployment
+    with st.form("function_app_agent_form"):
+        st.markdown("**Select Function App to Deploy as Agent**")
+        
+        func_sel = st.selectbox(
+            "Function App to Deploy",
+            func_choices,
+            index=0,
+            help="Select an Azure Function App to deploy as an AI Foundry agent"
+        )
+        
+        # Custom agent name (optional)
+        custom_agent_name = st.text_input(
+            "Custom Agent Name (Optional)",
+            placeholder="Leave empty to use function app name",
+            help="Customize the agent name, or leave empty to use the function app name"
+        )
+        
+        # Agent description
+        agent_description = st.text_area(
+            "Agent Description",
+            placeholder="Describe what this function does and when to use it...",
+            help="Provide a description of the function's purpose and capabilities",
+            height=100
+        )
+        
+        deploy_func_submitted = st.form_submit_button("🚀 Deploy Function App as Agent", type="primary")
+        
+        if deploy_func_submitted:
+            if func_sel and agent_description:
+                try:
+                    with st.spinner(f"Deploying {func_sel} as AI Foundry agent..."):
+                        # Get function app details
+                        app_name, resource_group = func_map[func_sel]
+                        
+                        # Build function URL (basic pattern - may need adjustment based on function structure)
+                        func_url = f"https://{app_name}.azurewebsites.net/api"
+                        
+                        # Use custom name or function app name
+                        agent_name = custom_agent_name.strip() if custom_agent_name.strip() else f"{app_name}-agent"
+                        
+                        # Get deployment service
+                        deployment_service = st.session_state.ai_foundry_deployment_service
+                        deployment_service.set_project_endpoint(deployment_endpoint)
+                        
+                        # Get function key from environment
+                        function_key = os.getenv('AGENT_FUNC_KEY', '')
+                        if not function_key:
+                            st.error("❌ AGENT_FUNC_KEY environment variable not set. This is required for Function App authentication.")
+                            st.markdown("💡 **Solution**: Set `AGENT_FUNC_KEY` in your `.env` file with your Function App host key")
+                            return  # Exit the function if no key is provided
+                        
+                        # Deploy the function as an agent
+                        print(f"🔍 DEBUG: [Advanced Section] Creating agent with parameters:")
+                        print(f"   - project_endpoint: {deployment_endpoint}")
+                        print(f"   - agent_name: {agent_name}")
+                        print(f"   - base_url: {func_url}")
+                        print(f"   - function_key: {'***' if function_key else 'NOT SET'}")
+                        
+                        success, message, agent_data = deployment_service.create_ai_foundry_agent(
+                            project_endpoint=deployment_endpoint,
+                            agent_name=agent_name,
+                            base_url=func_url,
+                            function_key=function_key
+                        )
+                        
+                        print(f"🔍 DEBUG: [Advanced Section] Agent creation result:")
+                        print(f"   - success: {success}")
+                        print(f"   - message: {message}")
+                        print(f"   - agent_data: {agent_data}")
+                        
+                        if success:
+                            st.success(f"✅ {message}")
+                            st.markdown("**Agent Details:**")
+                            st.json(agent_data)
+                            
+                            # Show deployment info
+                            st.info(f"""
+                            **Deployment Summary:**
+                            - **Function App**: {app_name} (Resource Group: {resource_group})
+                            - **Agent Name**: {agent_name}
+                            - **Project Endpoint**: {deployment_endpoint}
+                            - **Function URL**: {func_url}
+                            """)
+                            
+                            # Clear agents cache to refresh
+                            if 'current_agents' in st.session_state:
+                                del st.session_state['current_agents']
+                                
+                        else:
+                            st.error(f"❌ {message}")
+                            
+                except Exception as e:
+                    st.error(f"❌ Failed to deploy Function App as agent: {str(e)}")
+                    with st.expander("🔍 Error Details", expanded=False):
+                        st.code(str(e))
+            else:
+                st.warning("⚠️ Please select a Function App and provide a description")
+
+def check_ai_foundry_permissions(account_name: str, resource_group: str):
+    """Check if the user has the required permissions for AI Foundry agent deployment."""
+    try:
+        from azure.identity import DefaultAzureCredential
+        from azure.mgmt.cognitiveservices import CognitiveServicesManagementClient
+        import subprocess
+        import json
+        
+        st.info("🔍 **Checking your Azure permissions for AI Foundry agent deployment...**")
+        
+        # Check 1: Azure CLI Login Status
+        try:
+            result = subprocess.run(['az', 'account', 'show'], capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                account_info = json.loads(result.stdout)
+                st.success(f"✅ **Azure CLI**: Logged in as {account_info.get('user', {}).get('name', 'unknown')}")
+                subscription_id = account_info.get('id')
+            else:
+                st.error("❌ **Azure CLI**: Not logged in. Run `az login`")
+                return
+        except Exception as e:
+            st.warning(f"⚠️ **Azure CLI**: Could not check status: {e}")
+            subscription_id = os.getenv('AZURE_SUBSCRIPTION_ID')
+        
+        if not subscription_id:
+            st.error("❌ **Subscription**: No subscription ID found")
+            return
+        
+        st.info(f"🔍 **Subscription**: {subscription_id[:8]}...")
+        
+        # Check 2: Azure Authentication Scopes
+        credential = DefaultAzureCredential()
+        auth_scopes = [
+            ("AI Foundry", "https://ai.azure.com/.default"),  # Primary scope for AI Foundry
+            ("Cognitive Services", "https://cognitiveservices.azure.com/.default"),
+            ("Azure ML", "https://ml.azure.com/.default"), 
+            ("Management", "https://management.azure.com/.default")
+        ]
+        
+        for scope_name, scope_url in auth_scopes:
+            try:
+                token = credential.get_token(scope_url)
+                st.success(f"✅ **{scope_name} Token**: Valid (expires: {datetime.datetime.fromtimestamp(token.expires_on).strftime('%Y-%m-%d %H:%M')})")
+            except Exception as e:
+                st.error(f"❌ **{scope_name} Token**: Failed - {str(e)}")
+        
+        # Check 3: Resource Access
+        try:
+            from azure.mgmt.resource import ResourceManagementClient
+            resource_client = ResourceManagementClient(credential, subscription_id)
+            
+            # Try to get the AI Services resource
+            resource = resource_client.resources.get(
+                resource_group_name=resource_group,
+                resource_provider_namespace="Microsoft.CognitiveServices",
+                parent_resource_path="",
+                resource_type="accounts",
+                resource_name=account_name,
+                api_version="2023-05-01"
+            )
+            st.success(f"✅ **Resource Access**: Can read AI Services resource '{account_name}'")
+            st.json({
+                "Resource ID": resource.id,
+                "Location": resource.location,
+                "Kind": resource.kind
+            })
+            
+        except Exception as e:
+            st.error(f"❌ **Resource Access**: Cannot read AI Services resource - {str(e)}")
+        
+        # Check 4: Function Key Environment Variable
+        func_key = os.getenv('AGENT_FUNC_KEY')
+        if func_key:
+            st.success(f"✅ **Function Key**: AGENT_FUNC_KEY is set ({len(func_key)} characters)")
+        else:
+            st.error("❌ **Function Key**: AGENT_FUNC_KEY environment variable not set")
+            st.markdown("💡 **Fix**: Add `AGENT_FUNC_KEY=your-function-host-key` to your `.env` file")
+        
+        # Check 5: Required Role Assignments
+        st.markdown("**💡 Required Permissions Summary:**")
+        st.markdown(f"""
+        **For AI Services Resource** `{account_name}`:
+        - ✅ **Cognitive Services Contributor** or **Cognitive Services User**
+        
+        **For Function Apps** (if deploying Function App agents):
+        - ✅ **Function App Contributor** or **Website Contributor**
+        
+        **For Resource Discovery**:
+        - ✅ **Reader** on subscription or resource group
+        """)
+        
+        # Provide Azure CLI commands to grant permissions
+        with st.expander("🔧 Grant Permissions (Azure CLI Commands)", expanded=False):
+            st.markdown("**To grant yourself Cognitive Services Contributor role:**")
+            st.code(f"""
+# Get your user ID
+USER_ID=$(az ad signed-in-user show --query id -o tsv)
+
+# Grant Cognitive Services Contributor role
+az role assignment create \\
+  --assignee $USER_ID \\
+  --role "Cognitive Services Contributor" \\
+  --scope "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.CognitiveServices/accounts/{account_name}"
+            """)
+            
+            st.markdown("**To check your current role assignments:**")
+            st.code(f"""
+# Check role assignments on the AI Services resource
+az role assignment list \\
+  --scope "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.CognitiveServices/accounts/{account_name}" \\
+  --output table
+            """)
+        
+    except Exception as e:
+        st.error(f"❌ **Permission Check Failed**: {str(e)}")
+        st.code(traceback.format_exc())

@@ -14,8 +14,12 @@ from datetime import datetime
 # Azure AI SDK imports for AI Foundry Projects
 try:
     from azure.ai.projects import AIProjectClient
-    # Import OpenAPI tool support for more advanced agent configurations
-    from azure.ai.agents.models import OpenApiTool, OpenApiAnonymousAuthDetails
+    from azure.ai.projects.models import (
+        Agent,
+        CodeInterpreterTool,
+        FileSearchTool,
+        FunctionTool
+    )
     AI_SDK_AVAILABLE = True
 except ImportError as e:
     logging.warning(f"Azure AI SDK not available: {e}")
@@ -65,101 +69,6 @@ class AIFoundryAgentDeploymentService:
                 return None
         return self._project_client
     
-    def create_openapi_tool(self, tool_name: str, base_url: str, function_key: str) -> 'OpenApiTool':
-        """Create an OpenAPI tool definition for the Azure Function using advanced schema."""
-        tool_schema = {
-            "openapi": "3.0.1",
-            "info": {
-                "title": "AgentFunction",
-                "version": "1.0.0"
-            },
-            # Base URL for the Function App (no query‑string here!)
-            "servers": [
-                {
-                    "url": base_url
-                }
-            ],
-            "paths": {
-                "/AgentFunction/{question}": {
-                    "post": {
-                        "operationId": "askAgentFunction",
-                        "summary": "Ask the Azure Function",
-                        "parameters": [
-                            {
-                                "name": "question",
-                                "in": "path",
-                                "required": True,
-                                "schema": {"type": "string"}
-                            },
-                            {
-                                "name": "code",
-                                "in": "query",
-                                "required": True,
-                                "schema": {
-                                    "type": "string",
-                                    "default": function_key
-                                },
-                                "description": "Function host key (taken from env‑var AGENT_FUNC_KEY)"
-                            },
-                            {
-                                "name": "includesrc",
-                                "in": "query",
-                                "required": False,
-                                "schema": {
-                                    "type": "boolean",
-                                    "default": True
-                                },
-                                "description": "Include sources in the Function response"
-                            }
-                        ],
-                        "responses": {
-                            "200": {
-                                "description": "Plain‑text answer",
-                                "content": {
-                                    "text/plain": {
-                                        "schema": {"type": "string"}
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        auth = OpenApiAnonymousAuthDetails()  # public endpoint – no key required
-        return OpenApiTool(
-            name=tool_name,
-            spec=tool_schema,
-            description="Invoke the Azure Function via HTTP POST for factual questions",
-            auth=auth,
-        )
-
-    def get_agent_system_message(self, base_url: str, function_key: str) -> str:
-        """Generate the comprehensive system message for the agent."""
-        return (
-            "You have one action called Test_askAgentFunction.\n"
-            "Call it **every time** the user asks a factual question.\n"
-            "Send the whole question unchanged as the {question} path parameter **and** include the two query parameters exactly as shown below:\n"
-            f"  • code={function_key}\n"
-            "  • includesrc=true\n"
-            "Example URL you must generate (line breaks added for clarity):\n"
-            f"POST {base_url}/AgentFunction/{{question}}?code={function_key}&includesrc=true\n"
-            "Return the Function's plain‑text response **verbatim and in full**, including any inline citations such as [my_document.pdf].\n"
-            "Do **NOT** add, remove, reorder, or paraphrase content, and do **NOT** drop those citation markers.\n"
-            "If the action fails, reply exactly with: I don't know\n"
-            "Do **NOT** answer from your own internal knowledge and do **NOT** answer questions unrelated to the Function.\n"
-            "\n"
-            "### How to respond\n"
-            "1. Parse the JSON the Function returns.\n"
-            '2. Reply with the **exact value of "answer"** – do NOT change it.\n'
-            '3. After that, print a short "Sources:" list. For each object in "sources" show its **source_file**, and – if "url" is present and not empty – append " – <url>". If source_file is empty, show the url instead; if both are missing, use the placeholder doc#.\n'
-            "   Example:\n"
-            "   Sources:\n"
-            "   • המב 50.02.pdf\n"
-            "   • מס 40.021.pdf\n"
-        )
-    
     def create_ai_foundry_agent(
         self, 
         project_endpoint: str, 
@@ -203,9 +112,8 @@ class AIFoundryAgentDeploymentService:
             print(f"⚙️ Function URL: {base_url}")
             
             # Create a function tool for the Azure Function
-            function_tool = {
-                "type": "function",
-                "function": {
+            function_tool = FunctionTool(
+                function={
                     "name": "call_azure_function",
                     "description": f"Call the Azure Function at {base_url}",
                     "parameters": {
@@ -223,7 +131,7 @@ class AIFoundryAgentDeploymentService:
                         "required": ["query"]
                     }
                 }
-            }
+            )
             
             # Generate comprehensive instructions for the agent
             instructions = f"""You are an AI assistant agent that can call Azure Functions to help users.
