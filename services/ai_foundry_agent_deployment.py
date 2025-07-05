@@ -20,9 +20,17 @@ class AIFoundryAgentDeploymentService:
     
     def __init__(self):
         """Initialize the AI Foundry Agent Deployment Service."""
-        self.credential = DefaultAzureCredential()
+        # Use lazy initialization for Azure credentials to avoid slow startup
+        self._credential = None
         self._project_endpoint = None
         self._api_version = "2025-05-01-preview"
+    
+    @property
+    def credential(self):
+        """Lazy initialization of Azure credentials."""
+        if self._credential is None:
+            self._credential = DefaultAzureCredential()
+        return self._credential
     
     def set_project_endpoint(self, project_endpoint: str, api_version: str = None) -> None:
         """Set the project endpoint for agent operations."""
@@ -522,5 +530,12 @@ Search Endpoint: {azure_search_endpoint}
             return None
 
 
-# Global instance
-ai_foundry_agent_deployment = AIFoundryAgentDeploymentService()
+# Global instance - COMMENTED OUT to prevent slow startup
+# Use lazy initialization instead:
+# ai_foundry_agent_deployment = AIFoundryAgentDeploymentService()
+
+def get_ai_foundry_agent_deployment_service():
+    """Get a lazy-initialized instance of AIFoundryAgentDeploymentService."""
+    if not hasattr(get_ai_foundry_agent_deployment_service, '_instance'):
+        get_ai_foundry_agent_deployment_service._instance = AIFoundryAgentDeploymentService()
+    return get_ai_foundry_agent_deployment_service._instance

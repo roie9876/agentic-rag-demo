@@ -2037,9 +2037,7 @@ def run_streamlit_ui() -> None:
 
     # ─────────────────── Tab 7 – AI Foundry Hub ──────────────────────────
     with tab_ai:
-        health_block()
-        
-        # Use the enhanced AI Foundry Hub tab
+        # Use the enhanced AI Foundry Hub tab (no health check needed for fast loading)
         from app.tabs.enhanced_ai_foundry_tab import render_enhanced_ai_foundry_tab
         render_enhanced_ai_foundry_tab(
             session_state=st.session_state

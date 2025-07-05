@@ -13,6 +13,7 @@ import streamlit as st
 import os
 import traceback
 import time
+import datetime
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
@@ -22,16 +23,10 @@ def render_enhanced_ai_foundry_tab(
 ) -> None:
     """Render the enhanced AI Foundry account management tab."""
     
-    # Performance timing - track tab rendering speed
+    # Track timing for performance monitoring
     tab_start_time = time.time()
-    st.markdown("⏱️ **Tab Loading Diagnostics:**")
-    st.text(f"Tab start time: {time.strftime('%H:%M:%S', time.localtime(tab_start_time))}")
     
     st.header("🏭 AI Foundry Account Management (Accounts Only)")
-    
-    # Timing checkpoint 1
-    checkpoint_1 = time.time()
-    st.text(f"⏱️ Header rendered in: {checkpoint_1 - tab_start_time:.3f}s")
     
     # Add important notice about supported resources
     st.info("""
@@ -63,23 +58,10 @@ def render_enhanced_ai_foundry_tab(
     
     st.markdown("---")
     
-    # Timing checkpoint 2 - before service initialization
-    checkpoint_2 = time.time()
-    st.text(f"⏱️ UI setup complete in: {checkpoint_2 - tab_start_time:.3f}s")
-    
     # Initialize services (lazy-loaded for better performance)
     if 'ai_foundry_discovery_service' not in st.session_state:
-        service_start = time.time()
         from services.ai_foundry_discovery import ai_foundry_discovery
         st.session_state.ai_foundry_discovery_service = ai_foundry_discovery
-        service_end = time.time()
-        st.text(f"⏱️ Discovery service loaded in: {service_end - service_start:.3f}s")
-    else:
-        st.text("⏱️ Discovery service: already loaded (cached)")
-    
-    # Timing checkpoint 3 - after service initialization
-    checkpoint_3 = time.time()
-    st.text(f"⏱️ Service setup complete in: {checkpoint_3 - tab_start_time:.3f}s")
     
     # Only initialize other services when needed to improve tab loading speed
     discovery_service = st.session_state.ai_foundry_discovery_service
@@ -99,8 +81,8 @@ def render_enhanced_ai_foundry_tab(
     
     def get_deployment_service():
         if 'ai_foundry_deployment_service' not in st.session_state:
-            from services.ai_foundry_agent_deployment import AIFoundryAgentDeploymentService
-            st.session_state.ai_foundry_deployment_service = AIFoundryAgentDeploymentService()
+            from services.ai_foundry_agent_deployment import get_ai_foundry_agent_deployment_service
+            st.session_state.ai_foundry_deployment_service = get_ai_foundry_agent_deployment_service()
         return st.session_state.ai_foundry_deployment_service
     
     # Debug information - show service status (only load services when debug is expanded)
@@ -124,7 +106,6 @@ def render_enhanced_ai_foundry_tab(
             st.write(f"- {key}: {type(value).__name__}")
     
     # Setup subscription for discovery service (completely lazy to improve performance)
-    subscription_start = time.time()
     subscription_id = os.getenv('AZURE_SUBSCRIPTION_ID')
     
     # Store subscription ID but don't initialize clients until actually needed
@@ -137,22 +118,18 @@ def render_enhanced_ai_foundry_tab(
         st.sidebar.info("💡 Set AZURE_SUBSCRIPTION_ID environment variable for auto-detection")
         st.sidebar.info("🔍 Or use discovery service to list subscriptions when needed")
     
-    subscription_end = time.time()
-    st.text(f"⏱️ Subscription setup in: {subscription_end - subscription_start:.3f}s")
-    
     # Create tabs for different sections
-    tabs_start = time.time()
     tab_deploy_hub, tab_discover, tab_agents = st.tabs([
         "🚀 Deploy New Hub",
         "🔍 Discover AI Accounts",
         "🤖 Deploy Agents"
     ])
-    tabs_end = time.time()
-    st.text(f"⏱️ Tabs created in: {tabs_end - tabs_start:.3f}s")
     
-    # Final timing summary
+    # Show performance info in debug section only
     total_time = time.time() - tab_start_time
-    st.success(f"🏁 **Total AI Foundry tab load time: {total_time:.3f}s**")
+    if total_time > 1.0:  # Only show if tab loading took more than 1 second
+        with st.expander("⏱️ Performance Info", expanded=False):
+            st.text(f"Tab load time: {total_time:.3f}s")
     
     with tab_deploy_hub:
         render_ai_foundry_hub_deployment_ui()
@@ -187,11 +164,42 @@ def render_resource_discovery_section(discovery_service):
     if st.button("🔄 Scan for AI Foundry Accounts", type="primary"):
         with st.spinner("Scanning subscriptions for AI Foundry Accounts..."):
             try:
-                # Ensure subscription is set up before discovery (lazy initialization)
+                # Check if subscription ID is available from environment
                 subscription_id = os.getenv('AZURE_SUBSCRIPTION_ID')
-                if subscription_id and hasattr(discovery_service, '_subscription_id'):
+                
+                if subscription_id:
+                    # Use the configured subscription
                     discovery_service.set_subscription(subscription_id)
-                    st.write(f"🔍 **DEBUG:** Using subscription: {subscription_id[:8]}...")
+                    st.write(f"🔍 **DEBUG:** Using configured subscription: {subscription_id[:8]}...")
+                else:
+                    # Auto-discover subscriptions like before
+                    st.write("🔍 **DEBUG:** No AZURE_SUBSCRIPTION_ID configured, auto-discovering subscriptions...")
+                    
+                    # Initialize credentials first
+                    discovery_service._ensure_credential_initialized()
+                    
+                    # Try to discover available subscriptions using the discovery service
+                    try:
+                        # Use the discovery service's list_subscriptions method instead
+                        st.write("🔍 **DEBUG:** Listing available subscriptions...")
+                        subscriptions = discovery_service.list_subscriptions()
+                        
+                        if subscriptions:
+                            # Use the first available subscription
+                            auto_subscription_id = subscriptions[0]['id']
+                            discovery_service.set_subscription(auto_subscription_id)
+                            st.write(f"🔍 **DEBUG:** Auto-discovered subscription: {auto_subscription_id[:8]}...")
+                            st.info(f"💡 **Auto-discovery**: Using subscription '{subscriptions[0]['name'][:50]}...' ({auto_subscription_id[:8]}...)")
+                        else:
+                            st.error("❌ No accessible subscriptions found")
+                            st.markdown("💡 **Tip**: Make sure you're logged in with `az login` and have access to at least one subscription")
+                            st.stop()
+                            
+                    except Exception as sub_error:
+                        st.error(f"❌ Failed to auto-discover subscriptions: {sub_error}")
+                        st.markdown("💡 **Alternative**: Set `AZURE_SUBSCRIPTION_ID` in your `.env` file")
+                        st.code(f"Error details: {str(sub_error)}")
+                        st.stop()
                 
                 accounts = []
                 
@@ -283,9 +291,236 @@ def render_resource_discovery_section(discovery_service):
                             st.session_state.deployment_endpoint = project_endpoint
                             st.session_state.ready_for_agent_deployment = True
                             st.success("✅ Ready for agent deployment! Go to 'Deploy Agents' tab.")
+                    
+                    # =================== AGENT DEPLOYMENT SECTION ===================
+                    st.markdown("---")
+                    st.markdown("#### 🤖 Deploy Agent to This Project")
+                    
+                    # Initialize deployment service (lazy loading)
+                    if 'ai_foundry_deployment_service' not in st.session_state:
+                        from services.ai_foundry_agent_deployment import get_ai_foundry_agent_deployment_service
+                        st.session_state.ai_foundry_deployment_service = get_ai_foundry_agent_deployment_service()
+                    
+                    deployment_service = st.session_state.ai_foundry_deployment_service
+                    
+                    # Set project endpoint on the deployment service
+                    deployment_service.set_project_endpoint(project_endpoint)
+                    
+                    # Agent deployment form
+                    with st.form(f"deploy_agent_form_{i}"):
+                        st.markdown("**Create New Agent**")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            agent_name = st.text_input(
+                                "Agent Name",
+                                placeholder="my-search-agent",
+                                help="Enter a unique name for your agent",
+                                key=f"agent_name_{i}"
+                            )
+                        
+                        with col2:
+                            agent_model = st.selectbox(
+                                "Model",
+                                ["gpt-4", "gpt-4o", "gpt-3.5-turbo"],
+                                help="Select the OpenAI model for the agent",
+                                key=f"agent_model_{i}"
+                            )
+                        
+                        # Agent instructions
+                        agent_instructions = st.text_area(
+                            "Agent Instructions",
+                            placeholder="You are a helpful AI assistant...",
+                            help="Provide instructions for what this agent should do",
+                            height=100,
+                            key=f"agent_instructions_{i}"
+                        )
+                        
+                        # Optional: Azure Search integration
+                        with st.expander("🔍 Azure Search Integration (Optional)", expanded=False):
+                            enable_search = st.checkbox(
+                                "Enable Azure Search Integration",
+                                help="Connect this agent to an Azure Search index for retrieval",
+                                key=f"enable_search_{i}"
+                            )
+                            
+                            if enable_search:
+                                search_endpoint = st.text_input(
+                                    "Azure Search Endpoint",
+                                    placeholder="https://your-search.search.windows.net",
+                                    help="Your Azure Search service endpoint",
+                                    key=f"search_endpoint_{i}"
+                                )
+                                
+                                index_name = st.text_input(
+                                    "Index Name",
+                                    placeholder="my-index",
+                                    help="Name of the search index to use",
+                                    key=f"index_name_{i}"
+                                )
+                        
+                        # Deploy button
+                        deploy_submitted = st.form_submit_button("🚀 Deploy Agent", type="primary")
+                        
+                        if deploy_submitted:
+                            if agent_name and agent_instructions:
+                                try:
+                                    with st.spinner(f"Deploying agent '{agent_name}' to {project_name}..."):
+                                        # Create agent configuration
+                                        if enable_search and search_endpoint and index_name:
+                                            # Create retrieval agent with Azure Search integration
+                                            success, message, agent_data = deployment_service.create_retrieval_agent(
+                                                agent_name=agent_name,
+                                                index_name=index_name,
+                                                azure_search_endpoint=search_endpoint,
+                                                instructions=agent_instructions
+                                            )
+                                        else:
+                                            # Create standard agent
+                                            agent_config = {
+                                                'name': agent_name,
+                                                'instructions': agent_instructions,
+                                                'model': agent_model,
+                                                'tools': [],
+                                                'metadata': {
+                                                    'created_from': 'agentic_rag_demo',
+                                                    'project': project_name,
+                                                    'account': account_name
+                                                }
+                                            }
+                                            success, message, agent_data = deployment_service.create_agent(agent_config)
+                                        
+                                        if success:
+                                            st.success(f"✅ {message}")
+                                            st.markdown("**Agent Details:**")
+                                            st.json(agent_data)
+                                            
+                                            # Show project endpoint for reference
+                                            st.info(f"🔗 **Agent deployed to**: {project_endpoint}")
+                                        else:
+                                            st.error(f"❌ {message}")
+                                            
+                                except Exception as e:
+                                    st.error(f"❌ Failed to deploy agent: {str(e)}")
+                                    with st.expander("🔍 Error Details", expanded=False):
+                                        st.code(traceback.format_exc())
+                            else:
+                                st.warning("⚠️ Please fill in Agent Name and Instructions")
     else:
         if hasattr(st.session_state, 'discovered_accounts'):
             st.info("⚠️ No AI Foundry Accounts found in your subscription")
+            
+            # Add a demo/test section to show what the agent deployment would look like
+            with st.expander("👀 Preview: Agent Deployment UI (Demo)", expanded=False):
+                st.info("📝 **This is what you would see after discovering an AI account and entering a project name:**")
+                
+                # Demo account info
+                demo_account_name = "demo-ai-services"
+                demo_project_name = "my-project"
+                demo_project_endpoint = f"https://{demo_account_name}.services.ai.azure.com/api/projects/{demo_project_name}"
+                
+                st.markdown("#### 🔗 Generate PROJECT_ENDPOINT")
+                st.code(demo_project_endpoint)
+                
+                st.markdown("#### 🤖 Deploy Agent to This Project")
+                st.markdown("**Create New Agent**")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.text_input("Agent Name", value="my-search-agent", disabled=True)
+                with col2:
+                    st.selectbox("Model", ["gpt-4", "gpt-4o", "gpt-3.5-turbo"], disabled=True)
+                
+                st.text_area("Agent Instructions", value="You are a helpful AI assistant...", disabled=True)
+                
+                with st.expander("🔍 Azure Search Integration (Optional)", expanded=False):
+                    st.checkbox("Enable Azure Search Integration", disabled=True)
+                    st.text_input("Azure Search Endpoint", disabled=True)
+                    st.text_input("Index Name", disabled=True)
+                
+                st.button("🚀 Deploy Agent", disabled=True, help="This would deploy the agent to your AI Foundry project")
+                
+                st.success("✨ **This is the agent deployment interface that appears when you:**")
+                st.markdown("""
+                1. ✅ Successfully discover AI Foundry Accounts
+                2. ✅ Select an account 
+                3. ✅ Enter a project name
+                """)
+                
+            # Add troubleshooting section
+            with st.expander("🔧 Troubleshooting: Why No Accounts Found?", expanded=True):
+                st.markdown("**Possible reasons:**")
+                st.markdown("""
+                1. **No AI Services accounts in subscription**
+                   - Create an "Azure AI Services" resource in Azure Portal
+                   - Make sure it's a multi-service account (not single-service like "Text Analytics")
+                
+                2. **Authentication issue**
+                   - Try logging in: `az login`
+                   - Check managed identity permissions if running on Azure
+                
+                3. **Permissions issue**
+                   - Ensure you have "Reader" role on the subscription
+                   - Check if Azure CLI login works: `az account show`
+                
+                4. **Subscription access**
+                   - Verify you have access to Azure subscriptions
+                   - The service auto-discovers subscriptions, but you can specify one manually if needed
+                """)
+                
+                # Show current subscription ID for debugging
+                current_sub = os.getenv('AZURE_SUBSCRIPTION_ID')
+                if current_sub:
+                    st.info(f"🔍 **Configured subscription**: {current_sub[:8]}...")
+                    st.markdown("✅ Subscription ID is configured (will be used directly)")
+                else:
+                    st.info("🔍 **Subscription mode**: Auto-discovery (no manual configuration)")
+                    st.markdown("✅ Service will auto-discover available subscriptions")
+                
+                # Quick test button
+                if st.button("🧪 Test Discovery Service", type="secondary"):
+                    with st.spinner("Testing discovery service..."):
+                        try:
+                            discovery_service = st.session_state.ai_foundry_discovery_service
+                            
+                            # Test credentials first
+                            discovery_service._ensure_credential_initialized()
+                            st.success("✅ Credentials initialized")
+                            
+                            # Test subscription setup
+                            if current_sub:
+                                discovery_service.set_subscription(current_sub)
+                                st.success("✅ Using configured subscription")
+                            else:
+                                # Test auto-discovery using discovery service method
+                                st.info("🔍 Testing subscription auto-discovery...")
+                                subscriptions = discovery_service.list_subscriptions()
+                                
+                                if subscriptions:
+                                    auto_sub = subscriptions[0]['id']
+                                    discovery_service.set_subscription(auto_sub)
+                                    st.success(f"✅ Auto-discovered subscription: '{subscriptions[0]['name'][:30]}...' ({auto_sub[:8]}...)")
+                                else:
+                                    st.error("❌ No accessible subscriptions found")
+                                    return
+                            
+                            # Test client initialization
+                            discovery_service._ensure_clients_initialized()
+                            st.success("✅ Azure clients initialized")
+                            
+                            # Test account listing (simplified)
+                            st.info("🔍 Testing account discovery...")
+                            accounts = discovery_service.discover_ai_foundry_accounts()
+                            st.write(f"🔍 **Raw discovery result**: {len(accounts)} accounts found")
+                            
+                            if accounts:
+                                st.success("✅ Accounts found! Try the scan button again.")
+                            else:
+                                st.warning("⚠️ Still no accounts found. Check the possible reasons above.")
+                                
+                        except Exception as e:
+                            st.error(f"❌ Test failed: {str(e)}")
+                            st.code(traceback.format_exc())
         else:
             st.info("🔍 Click 'Scan for AI Foundry Accounts' above to discover resources.")
 
@@ -490,35 +725,34 @@ def render_agent_details_section(deployment_endpoint, deployment_service):
         st.error(f"❌ Error in agent details section: {e}")
 
 def render_ai_foundry_hub_deployment_ui():
-    """Render the AI Foundry Hub deployment UI."""
-    try:
-        # Import and use the comprehensive hub deployment UI
-        from app.components.ai_foundry_hub_deployment_ui import render_ai_foundry_hub_deployment_ui as render_hub_ui
-        render_hub_ui()
-    except ImportError as e:
-        # Fallback to placeholder if the component is not available
-        st.subheader("🚀 Deploy New AI Foundry Hub")
-        
-        st.warning("⚠️ **Hub Deployment UI Module Not Available**")
-        st.error(f"Import Error: {e}")
-        
-        st.info("""
-        **🏗️ Hub Deployment**: Deploy a new AI Foundry Hub with network isolation and private endpoints.
-        
-        **Current Options:**
-        1. Use the Azure Portal to create AI Foundry Hubs manually
-        2. Use Azure CLI or ARM templates for automated deployment
-        3. Check if the hub deployment module is properly installed
-        """)
-    except Exception as e:
-        # Handle any other errors
-        st.subheader("� Deploy New AI Foundry Hub")
-        
-        st.error(f"❌ **Error Loading Hub Deployment UI**: {e}")
-        
-        st.info("""
-        **Current Options:**
-        1. Use the Azure Portal to create AI Foundry Hubs manually
-        2. Use Azure CLI or ARM templates for automated deployment
-        3. Contact support for assistance
-        """)
+    """Render the AI Foundry Hub deployment UI with lazy loading."""
+    # Lazy loading to avoid slow initialization during tab creation
+    st.subheader("🚀 Deploy New AI Foundry Hub")
+    
+    # Add a note about lazy loading
+    st.info("💡 Hub deployment UI loads when first accessed to improve performance.")
+    
+    # Only import and initialize when user actually wants to use it
+    if st.button("🔧 Initialize Hub Deployment UI", type="primary"):
+        with st.spinner("Loading hub deployment interface..."):
+            try:
+                from app.components.ai_foundry_hub_deployment_ui import render_ai_foundry_hub_deployment_ui as render_hub_ui
+                st.success("✅ Hub deployment UI loaded!")
+                # Store in session state so it doesn't reload
+                st.session_state.hub_ui_loaded = True
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Failed to load hub deployment UI: {e}")
+                st.code(str(e))
+    
+    # If already loaded, show the UI
+    if st.session_state.get('hub_ui_loaded', False):
+        try:
+            from app.components.ai_foundry_hub_deployment_ui import render_ai_foundry_hub_deployment_ui as render_hub_ui
+            render_hub_ui()
+        except Exception as e:
+            st.error(f"❌ Error in hub deployment UI: {e}")
+            # Reset the loaded state so user can try again
+            st.session_state.hub_ui_loaded = False
+            if st.button("🔄 Retry Loading"):
+                st.rerun()

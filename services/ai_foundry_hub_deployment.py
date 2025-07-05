@@ -105,17 +105,18 @@ class AIFoundryHubDeploymentService:
         self.credential = None
         self.cli_credential = None
         self.template_path = "/home/azureuser/agentic-rag-demo/15-private-network-standard-agent-setup"
-        self._initialize_credentials()
+        # Lazy credential initialization - only when needed
     
     def _initialize_credentials(self):
-        """Initialize Azure credentials."""
-        try:
-            # Try managed identity first
-            self.credential = DefaultAzureCredential()
-            self.cli_credential = AzureCliCredential()
-            logger.info("AI Foundry Hub deployment service credentials initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize credentials: {e}")
+        """Initialize Azure credentials lazily."""
+        if self.credential is None:
+            try:
+                # Try managed identity first
+                self.credential = DefaultAzureCredential()
+                self.cli_credential = AzureCliCredential()
+                logger.info("AI Foundry Hub deployment service credentials initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize credentials: {e}")
     
     def validate_template_path(self) -> Tuple[bool, str]:
         """Validate that the bicep template exists."""

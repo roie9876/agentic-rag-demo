@@ -20,10 +20,15 @@ class AIFoundryDiscoveryService:
     
     def __init__(self):
         """Initialize the AI Foundry Discovery Service."""
-        self.credential = DefaultAzureCredential()
+        self.credential = None  # Lazy initialization
         self._subscription_id = None
         self._cognitive_services_client = None
         self._resource_client = None
+    
+    def _ensure_credential_initialized(self) -> None:
+        """Initialize Azure credential if not already done."""
+        if self.credential is None:
+            self.credential = DefaultAzureCredential()
     
     def set_subscription(self, subscription_id: str) -> None:
         """Set the subscription ID (clients initialized lazily when needed)."""
@@ -34,6 +39,7 @@ class AIFoundryDiscoveryService:
     
     def _ensure_clients_initialized(self) -> None:
         """Initialize Azure clients if not already done."""
+        self._ensure_credential_initialized()  # Ensure credential is ready first
         if self._subscription_id and not self._cognitive_services_client:
             self._cognitive_services_client = CognitiveServicesManagementClient(
                 self.credential, self._subscription_id
@@ -49,6 +55,9 @@ class AIFoundryDiscoveryService:
     def list_subscriptions(self) -> List[Dict[str, Any]]:
         """List available Azure subscriptions."""
         try:
+            # Ensure credential is initialized before using it
+            self._ensure_credential_initialized()
+            
             # Get token for Azure Management API
             token = self.credential.get_token("https://management.azure.com/.default")
             
