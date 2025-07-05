@@ -16,10 +16,19 @@ try:
     from azure.ai.projects import AIProjectClient
     # Import OpenAPI tool support for more advanced agent configurations
     from azure.ai.agents.models import OpenApiTool, OpenApiAnonymousAuthDetails
+    OPENAPI_TOOLS_AVAILABLE = True
     AI_SDK_AVAILABLE = True
 except ImportError as e:
-    logging.warning(f"Azure AI SDK not available: {e}")
-    AI_SDK_AVAILABLE = False
+    try:
+        # Fallback - try just the basic AIProjectClient
+        from azure.ai.projects import AIProjectClient
+        OPENAPI_TOOLS_AVAILABLE = False
+        AI_SDK_AVAILABLE = True
+        logging.warning(f"OpenAPI tools not available, using basic function tools: {e}")
+    except ImportError as e2:
+        OPENAPI_TOOLS_AVAILABLE = False
+        AI_SDK_AVAILABLE = False
+        logging.warning(f"Azure AI SDK not available: {e2}")
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +76,9 @@ class AIFoundryAgentDeploymentService:
     
     def create_openapi_tool(self, tool_name: str, base_url: str, function_key: str) -> 'OpenApiTool':
         """Create an OpenAPI tool definition for the Azure Function using advanced schema."""
+        if not OPENAPI_TOOLS_AVAILABLE:
+            raise RuntimeError("OpenAPI tools not available in current Azure AI SDK version")
+            
         tool_schema = {
             "openapi": "3.0.1",
             "info": {
@@ -201,61 +213,68 @@ class AIFoundryAgentDeploymentService:
             print(f"📍 Project endpoint: {project_endpoint}")
             print(f"🤖 Model deployment: {model_deployment_name}")
             print(f"⚙️ Function URL: {base_url}")
+            print(f"🔧 OpenAPI tools available: {OPENAPI_TOOLS_AVAILABLE}")
             
-            # Create a function tool for the Azure Function
-            function_tool = {
-                "type": "function",
-                "function": {
-                    "name": "call_azure_function",
-                    "description": f"Call the Azure Function at {base_url}",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "The user's query or request to process"
+            # Create tool and instructions based on available capabilities
+            if OPENAPI_TOOLS_AVAILABLE:
+                # Use advanced OpenAPI tool for the Azure Function
+                TOOL_NAME = "Test_askAgentFunction"
+                openapi_tool = self.create_openapi_tool(TOOL_NAME, base_url, function_key)
+                system_message = self.get_agent_system_message(base_url, function_key)
+                tools = openapi_tool.definitions
+                
+                print(f"✅ Using OpenAPI tool: {TOOL_NAME}")
+                print(f"📝 Advanced system message length: {len(system_message)} characters")
+                
+            else:
+                # Fallback to basic function tool
+                function_tool = {
+                    "type": "function",
+                    "function": {
+                        "name": "call_azure_function",
+                        "description": f"Call the Azure Function at {base_url}",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The user's query or request to process"
+                                }
                             },
-                            "parameters": {
-                                "type": "object",
-                                "description": "Additional parameters for the function call"
-                            }
-                        },
-                        "required": ["query"]
+                            "required": ["query"]
+                        }
                     }
                 }
-            }
-            
-            # Generate comprehensive instructions for the agent
-            instructions = f"""You are an AI assistant agent that can call Azure Functions to help users.
+                
+                system_message = f"""You are an AI assistant agent that can call Azure Functions to help users.
 
 Your primary tool is an Azure Function deployed at: {base_url}
 
-When users ask questions or need assistance, you can:
+When users ask questions or need assistance:
 1. Use the call_azure_function tool to invoke the function with their query
 2. Process and explain the results to the user
 3. Provide helpful context and guidance
 
-Function Details:
-- Base URL: {base_url}
-- Authentication: Function key protected
-- Purpose: Process user queries and provide intelligent responses
-
-Always be helpful, accurate, and provide clear explanations of any function results.
-"""
+Always be helpful, accurate, and provide clear explanations of any function results."""
+                
+                tools = [function_tool]
+                
+                print(f"⚠️ Using basic function tool (OpenAPI not available)")
             
             # Create the agent using the Azure AI SDK
             agent = client.agents.create_agent(
                 model=model_deployment_name,
                 name=agent_name,
-                description=f"AI Agent powered by Azure Function at {base_url}",
-                instructions=instructions,
-                tools=[function_tool],
+                description=f"AI Agent powered by Azure Function at {base_url} - Created from Streamlit UI",
+                instructions=system_message,
+                tools=tools,
                 tool_resources=None,  # No file-based tools for now
                 metadata={
                     "created_by": "agentic_rag_demo",
                     "function_url": base_url,
                     "creation_time": datetime.now().isoformat(),
-                    "agent_type": "azure_function_agent"
+                    "agent_type": "azure_function_agent_openapi" if OPENAPI_TOOLS_AVAILABLE else "azure_function_agent_basic",
+                    "tool_type": "openapi" if OPENAPI_TOOLS_AVAILABLE else "basic_function"
                 }
             )
             

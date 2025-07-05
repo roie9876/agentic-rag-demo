@@ -404,6 +404,14 @@ def render_resource_discovery_section(discovery_service):
                                 try:
                                     from azure.ai.projects import AIProjectClient
                                     st.success("✅ Azure AI SDK is available")
+                                    
+                                    # Check for OpenAPI tools (advanced feature)
+                                    try:
+                                        from azure.ai.agents.models import OpenApiTool, OpenApiAnonymousAuthDetails
+                                        st.success("✅ OpenAPI tools available (advanced agent features enabled)")
+                                    except ImportError:
+                                        st.warning("⚠️ OpenAPI tools not available (will use basic function tools)")
+                                        
                                 except ImportError:
                                     st.error("❌ Azure AI SDK not available")
                                     st.markdown("""
