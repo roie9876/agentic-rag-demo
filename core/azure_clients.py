@@ -79,15 +79,17 @@ def init_search_client(index_name: str | None = None) -> Tuple[SearchClient, Sea
         # Caller should create a proper one later.
         search_client = SearchClient(endpoint=endpoint, index_name="dummy", credential=credential)
 
-    # Improved index listing debug
-    try:
-        available_indexes = list(index_client.list_indexes())
-        # Only update session state if Streamlit is available and initialized
-        if hasattr(st, 'session_state') and st.session_state is not None:
-            st.session_state.available_indexes = [idx.name for idx in available_indexes]
-    except Exception as conn_error:
-        logging.error("list_indexes() failed: %s", conn_error)
-        # Only update session state if Streamlit is available and initialized
+    # DON'T automatically list indexes on client creation - this is slow and unnecessary
+    # Instead, let components call list_indexes() only when they actually need it
+    # This prevents the UI from being slow due to network issues
+    
+    # Optional: Only check connectivity if explicitly requested
+    # try:
+    #     available_indexes = list(index_client.list_indexes())
+    #     if hasattr(st, 'session_state') and st.session_state is not None:
+    #         st.session_state.available_indexes = [idx.name for idx in available_indexes]
+    # except Exception as conn_error:
+    #     logging.error("list_indexes() failed: %s", conn_error)
         if hasattr(st, 'session_state') and st.session_state is not None:
             st.session_state.available_indexes = []
 
