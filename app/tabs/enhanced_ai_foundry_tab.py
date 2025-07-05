@@ -121,10 +121,9 @@ def render_enhanced_ai_foundry_tab(
         st.sidebar.info("🔍 Or use discovery service to list subscriptions when needed")
     
     # Create tabs for different sections
-    tab_deploy_hub, tab_discover, tab_agents = st.tabs([
+    tab_deploy_hub, tab_discover = st.tabs([
         "🚀 Deploy New Hub",
-        "🔍 Discover AI Accounts",
-        "🤖 Deploy Agents"
+        "🔍 Discover and Deploy Agent"
     ])
     
     # Show performance info in debug section only (calculate after tabs are created)
@@ -138,41 +137,10 @@ def render_enhanced_ai_foundry_tab(
     
     with tab_discover:
         render_resource_discovery_section(discovery_service)
-    
-    with tab_agents:
-        st.subheader("🤖 Deploy Agents")
-        st.info("🎯 **Agent deployment is now integrated into the 'Discover AI Accounts' tab!**")
-        st.markdown("""
-        **How to deploy agents:**
-        
-        1. **Go to 'Discover AI Accounts' tab**
-        2. **Scan for AI Foundry Accounts** 
-        3. **Select an account** and enter a **project name**
-        4. **Use the 'Create AI Foundry Agent' section** to deploy Function Apps as agents
-        
-        **What you need:**
-        - ✅ Azure Function App (configured in 'Function Config' tab)
-        - ✅ AI Foundry Account discovered
-        - ✅ Project name specified
-        - ✅ `AGENT_FUNC_KEY` environment variable set
-        """)
-        
-        # Show current function apps for reference
-        func_choices = getattr(st.session_state, 'func_choices', [])
-        if func_choices:
-            st.success(f"✅ **{len(func_choices)} Function App(s) ready for deployment:**")
-            for func in func_choices:
-                st.markdown(f"• {func}")
-        else:
-            st.warning("⚠️ **No Function Apps configured.** Go to 'Function Config' tab first.")
-            
-        # Quick link to discovery tab
-        st.markdown("---")
-        st.markdown("🚀 **Ready to deploy?** Click 'Discover AI Accounts' tab above to start!")
 
 def render_resource_discovery_section(discovery_service):
     """Render the AI Foundry resource discovery section."""
-    st.subheader("🔍 Discover AI Foundry Accounts")
+    st.subheader("🔍 Discover and Deploy Agent")
     
     # Force UI refresh with timestamp
     import datetime
@@ -320,7 +288,7 @@ def render_resource_discovery_section(discovery_service):
                         if st.button(f"🚀 Use for Agent Deployment", key=f"deploy_{i}"):
                             st.session_state.deployment_endpoint = project_endpoint
                             st.session_state.ready_for_agent_deployment = True
-                            st.success("✅ Ready for agent deployment! Go to 'Deploy Agents' tab.")
+                            st.success("✅ Ready for agent deployment! Agent deployment is available in this tab.")
                     
                     # =================== AI FOUNDRY AGENT CREATION ===================
                     st.markdown("---")
@@ -678,15 +646,15 @@ def render_agent_deployment_section(deployment_service, discovery_service):
     
     if has_generated_endpoint:
         deployment_endpoint = st.session_state.deployment_endpoint
-        deployment_source = "Generated from Discover AI Accounts"
-        st.success(f"✅ **Ready to deploy!** Using endpoint from Discover AI Accounts")
+        deployment_source = "Generated from Discover and Deploy Agent"
+        st.success(f"✅ **Ready to deploy!** Using endpoint from Discover and Deploy Agent")
         st.code(deployment_endpoint)
         
     else:
         # Allow manual endpoint input as fallback
         st.info("🎯 **Agent Deployment Options:**")
         st.markdown("""
-        **Option 1:** Use **Discover AI Accounts** tab → Select AI Foundry Account → Generate PROJECT_ENDPOINT
+        **Option 1:** Use **Discover and Deploy Agent** tab → Select AI Foundry Account → Generate PROJECT_ENDPOINT
         
         **Option 2:** Enter a PROJECT_ENDPOINT manually below
         
