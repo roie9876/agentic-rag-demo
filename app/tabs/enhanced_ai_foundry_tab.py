@@ -3,12 +3,17 @@ Enhanced AI Foundry Hub Tab
 ---------------------------
 Comprehensive UI for managing AI Foundry Hubs, permissions, and agent deployment.
 
-IMPORTANT: This interface only supports AI Foundry Hubs (Microsoft.MachineLearningServices/workspaces with kind=Hub).
-AI Foundry Accounts (Microsoft.CognitiveServices/accounts) are NOT supported due to lack of public APIs.
+Features:
+- 🔍 Resource Discovery: Find AI Foundry Accounts and Hubs
+- 🔗 Endpoint Builder: Construct PROJECT_ENDPOINT for AI Foundry Accounts  
+- 🔐 RBAC Management: Check and configure permissions
+- 📋 Project Management: Create and manage projects (Hubs only)
+- 🤖 Agent Deployment: Deploy and manage agents
+- 🚀 Hub Deployment: Deploy new AI Foundry Hubs with network isolation
 
-For users with AI Foundry Accounts:
-- Use the Azure Portal for project management
-- Consider migrating to AI Foundry Hubs for programmatic access
+IMPORTANT: 
+- AI Foundry Hubs (Microsoft.MachineLearningServices/workspaces) have full programmatic support
+- AI Foundry Accounts (Microsoft.CognitiveServices/accounts) require manual PROJECT_ENDPOINT construction
 """
 
 import streamlit as st
@@ -23,6 +28,7 @@ from services.ai_foundry_rbac import AIFoundryRBACService
 from services.ai_foundry_service import AIFoundryService
 from services.ai_foundry_agent_deployment import AIFoundryAgentDeploymentService
 from utils.ai_foundry_helpers import AIFoundryHelper
+from utils.ai_foundry_endpoint_builder import AIFoundryEndpointBuilder
 from app.components.rbac_help import render_rbac_help_section, render_permission_summary, render_rbac_status_card
 from app.components.ai_foundry_hub_deployment_ui import render_ai_foundry_hub_deployment_ui
 
@@ -38,11 +44,13 @@ def render_enhanced_ai_foundry_tab(
     
     # Add important notice about supported resources
     st.info("""
-    **📋 Supported Resources**: This interface only supports **AI Foundry Hubs** (ML workspaces with kind=Hub).
+    **📋 Resource Support**: 
     
-    **❌ Not Supported**: AI Foundry Accounts (CognitiveServices) due to lack of public project management APIs.
+    **✅ AI Foundry Hubs**: Full programmatic support for project creation, management, and agent deployment
     
-    **💡 For AI Foundry Account users**: Use the Azure Portal for project management or migrate to Hubs for programmatic access.
+    **⚠️ AI Foundry Accounts**: Limited programmatic support - use the 'Build Endpoint' tab to construct PROJECT_ENDPOINT manually
+    
+    **💡 Recommendation**: Use AI Foundry Hubs for automated workflows, or use the Endpoint Builder for AI Foundry Accounts.
     """)
     
     # Add refresh button to clear cached services
@@ -175,11 +183,12 @@ def render_enhanced_ai_foundry_tab(
         st.sidebar.warning(f"⚠️ Subscription setup issue: {e}")
     
     # Create tabs for different sections
-    tab_deploy_hub, tab_discover, tab_permissions, tab_projects, tab_agents = st.tabs([
-        "� Deploy New Hub",
-        "�🔍 Discover Resources",
+    tab_deploy_hub, tab_discover, tab_permissions, tab_projects, tab_endpoint_builder, tab_agents = st.tabs([
+        "🚀 Deploy New Hub",
+        "🔍 Discover Resources",
         "🔐 Check Permissions", 
         "📋 Manage Projects",
+        "🔗 Build Endpoint",
         "🤖 Deploy Agents"
     ])
     
@@ -194,6 +203,9 @@ def render_enhanced_ai_foundry_tab(
     
     with tab_projects:
         render_project_management_section(ai_foundry_service)
+    
+    with tab_endpoint_builder:
+        render_endpoint_builder_section()
     
     with tab_agents:
         render_agent_deployment_section(deployment_service)
@@ -690,18 +702,63 @@ def render_project_management_section(ai_foundry_service):
         )
         
         if is_cognitive_services:
-            st.info(
-                "ℹ️ **Cognitive Services Account Selected**\n\n"
-                f"**Selected Resource:** {resource.get('name', 'Unknown')} (Cognitive Services Account)\n\n"
-                "**Project Creation Methods:**\n"
-                "• ✅ **Azure CLI** - Uses same APIs as Azure Portal (will be tried first)\n"
-                "• ⚠️ **ARM API** - May have limitations for Cognitive Services accounts (fallback)\n\n"
-                "**If creation fails:**\n"
-                "• Ensure Azure CLI is installed and logged in (`az login`)\n"
-                "• Try creating manually in Azure Portal\n"
-                "• Consider using an AI Foundry Hub for guaranteed programmatic support\n\n"
-                "**Proceeding with creation attempt...**"
+            st.warning(
+                "⚠️ **AI Foundry Account (Cognitive Services) Selected**\n\n"
+                f"**Selected Resource:** {resource.get('name', 'Unknown')} (AI Foundry Account)\n\n"
+                "**⚠️ Limited Project Discovery**: AI Foundry Accounts do not expose public APIs for project discovery.\n\n"
+                "**Recommended Workflow:**\n"
+                "1. 🔗 **Use the 'Build Endpoint' tab** to construct your PROJECT_ENDPOINT manually\n"
+                "2. 📝 **Account Name**: Can be auto-detected (this account: `{}`)\n"
+                "3. ✍️ **Project Name**: Must be provided manually (find it in Azure Portal)\n"
+                "4. 🚀 **Use the generated endpoint** for agent deployment\n\n"
+                "**Alternative**: Consider using an AI Foundry Hub for full programmatic access.".format(resource.get('name', 'Unknown'))
             )
+            
+            # Add direct link to endpoint builder
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("🔗 Go to Endpoint Builder", type="primary"):
+                    st.session_state.active_tab = "endpoint_builder"
+                    st.rerun()
+            with col2:
+                if st.button("📖 Learn More About Account Types"):
+                    st.session_state.show_account_help = True
+            
+            # Show account type help
+            if st.session_state.get('show_account_help', False):
+                with st.expander("📋 Understanding AI Foundry Resource Types", expanded=True):
+                    st.markdown("""
+                    **AI Foundry Accounts vs Hubs:**
+                    
+                    **🔑 AI Foundry Accounts (Cognitive Services)**
+                    - Provide AI services like OpenAI, Speech, Vision
+                    - Resource type: `Microsoft.CognitiveServices/accounts`
+                    - ❌ No public project discovery APIs
+                    - ✅ Projects can be created manually in Azure Portal
+                    - ⚠️ Requires manual endpoint construction for programmatic access
+                    
+                    **🏭 AI Foundry Hubs (ML Workspaces)**
+                    - Project hosting environments with full programmatic access
+                    - Resource type: `Microsoft.MachineLearningServices/workspaces`
+                    - ✅ Full API support for project management
+                    - ✅ Automatic project discovery and creation
+                    - ✅ Complete programmatic control
+                    
+                    **💡 Recommendation**: Use AI Foundry Hubs for automated workflows.
+                    """)
+                
+                if st.button("❌ Close Help"):
+                    st.session_state.show_account_help = False
+                    st.rerun()
+            
+            # Still allow project creation attempt but with clear expectations
+            st.markdown("---")
+            st.markdown("**⚠️ Advanced: Attempt Programmatic Project Creation**")
+            
+            st.warning("""
+            **Important**: Project creation for AI Foundry Accounts has limitations and may fail.
+            The 'Build Endpoint' approach above is more reliable.
+            """)
             
             # Add helpful guidance but don't block
             with st.expander("📋 About AI Foundry Resource Types", expanded=False):
@@ -1313,3 +1370,220 @@ def render_hub_deployment_section():
     
     # Render the deployment interface using our new UI
     render_ai_foundry_hub_deployment_ui()
+
+def render_endpoint_builder_section():
+    """Render the AI Foundry Account endpoint builder section."""
+    st.subheader("🔗 AI Foundry Account Project Endpoint Builder")
+    
+    st.info("""
+    **📋 For AI Foundry Accounts Only**: Use this section to construct PROJECT_ENDPOINT values for AI Foundry Accounts.
+    
+    **Key Points:**
+    - ✅ **Account Name**: Can be auto-detected from your Azure resources
+    - ⚠️ **Project Name**: Must be provided manually (no API discovery available)
+    - 🔗 **Endpoint Format**: `https://<account>.services.ai.azure.com/api/projects/<project>`
+    """)
+    
+    # Initialize endpoint builder
+    endpoint_builder = AIFoundryEndpointBuilder()
+    
+    # Step 1: Account Selection/Input
+    st.markdown("### Step 1: Select or Enter Account Name")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # Option to auto-detect accounts
+        if st.button("🔍 Auto-Detect AI Foundry Accounts", type="primary"):
+            with st.spinner("Scanning for AI Foundry Accounts..."):
+                try:
+                    accounts = endpoint_builder.discover_ai_services_accounts()
+                    st.session_state.detected_accounts = accounts
+                    
+                    if accounts:
+                        st.success(f"✅ Found {len(accounts)} AI Foundry Account(s)")
+                    else:
+                        st.warning("⚠️ No AI Foundry Accounts found in your subscription")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error detecting accounts: {str(e)}")
+                    st.session_state.detected_accounts = []
+    
+    with col2:
+        st.markdown("**Or enter manually:**")
+    
+    # Account selection
+    account_name = ""
+    detected_accounts = st.session_state.get('detected_accounts', [])
+    
+    if detected_accounts:
+        st.markdown("**Detected Accounts:**")
+        
+        # Create account selection options
+        account_options = ["Enter manually..."] + [acc['name'] for acc in detected_accounts]
+        
+        selected_account_idx = st.selectbox(
+            "Choose Account:",
+            range(len(account_options)),
+            format_func=lambda x: account_options[x],
+            key="account_selector"
+        )
+        
+        if selected_account_idx > 0:  # Not "Enter manually..."
+            selected_account = detected_accounts[selected_account_idx - 1]
+            account_name = selected_account['name']
+            st.success(f"✅ Selected account: **{account_name}**")
+            
+            # Show account details
+            with st.expander("📋 Account Details", expanded=False):
+                st.write(f"**Name:** {selected_account['name']}")
+                st.write(f"**Location:** {selected_account.get('location', 'N/A')}")
+                st.write(f"**Resource Group:** {selected_account.get('resource_group', 'N/A')}")
+                st.write(f"**Endpoint:** {selected_account.get('endpoint', 'N/A')}")
+        else:
+            # Manual input
+            account_name = st.text_input(
+                "Account Name:",
+                placeholder="e.g., my-ai-account",
+                help="The name of your AI Foundry Account (without .services.ai.azure.com)"
+            )
+    else:
+        # No detected accounts, only manual input
+        account_name = st.text_input(
+            "Account Name:",
+            placeholder="e.g., my-ai-account", 
+            help="The name of your AI Foundry Account (without .services.ai.azure.com)"
+        )
+    
+    st.markdown("---")
+    
+    # Step 2: Project Name Input (Manual Only)
+    st.markdown("### Step 2: Enter Project Name")
+    
+    st.warning("""
+    ⚠️ **Project Name Required**: AI Foundry Accounts do not expose project discovery APIs. 
+    You must provide the project name manually.
+    """)
+    
+    project_name = st.text_input(
+        "Project Name:",
+        placeholder="e.g., my-project",
+        help="The exact name of your project as it appears in Azure Portal"
+    )
+    
+    # Step 3: How to find project name
+    with st.expander("📖 How to Find Your Project Name", expanded=False):
+        st.markdown("""
+        **Step-by-step instructions to find your project name:**
+        
+        1. **Open Azure Portal**: Go to [portal.azure.com](https://portal.azure.com)
+        
+        2. **Navigate to your AI Foundry Account**:
+           - Search for your account name in the search bar
+           - Or go to "All Resources" and filter by "Cognitive Services"
+        
+        3. **Open Azure AI Studio**:
+           - Click on your AI Foundry Account
+           - Click "Go to Azure AI Studio" or use the Azure AI Studio link
+        
+        4. **Find Project Name**:
+           - In Azure AI Studio, you'll see your projects listed
+           - The project name is shown in the project tile or list
+           - Copy the exact project name (case-sensitive)
+        
+        5. **Alternative - Direct URL**:
+           - If you have a project URL like: `https://ai.azure.com/projects/my-project/...`
+           - The project name is the part after `/projects/` (in this case: `my-project`)
+        
+        **✅ Important**: Use the exact project name as shown in Azure AI Studio.
+        """)
+    
+    st.markdown("---")
+    
+    # Step 3: Endpoint Construction and Validation
+    st.markdown("### Step 3: Generate Project Endpoint")
+    
+    if account_name and project_name:
+        # Build the endpoint
+        endpoint = endpoint_builder.build_project_endpoint(account_name, project_name)
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            st.success("✅ **Generated PROJECT_ENDPOINT:**")
+            st.code(endpoint, language="text")
+            
+            # Add copy button functionality
+            st.markdown(f"""
+            **To use this endpoint:**
+            1. Copy the endpoint above
+            2. Add it to your `.env` file as: `PROJECT_ENDPOINT={endpoint}`
+            3. Or set it as an environment variable in your Function App
+            """)
+        
+        with col2:
+            # Validate endpoint
+            if st.button("🔍 Validate Endpoint"):
+                with st.spinner("Validating endpoint..."):
+                    is_valid, validation_message = endpoint_builder.validate_project_endpoint(endpoint)
+                    
+                    if is_valid:
+                        st.success("✅ Endpoint format is valid")
+                    else:
+                        st.error(f"❌ Validation issue: {validation_message}")
+        
+        # Additional endpoint information
+        with st.expander("🔧 Endpoint Details", expanded=False):
+            st.markdown(f"""
+            **Endpoint Components:**
+            - **Account Name:** `{account_name}`
+            - **Project Name:** `{project_name}`
+            - **Base URL:** `https://{account_name}.services.ai.azure.com`
+            - **API Path:** `/api/projects/{project_name}`
+            
+            **Usage in Function App:**
+            - Set as `PROJECT_ENDPOINT` environment variable
+            - Used by agents for API calls to your AI Foundry project
+            - Required for agent deployment and management
+            """)
+            
+    else:
+        st.info("👆 Please provide both Account Name and Project Name to generate the endpoint.")
+    
+    st.markdown("---")
+    
+    # Step 4: Common Issues and Troubleshooting
+    with st.expander("🔧 Troubleshooting & Common Issues", expanded=False):
+        st.markdown("""
+        **Common Issues:**
+        
+        **❌ "Account not found"**
+        - Verify the account name is correct
+        - Ensure you have access to the AI Foundry Account
+        - Check that the account is in the expected subscription
+        
+        **❌ "Project not found"**
+        - Double-check the project name (case-sensitive)
+        - Ensure the project exists in the specified account
+        - Verify you have access to the project
+        
+        **❌ "Authentication failed"**
+        - Ensure you're logged in with Azure CLI: `az login`
+        - Check that your account has proper permissions
+        - Verify RBAC roles are assigned correctly
+        
+        **❌ "API calls failing"**
+        - Confirm the generated endpoint is set correctly
+        - Check network connectivity and firewall settings
+        - Verify the project is active and not suspended
+        
+        **💡 Pro Tips:**
+        - Account names are usually visible in Azure Portal resource lists
+        - Project names can be found in Azure AI Studio project pages
+        - The endpoint format is always: `https://<account>.services.ai.azure.com/api/projects/<project>`
+        - Test the endpoint with a simple API call to verify it works
+        """)
+    
+    # Add link back to other tabs
+    st.markdown("---")
+    st.info("💡 **Next Steps**: After generating your endpoint, use the **Deploy Agents** tab to create and manage agents using this PROJECT_ENDPOINT.")
