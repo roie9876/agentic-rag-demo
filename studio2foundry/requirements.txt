@@ -1,0 +1,10 @@
+# Core Azure Functions packages
+azure-functions
+azure-identity
+
+# Essential packages for basic functionality
+requests
+python-dotenv
+
+# Note: Other packages (azure-ai-projects, azure-ai-agents, etc.) can be added later
+# after initial deployment succeeds. This minimal set avoids dependency conflicts.
