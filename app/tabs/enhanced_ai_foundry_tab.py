@@ -6,7 +6,7 @@ Comprehensive UI for managing AI Foundry Accounts and agent deployment.
 Features:
 - 🔍 Resource Discovery: Discover AI Foundry Accounts only
 - 🤖 Agent Management: Deploy and manage agents
-- 🚀 Hub Deployment: Deploy new AI Foundry Hubs (manual process)
+- 🚀 Account Deployment: Deploy new AI Foundry Accounts (manual process)
 """
 
 import streamlit as st
@@ -36,7 +36,7 @@ def render_enhanced_ai_foundry_tab(
     
     **✅ AI Foundry Accounts**: Supported for project endpoint generation and agent deployment
     
-    **ℹ️ AI Foundry Hubs**: Use the Deploy New Hub tab for manual hub creation guidance
+    **ℹ️ AI Foundry Accounts**: Use the Deploy New Account tab for manual account creation guidance
     
     **💡 Focus**: This tab discovers and works with AI Foundry Accounts only - NO HUBS.
     """)
@@ -122,7 +122,7 @@ def render_enhanced_ai_foundry_tab(
     
     # Create tabs for different sections
     tab_deploy_hub, tab_discover = st.tabs([
-        "🚀 Deploy New Hub",
+        "🚀 Deploy New Account",
         "🔍 Discover and Deploy Agent"
     ])
     
@@ -850,33 +850,33 @@ def render_agent_details_section(deployment_endpoint, deployment_service):
 def render_ai_foundry_hub_deployment_ui():
     """Render the AI Foundry Hub deployment UI with lazy loading."""
     # Lazy loading to avoid slow initialization during tab creation
-    st.subheader("🚀 Deploy New AI Foundry Hub")
+    st.subheader("🚀 Deploy New AI Foundry Account")
     
     # Add a note about lazy loading
-    st.info("💡 Hub deployment UI loads when first accessed to improve performance.")
+    st.info("💡 Account deployment UI loads when first accessed to improve performance.")
     
     # Only import and initialize when user actually wants to use it
-    if st.button("🔧 Initialize Hub Deployment UI", type="primary"):
-        with st.spinner("Loading hub deployment interface..."):
+    if st.button("🔧 Initialize Account Deployment UI", type="primary"):
+        with st.spinner("Loading account deployment interface..."):
             try:
                 from app.components.ai_foundry_hub_deployment_ui import render_ai_foundry_hub_deployment_ui as render_hub_ui
-                st.success("✅ Hub deployment UI loaded!")
+                st.success("✅ Account deployment UI loaded!")
                 # Store in session state so it doesn't reload
-                st.session_state.hub_ui_loaded = True
+                st.session_state.account_ui_loaded = True
                 st.rerun()
             except Exception as e:
-                st.error(f"❌ Failed to load hub deployment UI: {e}")
+                st.error(f"❌ Failed to load account deployment UI: {e}")
                 st.code(str(e))
     
     # If already loaded, show the UI
-    if st.session_state.get('hub_ui_loaded', False):
+    if st.session_state.get('account_ui_loaded', False):
         try:
             from app.components.ai_foundry_hub_deployment_ui import render_ai_foundry_hub_deployment_ui as render_hub_ui
             render_hub_ui()
         except Exception as e:
-            st.error(f"❌ Error in hub deployment UI: {e}")
+            st.error(f"❌ Error in account deployment UI: {e}")
             # Reset the loaded state so user can try again
-            st.session_state.hub_ui_loaded = False
+            st.session_state.account_ui_loaded = False
             if st.button("🔄 Retry Loading"):
                 st.rerun()
 

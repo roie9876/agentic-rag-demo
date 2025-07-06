@@ -685,7 +685,8 @@ def run_streamlit_ui() -> None:
         st.info("Index management features may not work. Check the Public Health Check tab for details.")
         root_index_client = None
     
-    tab_health, tab_private_health, tab_create, tab_manage, tab_sharepoint, tab_test, tab_cfg, tab_ai, tab_studio2foundry = st.tabs([
+    tab_ai, tab_health, tab_private_health, tab_create, tab_manage, tab_sharepoint, tab_test, tab_cfg, tab_studio2foundry = st.tabs([
+        "🏭 AI Foundry Account",
         "🩺 Public Health Check",
         "🔒 Private Health Check", 
         "1️⃣ Create Index",
@@ -693,9 +694,16 @@ def run_streamlit_ui() -> None:
         "📁 SharePoint Index",
         "3️⃣ Test Retrieval",
         "⚙️ Function Config",
-        "🏭 AI Foundry Hub",
         "🏭 Studio2Foundry"
     ])
+
+    # ─────────────────── Tab 1 – AI Foundry Account ──────────────────────────
+    with tab_ai:
+        # Use the enhanced AI Foundry Account tab (no health check needed for fast loading)
+        from app.tabs.enhanced_ai_foundry_tab import render_enhanced_ai_foundry_tab
+        render_enhanced_ai_foundry_tab(
+            session_state=st.session_state
+        )
 
     # Public Health Check Tab (renamed from Health Check)
     with tab_health:
@@ -739,7 +747,7 @@ def run_streamlit_ui() -> None:
         health_ui = HealthCheckUI()
         health_ui.health_block()
 
-    # ─────────────────── Tab 1 – Create Index ────────────────────────────
+    # ─────────────────── Tab 3 – Create Index ────────────────────────────
     with tab_create:
         render_index_creation_tab(root_index_client, st.session_state, health_block)
 
@@ -2056,14 +2064,6 @@ def run_streamlit_ui() -> None:
                         st.text(stdout)
                 else:
                     st.error(message)
-
-    # ─────────────────── Tab 7 – AI Foundry Hub ──────────────────────────
-    with tab_ai:
-        # Use the enhanced AI Foundry Hub tab (no health check needed for fast loading)
-        from app.tabs.enhanced_ai_foundry_tab import render_enhanced_ai_foundry_tab
-        render_enhanced_ai_foundry_tab(
-            session_state=st.session_state
-        )
 
     # ── Studio2Foundry Tab ────────────────────────────────────────────────
     with tab_studio2foundry:

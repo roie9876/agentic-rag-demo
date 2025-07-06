@@ -36,7 +36,7 @@ class AIFoundryHubDeploymentUI:
     
     def render_deployment_tab(self) -> None:
         """Render the main deployment tab."""
-        st.header("🚀 Deploy New AI Foundry Hub")
+        st.header("🚀 Deploy New AI Foundry Account")
         
         # Template validation
         valid, msg = self.service.validate_template_path()
@@ -219,7 +219,7 @@ class AIFoundryHubDeploymentUI:
                         help="Tokens per minute"
                     )
             else:
-                st.success("✅ OpenAI deployment will be skipped - faster Hub setup!")
+                st.success("✅ OpenAI deployment will be skipped - faster Account setup!")
                 st.info("💡 You can deploy models later using the Azure portal or Azure CLI")
         
         # Network Configuration
@@ -480,7 +480,7 @@ class AIFoundryHubDeploymentUI:
                             create_new_subnets = st.checkbox(
                                 "Create new subnets instead of using existing ones",
                                 key="create_new_subnets_option",
-                                help="Check this to create new dedicated subnets for AI Foundry Hub"
+                                help="Check this to create new dedicated subnets for AI Foundry Account"
                             )
                             
                             if create_new_subnets:
@@ -916,7 +916,7 @@ class AIFoundryHubDeploymentUI:
                     create_count += 1
                 
                 # Always created
-                st.write("- ✅ AI Foundry Hub")
+                st.write("- ✅ AI Foundry Account")
                 
                 if not config.skip_openai_deployment:
                     st.write("- ✅ Azure OpenAI Service")
@@ -965,7 +965,7 @@ class AIFoundryHubDeploymentUI:
     
     def _render_deploy_tab(self) -> None:
         """Render the deploy tab."""
-        st.subheader("🚀 Deploy AI Foundry Hub")
+        st.subheader("🚀 Deploy AI Foundry Account")
         
         if 'deployment_config' not in st.session_state:
             st.warning("Please configure the deployment first in the Configuration tab.")
@@ -1008,14 +1008,14 @@ class AIFoundryHubDeploymentUI:
         # Deployment Name
         deployment_name = st.text_input(
             "Deployment Name",
-            value=f"ai-foundry-hub-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+            value=f"ai-foundry-account-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
             help="Name for this deployment (must be unique within the resource group)"
         )
         
         # Deployment Button
         st.markdown("### 🎬 Start Deployment")
         
-        if st.button("🚀 Deploy AI Foundry Hub", type="primary"):
+        if st.button("🚀 Deploy AI Foundry Account", type="primary"):
             if not target_rg:
                 st.error("Please select a resource group.")
                 return

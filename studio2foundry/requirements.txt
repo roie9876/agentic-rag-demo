@@ -1,10 +1,7 @@
-# Core Azure Functions packages
+# DO NOT include azure-functions-worker in this file
+# The Python Worker is managed by Azure Functions platform
+# Manually managing azure-functions-worker may cause unexpected issues
+
 azure-functions
+azure-ai-projects
 azure-identity
-
-# Essential packages for basic functionality
-requests
-python-dotenv
-
-# Note: Other packages (azure-ai-projects, azure-ai-agents, etc.) can be added later
-# after initial deployment succeeds. This minimal set avoids dependency conflicts.
