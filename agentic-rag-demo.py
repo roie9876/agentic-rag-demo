@@ -1954,10 +1954,11 @@ def run_streamlit_ui() -> None:
         st.session_state["func_choices"] = func_choices
         
         if func_sel_lbl != "-- manual input --":
-            app, rg = func_map[func_sel_lbl]
+            app, rg, hostname = func_map[func_sel_lbl]
             # Store in session state to prevent resets
             st.session_state["current_rg"] = rg
             st.session_state["current_app"] = app
+            st.session_state["current_hostname"] = hostname
         else:
             rg = st.text_input("Resource Group", 
                              value=st.session_state.get("current_rg", os.getenv("AZURE_RG", "")),

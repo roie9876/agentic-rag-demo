@@ -40,13 +40,13 @@ def get_azure_subscription() -> str:
         return ""
 
 
-def list_function_apps(subscription_id: str) -> Tuple[List[str], Dict[str, Tuple[str, str]]]:
+def list_function_apps(subscription_id: str) -> Tuple[List[str], Dict[str, Tuple[str, str, str]]]:
     """
     List all Function Apps in the subscription.
     
     Returns:
-        Tuple of (func_choices: List[str], func_map: Dict[str, Tuple[str, str]])
-        where func_map maps "app (rg)" -> (name, resource_group)
+        Tuple of (func_choices: List[str], func_map: Dict[str, Tuple[str, str, str]])
+        where func_map maps "app (rg)" -> (name, resource_group, default_hostname)
     """
     func_choices = []
     func_map = {}
@@ -61,7 +61,9 @@ def list_function_apps(subscription_id: str) -> Tuple[List[str], Dict[str, Tuple
             if site.kind and "functionapp" in site.kind:
                 label = f"{site.name}  ({site.resource_group})"
                 func_choices.append(label)
-                func_map[label] = (site.name, site.resource_group)
+                # Include the actual hostname/domain from Azure
+                hostname = getattr(site, 'default_host_name', f"{site.name}.azurewebsites.net")
+                func_map[label] = (site.name, site.resource_group, hostname)
     except Exception:
         pass  # Silently fail, UI will show warning
         

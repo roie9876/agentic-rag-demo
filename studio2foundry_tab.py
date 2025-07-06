@@ -597,7 +597,7 @@ def render_studio2foundry_tab():
         return
     
     # Get selected Function App details
-    app_name, resource_group = func_map[func_sel_lbl]
+    app_name, resource_group, hostname = func_map[func_sel_lbl]
     
     st.success(f"✅ Selected: **{app_name}** in resource group **{resource_group}** (Selection persisted)")
     
@@ -635,7 +635,7 @@ def render_studio2foundry_tab():
     st.markdown("**Automated setup for your Function App to access Azure AI Services**")
     
     if func_sel_lbl != "-- Select Function App --":
-        app_name, resource_group = func_map[func_sel_lbl]
+        app_name, resource_group, hostname = func_map[func_sel_lbl]
         
         # Resource Group Selection for Role Assignment
         st.markdown("### 🎯 Select Resource Group for Role Assignment")
@@ -788,7 +788,7 @@ def render_studio2foundry_tab():
         """)
         
         if func_sel_lbl != "-- Select Function App --":
-            app_name, resource_group = func_map[func_sel_lbl]
+            app_name, resource_group, hostname = func_map[func_sel_lbl]
             
             col1, col2 = st.columns([2, 1])
             
@@ -888,10 +888,10 @@ def render_studio2foundry_tab():
     st.subheader("🧪 Test Your Function")
     
     if func_sel_lbl != "-- Select Function App --":
-        app_name, resource_group = func_map[func_sel_lbl]
+        app_name, resource_group, hostname = func_map[func_sel_lbl]
         
-        # Generate test URL
-        base_url = f"https://{app_name}.azurewebsites.net/api/agent_httptrigger"
+        # Generate test URL using the correct hostname
+        base_url = f"https://{hostname}/api/agent_httptrigger"
         
         st.markdown("### ✅ Test Your Deployed Function")
         st.success("Your function is working! Use this URL format for testing:")
