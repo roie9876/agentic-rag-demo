@@ -116,8 +116,7 @@ def load_function_settings(
             "AZURE_OPENAI_DEPLOYMENT": "OPENAI_DEPLOYMENT", 
             "AZURE_OPENAI_DEPLOYMENT_41": "OPENAI_DEPLOYMENT",  # Support _41 suffix (preferred)
             "AZURE_OPENAI_CHAT_DEPLOYMENT": "OPENAI_DEPLOYMENT",  # Fallback for compatibility
-            "AZURE_OPENAI_API_VERSION": "API_VERSION",
-            "API_VERSION": "API_VERSION",  # Direct mapping
+            # API_VERSION removed - should be empty when loading settings
             "MAX_OUTPUT_SIZE": "MAX_OUTPUT_SIZE",
             "RERANKER_THRESHOLD": "RERANKER_THRESHOLD", 
             "TOP_K": "TOP_K",
@@ -208,6 +207,13 @@ def load_function_settings(
         
         print(f"DEBUG: Created DataFrame with {len(rows)} rows")
         print(f"DEBUG: Keys in DataFrame: {[row['key'] for row in rows[:10]]}")  # Show first 10
+        
+        # Debug: Show specific key values we care about
+        for key in ['SERVICE_NAME', 'OPENAI_ENDPOINT', 'OPENAI_DEPLOYMENT', 'API_VERSION']:
+            if key in param_vals:
+                original_value = param_vals[key]
+                masked_value = mask_sensitive_value(str(original_value))
+                print(f"DEBUG: {key}: '{original_value}' -> masked: '{masked_value}'")
         
         return True, df, raw, ""
     except Exception as err:

@@ -1833,7 +1833,7 @@ def run_streamlit_ui() -> None:
         # Load environment variables (updated for managed identity)
         # Map local .env variables to Function App settings
         local_to_function_mapping = {
-            "INDEX_NAME": "INDEX_NAME",
+            # INDEX_NAME will be set from UI selection below - not from .env
             "AGENT_NAME": "AGENT_NAME", 
             "AZURE_SEARCH_ENDPOINT": "SERVICE_NAME",  # Extract service name from endpoint
             "AZURE_OPENAI_ENDPOINT": "OPENAI_ENDPOINT",
@@ -1841,7 +1841,7 @@ def run_streamlit_ui() -> None:
             "AZURE_OPENAI_DEPLOYMENT": "OPENAI_DEPLOYMENT", 
             "AZURE_OPENAI_DEPLOYMENT_41": "OPENAI_DEPLOYMENT",  # Support _41 suffix (preferred)
             "AZURE_OPENAI_CHATGPT_DEPLOYMENT": "OPENAI_DEPLOYMENT",  # Alternative deployment name
-            # API_VERSION removed as requested - Azure Function will use default
+            # API_VERSION removed - should be empty when loading settings
             "MAX_OUTPUT_SIZE": "MAX_OUTPUT_SIZE",
             "RERANKER_THRESHOLD": "RERANKER_THRESHOLD", 
             "TOP_K": "TOP_K",
@@ -1873,14 +1873,15 @@ def run_streamlit_ui() -> None:
                         env_vars[function_key] = local_value
         
         # Set defaults for missing critical values
-        if not env_vars.get("INDEX_NAME") and st.session_state.get("selected_index"):
-            env_vars["INDEX_NAME"] = st.session_state.selected_index
+        # NOTE: INDEX_NAME should come from UI selection, not from .env
+        # if not env_vars.get("INDEX_NAME") and st.session_state.get("selected_index"):
+        #     env_vars["INDEX_NAME"] = st.session_state.selected_index
         
-        # Set default AGENT_NAME based on INDEX_NAME
-        if env_vars.get("INDEX_NAME") and not env_vars.get("AGENT_NAME"):
-            env_vars["AGENT_NAME"] = f"{env_vars['INDEX_NAME']}-agent"
+        # Set default AGENT_NAME based on INDEX_NAME (will be set from UI below)
+        # if env_vars.get("INDEX_NAME") and not env_vars.get("AGENT_NAME"):
+        #     env_vars["AGENT_NAME"] = f"{env_vars['INDEX_NAME']}-agent"
             
-        # API_VERSION removed as requested - not needed in Function App settings
+        # API_VERSION now included - Function App needs this for OpenAI API calls
 
         st.markdown("Configure environment variables for Azure Function deployment.")
         
@@ -1934,19 +1935,39 @@ def run_streamlit_ui() -> None:
         if not func_choices and sub_id:
             st.warning("⚠️ Could not list Function Apps automatically; fill manually.")
 
+        # Initialize session state for function app selection
+        if "selected_function_app" not in st.session_state:
+            st.session_state.selected_function_app = "-- manual input --"
+
         func_sel_lbl = st.selectbox(
             "Choose Function App",
             ["-- manual input --"] + func_choices,
-            index=0
+            index=0 if st.session_state.selected_function_app == "-- manual input --" else 
+                  (func_choices.index(st.session_state.selected_function_app) + 1 
+                   if st.session_state.selected_function_app in func_choices else 0),
+            key="function_app_selector"
         )
+        
+        # Update session state when selection changes
+        st.session_state.selected_function_app = func_sel_lbl
         st.session_state["func_map"] = func_map
         st.session_state["func_choices"] = func_choices
         
         if func_sel_lbl != "-- manual input --":
             app, rg = func_map[func_sel_lbl]
+            # Store in session state to prevent resets
+            st.session_state["current_rg"] = rg
+            st.session_state["current_app"] = app
         else:
-            rg = st.text_input("Resource Group", os.getenv("AZURE_RG", ""))
-            app = st.text_input("Function App name", os.getenv("AZURE_FUNCTION_APP", ""))
+            rg = st.text_input("Resource Group", 
+                             value=st.session_state.get("current_rg", os.getenv("AZURE_RG", "")),
+                             key="manual_rg_input")
+            app = st.text_input("Function App name", 
+                              value=st.session_state.get("current_app", os.getenv("AZURE_FUNCTION_APP", "")),
+                              key="manual_app_input")
+            # Update session state
+            st.session_state["current_rg"] = rg
+            st.session_state["current_app"] = app
         
         # Normalise variable names (func_name / func_rg) and keep old aliases
         func_name = app
