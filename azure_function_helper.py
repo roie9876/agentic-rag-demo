@@ -286,11 +286,58 @@ def push_function_settings(
 
 
 def zip_function_folder(func_dir: Path, zip_path: Path) -> None:
-    """Zip the function folder for deployment."""
+    """Zip the function folder for deployment, respecting .funcignore."""
+    
+    # Read .funcignore patterns
+    funcignore_path = func_dir / ".funcignore"
+    ignore_patterns = []
+    if funcignore_path.exists():
+        with open(funcignore_path, 'r') as f:
+            ignore_patterns = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+    
+    print(f"DEBUG: .funcignore patterns: {ignore_patterns}")
+    
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for item in func_dir.rglob("*"):
             if item.is_file():
-                zf.write(item, item.relative_to(func_dir))
+                relative_path = item.relative_to(func_dir)
+                relative_str = str(relative_path).replace('\\', '/')  # Normalize path separators
+                
+                # Check if file should be ignored
+                should_ignore = False
+                for pattern in ignore_patterns:
+                    if pattern.endswith('/'):
+                        # Directory pattern
+                        if relative_str.startswith(pattern) or f"/{pattern}" in f"/{relative_str}":
+                            should_ignore = True
+                            break
+                    else:
+                        # File pattern
+                        if relative_str == pattern or relative_str.endswith(pattern):
+                            should_ignore = True
+                            break
+                
+                if not should_ignore:
+                    zf.write(item, relative_path)
+                    print(f"DEBUG: Added to ZIP: {relative_path}")
+                else:
+                    print(f"DEBUG: Ignored: {relative_path}")
+    
+    # Debug: List ZIP contents to verify structure
+    print(f"DEBUG: ZIP file created at: {zip_path}")
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zip_contents = zf.namelist()
+        print(f"DEBUG: ZIP contains {len(zip_contents)} files:")
+        for name in sorted(zip_contents):
+            print(f"DEBUG:   {name}")
+        
+        # Check specifically for host.json at root
+        if "host.json" in zip_contents:
+            print("DEBUG: ✅ host.json found at root level")
+        else:
+            print("DEBUG: ❌ host.json NOT found at root level")
+            root_files = [name for name in zip_contents if "/" not in name]
+            print(f"DEBUG: Root level files: {root_files}")
 
 
 def deploy_function_code(
