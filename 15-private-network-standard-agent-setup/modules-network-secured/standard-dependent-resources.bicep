@@ -27,6 +27,12 @@ param cosmosDBResourceId string
 @description('Skip Cosmos DB deployment entirely. When true, no Cosmos DB will be created.')
 param skipCosmosDBDeployment bool = false
 
+@description('Skip AI Search deployment entirely. When true, no AI Search will be created.')
+param skipAiSearchDeployment bool = false
+
+@description('Skip Storage Account deployment entirely. When true, no Storage Account will be created.')
+param skipStorageAccountDeployment bool = false
+
 // param aiServiceExists bool
 param aiSearchExists bool
 param azureStorageExists bool
@@ -76,7 +82,7 @@ resource existingSearchService 'Microsoft.Search/searchServices@2024-06-01-previ
 
 // AI Search creation
 
-resource aiSearch 'Microsoft.Search/searchServices@2024-06-01-preview' = if(!aiSearchExists) {
+resource aiSearch 'Microsoft.Search/searchServices@2024-06-01-preview' = if(!aiSearchExists && !skipAiSearchDeployment) {
   name: aiSearchName
   location: location
   identity: {
@@ -116,7 +122,7 @@ param sku object = contains(noZRSRegions, location) ? { name: 'Standard_GRS' } :
 
 // Storage creation
 
-resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = if(!azureStorageExists) {
+resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = if(!azureStorageExists && !skipStorageAccountDeployment) {
   name: azureStorageName
   location: location
   kind: 'StorageV2'
@@ -134,15 +140,15 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = if(!azureStora
   }
 }
 
-output aiSearchName string = aiSearchExists ? existingSearchService.name : aiSearch.name
-output aiSearchID string = aiSearchExists ? existingSearchService.id : aiSearch.id
-output aiSearchServiceResourceGroupName string = aiSearchExists ? acsParts[4] : resourceGroup().name
-output aiSearchServiceSubscriptionId string = aiSearchExists ? acsParts[2] : subscription().subscriptionId
+output aiSearchName string = skipAiSearchDeployment ? '' : (aiSearchExists ? existingSearchService.name : aiSearch.name)
+output aiSearchID string = skipAiSearchDeployment ? '' : (aiSearchExists ? existingSearchService.id : aiSearch.id)
+output aiSearchServiceResourceGroupName string = skipAiSearchDeployment ? '' : (aiSearchExists ? acsParts[4] : resourceGroup().name)
+output aiSearchServiceSubscriptionId string = skipAiSearchDeployment ? '' : (aiSearchExists ? acsParts[2] : subscription().subscriptionId)
 
-output azureStorageName string = azureStorageExists ? existingAzureStorageAccount.name :  storage.name
-output azureStorageId string =  azureStorageExists ? existingAzureStorageAccount.id :  storage.id
-output azureStorageResourceGroupName string = azureStorageExists ? azureStorageParts[4] : resourceGroup().name
-output azureStorageSubscriptionId string = azureStorageExists ? azureStorageParts[2] : subscription().subscriptionId
+output azureStorageName string = skipStorageAccountDeployment ? '' : (azureStorageExists ? existingAzureStorageAccount.name :  storage.name)
+output azureStorageId string =  skipStorageAccountDeployment ? '' : (azureStorageExists ? existingAzureStorageAccount.id :  storage.id)
+output azureStorageResourceGroupName string = skipStorageAccountDeployment ? '' : (azureStorageExists ? azureStorageParts[4] : resourceGroup().name)
+output azureStorageSubscriptionId string = skipStorageAccountDeployment ? '' : (azureStorageExists ? azureStorageParts[2] : subscription().subscriptionId)
 
 output cosmosDBName string = skipCosmosDBDeployment ? '' : (cosmosDBExists ? existingCosmosDB.name : cosmosDB.name)
 output cosmosDBId string = skipCosmosDBDeployment ? '' : (cosmosDBExists ? existingCosmosDB.id : cosmosDB.id)

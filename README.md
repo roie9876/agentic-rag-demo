@@ -5,63 +5,63 @@ A comprehensive demonstration of Agentic Retrieval-Augmented Generation on Azure
 ## ✨ Key Features
 
 - **🤖 Agentic RAG**: Advanced retrieval-augmented generation with Azure AI Search knowledge agents
+- **🏗️ AI Foundry Account Deployment**: Automated deployment of Azure AI Foundry Accounts with network security and private endpoints
 - **📄 Multi-format Document Processing**: Support for PDF, DOCX, PPTX, XLSX, CSV, TXT, MD, JSON with unified processing pipeline
 - **🖼️ Multimodal Processing**: Advanced image and figure extraction from documents using Azure Document Intelligence
 - **📊 SharePoint Integration**: Automated indexing and synchronization with SharePoint Online
 - **🔒 Secure Authentication**: Multiple authentication methods including client secrets, certificates, and Azure Key Vault
+- **🌐 Private Network Support**: Complete private network deployment with VNet integration and private endpoints
 - **⚡ Real-time Processing**: Streamlit web interface with live document upload and processing
 - **📈 Advanced Analytics**: Comprehensive reporting and monitoring of document processing
 
+## � What's New
+
+### AI Foundry Account Deployment
+- **One-Click Deployment**: Deploy complete AI Foundry Accounts with bicep templates
+- **Network Security**: Private VNet with subnets and private endpoints
+- **Resource Flexibility**: Skip or use existing Azure resources (AI Search, Storage, Cosmos DB)
+- **DNS Integration**: Automatic private DNS zone creation and configuration
+- **Real-time Monitoring**: Live deployment status tracking and error reporting
+
+### Enhanced Architecture  
+- **Modular Design**: Clean separation of concerns with organized module structure
+- **Documentation Hub**: All implementation docs moved to `/docs/` folder for better organization
+- **Performance Optimizations**: Ultra-fast UI with optimized caching and state management
+
 ## 📖 Documentation
 
-- **[Complete Documentation](docs/)** - Comprehensive project documentation including architecture, features, and optimization history
-- **[Project Structure Guide](docs/PROJECT_STRUCTURE.md)** - Detailed codebase overview and development guidelines  
-- **[Performance Optimizations](docs/ULTRA_FAST_UI_PERFORMANCE_FINAL.md)** - Ultra-fast UI implementation details
+Comprehensive documentation is now organized in the `/docs/` folder:
 
-## Environment Setup
+- **[📚 Complete Documentation Hub](docs/)** - All project documentation and guides
+- **[🏗️ Project Structure Guide](docs/PROJECT_STRUCTURE.md)** - Detailed codebase overview
+- **[⚡ Performance Optimizations](docs/ULTRA_FAST_UI_PERFORMANCE_FINAL.md)** - Ultra-fast UI implementation
+- **[🌐 AI Foundry Implementation](docs/AI_FOUNDRY_FINAL_IMPLEMENTATION_SUMMARY.md)** - AI Foundry Account deployment guide
+- **[🔧 Modular Development](docs/MODULAR_DEVELOPMENT_WORKFLOW.md)** - Development guidelines and architecture
 
-The application uses environment variables for configuration. Follow these steps to set up your environment:
+## 🛠️ Quick Start
 
-1. Copy the provided `.env.example` file to create your own `.env` file:
-   ```bash
-   cp .env.example .env
-   ```
+### Prerequisites
+- Python 3.9+
+- Azure CLI (`az login` required)
+- Azure subscription with appropriate permissions
 
-2. Edit the `.env` file with your own Azure service credentials and configuration.
+### Installation
 
-### Required Environment Variables
+```bash
+git clone https://github.com/your-org/agentic-rag-demo.git
+cd agentic-rag-demo
+python -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env              # Edit with your Azure service credentials
+streamlit run agentic-rag-demo.py
+```
 
-At minimum, these variables are required:
+### Authentication
 
-- **Azure OpenAI**:
-  - `AZURE_OPENAI_ENDPOINT` - Endpoint URL of your Azure OpenAI service
-  - `AZURE_OPENAI_KEY` - API key for your Azure OpenAI service
-  - `AZURE_OPENAI_API_VERSION` - API version (e.g., "2025-01-01-preview")
-  - `AZURE_OPENAI_DEPLOYMENT` - Name of your deployment model (e.g., "gpt-4.1")
-  - `AZURE_OPENAI_CHATGPT_DEPLOYMENT` - **Must match your actual deployment name** (e.g., "gpt-4.1")
-  - `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` - Name of your embedding model deployment (e.g., "text-embedding-3-large")
-
-- **Azure AI Search**:
-  - `AZURE_SEARCH_ENDPOINT` - Endpoint URL of your Azure AI Search service
-  - `AZURE_SEARCH_KEY` - API key for your Azure AI Search service (optional if using managed identity)
-
-- **Azure Document Intelligence**:
-  - `DOCUMENT_INTEL_ENDPOINT` - Endpoint URL of your Azure Document Intelligence service
-  - `DOCUMENT_INTEL_KEY` - API key for your Azure Document Intelligence service
-
-### Authentication Options
-
-#### Azure AI Search Authentication
-
-You can authenticate with Azure AI Search using one of two methods:
-
-**Option 1: API Key Authentication**
-- Set `AZURE_SEARCH_KEY` environment variable with your Azure AI Search admin key
-
-**Option 2: Managed Identity (RBAC) Authentication**
-- Omit the `AZURE_SEARCH_KEY` environment variable 
+The application uses **Managed Identity (RBAC) Authentication** for Azure AI Search:
 - Ensure your application has the "Search Index Data Reader" and "Search Service Contributor" roles assigned on the Azure AI Search service
-- This is the recommended approach for production deployments as it eliminates the need to manage API keys
+- This approach eliminates the need to manage API keys and is the recommended method for production deployments
 
 ### SharePoint Integration
 

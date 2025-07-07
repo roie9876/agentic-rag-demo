@@ -70,13 +70,18 @@ class AIFoundryHubDeploymentConfig:
     project_description: str = "A project for the AI Foundry account with network secured deployed Agent"
     display_name: str = "network secured agent project"
     
-    # Model settings (OpenAI deployment)
-    model_name: str = "gpt-4o"
+    # Model settings (OpenAI deployment) - Fixed configuration
+    model_name: str = "gpt-4.1"
     model_format: str = "OpenAI"
-    model_version: str = "2024-11-20"
+    model_version: str = "2025-04-14"
     model_sku_name: str = "GlobalStandard"
     model_capacity: int = 30
-    skip_openai_deployment: bool = True  # Default to skip OpenAI deployment
+    skip_openai_deployment: bool = False  # Default to deploy OpenAI model
+    
+    # DNS Zone Configuration
+    dns_zone_subscription_id: str = ""  # Default to current subscription
+    dns_zone_resource_group_name: str = ""  # Default to current resource group
+    create_dns_zones_if_not_exist: bool = False  # Default to use existing DNS zones
     
     # Network configuration
     network_config: NetworkConfig = None
@@ -118,6 +123,77 @@ class AIFoundryHubDeploymentService:
             except Exception as e:
                 logger.error(f"Failed to initialize credentials: {e}")
     
+    def get_available_subscriptions(self) -> List[Dict[str, str]]:
+        """Get list of available Azure subscriptions."""
+        try:
+            from azure.identity import DefaultAzureCredential
+            from azure.mgmt.subscription import SubscriptionClient
+            
+            credential = DefaultAzureCredential()
+            subscription_client = SubscriptionClient(credential)
+            
+            subscriptions = []
+            for sub in subscription_client.subscriptions.list():
+                subscriptions.append({
+                    "subscription_id": sub.subscription_id,
+                    "display_name": sub.display_name,
+                    "state": sub.state
+                })
+            
+            return subscriptions
+        except Exception as e:
+            logger.error(f"Failed to get subscriptions: {e}")
+            return []
+    
+    def get_resource_groups_for_subscription(self, subscription_id: str) -> List[str]:
+        """Get list of resource groups for a specific subscription."""
+        try:
+            from azure.identity import DefaultAzureCredential
+            from azure.mgmt.resource import ResourceManagementClient
+            
+            credential = DefaultAzureCredential()
+            resource_client = ResourceManagementClient(credential, subscription_id)
+            
+            resource_groups = []
+            for rg in resource_client.resource_groups.list():
+                resource_groups.append(rg.name)
+            
+            return resource_groups
+        except Exception as e:
+            logger.error(f"Failed to get resource groups for subscription {subscription_id}: {e}")
+            return []
+    
+    def validate_dns_zones_exist(self, subscription_id: str, resource_group_name: str) -> Dict[str, bool]:
+        """Validate that required private DNS zones exist in the specified location."""
+        try:
+            from azure.identity import DefaultAzureCredential
+            from azure.mgmt.privatedns import PrivateDnsManagementClient
+            
+            credential = DefaultAzureCredential()
+            dns_client = PrivateDnsManagementClient(credential, subscription_id)
+            
+            required_zones = [
+                "privatelink.services.ai.azure.com",
+                "privatelink.openai.azure.com",
+                "privatelink.cognitiveservices.azure.com",
+                "privatelink.search.windows.net",
+                "privatelink.blob.core.windows.net",
+                "privatelink.documents.azure.com"
+            ]
+            
+            zone_status = {}
+            for zone_name in required_zones:
+                try:
+                    dns_client.private_zones.get(resource_group_name, zone_name)
+                    zone_status[zone_name] = True
+                except Exception:
+                    zone_status[zone_name] = False
+            
+            return zone_status
+        except Exception as e:
+            logger.error(f"Failed to validate DNS zones: {e}")
+            return {}
+
     def validate_template_path(self) -> Tuple[bool, str]:
         """Validate that the bicep template exists."""
         try:
@@ -222,6 +298,11 @@ class AIFoundryHubDeploymentService:
             "skipOpenAIDeployment": {"value": config.skip_openai_deployment}
         }
         
+        # DNS Zone Configuration
+        params["dnsZoneSubscriptionId"] = {"value": config.dns_zone_subscription_id or subscription_id}
+        params["dnsZoneResourceGroupName"] = {"value": config.dns_zone_resource_group_name or resource_group_name}
+        params["createDnsZonesIfNotExist"] = {"value": config.create_dns_zones_if_not_exist}
+        
         # Network configuration
         if config.network_config.create_new_vnet:
             # For new VNet, pass the network configuration
@@ -306,16 +387,28 @@ class AIFoundryHubDeploymentService:
             params["skipCosmosDBDeployment"] = {"value": False}
         
         # AI Search
-        if not config.ai_search.create_new and config.ai_search.existing_resource_id:
+        if config.ai_search.skip_deployment:
+            # Pass the skip parameter to bicep template
+            params["aiSearchResourceId"] = {"value": ""}
+            params["skipAiSearchDeployment"] = {"value": True}
+        elif not config.ai_search.create_new and config.ai_search.existing_resource_id:
             params["aiSearchResourceId"] = {"value": config.ai_search.existing_resource_id}
+            params["skipAiSearchDeployment"] = {"value": False}
         else:
             params["aiSearchResourceId"] = {"value": ""}
+            params["skipAiSearchDeployment"] = {"value": False}
         
         # Storage Account
-        if not config.storage_account.create_new and config.storage_account.existing_resource_id:
+        if config.storage_account.skip_deployment:
+            # Pass the skip parameter to bicep template
+            params["azureStorageAccountResourceId"] = {"value": ""}
+            params["skipStorageAccountDeployment"] = {"value": True}
+        elif not config.storage_account.create_new and config.storage_account.existing_resource_id:
             params["azureStorageAccountResourceId"] = {"value": config.storage_account.existing_resource_id}
+            params["skipStorageAccountDeployment"] = {"value": False}
         else:
             params["azureStorageAccountResourceId"] = {"value": ""}
+            params["skipStorageAccountDeployment"] = {"value": False}
         
         # Existing private endpoint names (to avoid creating duplicates)
         # These parameters tell the bicep template to use existing private endpoints instead of creating new ones
@@ -326,7 +419,7 @@ class AIFoundryHubDeploymentService:
         cosmos_pe_name = ""
         
         # For existing AI Search service, try to find existing private endpoint
-        if not config.ai_search.create_new and config.ai_search.existing_resource_id:
+        if not config.ai_search.skip_deployment and not config.ai_search.create_new and config.ai_search.existing_resource_id:
             try:
                 ai_search_endpoints = self.get_existing_private_endpoints_for_resource(config.ai_search.existing_resource_id)
                 if ai_search_endpoints:
@@ -336,7 +429,7 @@ class AIFoundryHubDeploymentService:
                 logger.warning(f"Could not auto-detect AI Search private endpoint: {e}")
         
         # For existing Storage Account, try to find existing private endpoint
-        if not config.storage_account.create_new and config.storage_account.existing_resource_id:
+        if not config.storage_account.skip_deployment and not config.storage_account.create_new and config.storage_account.existing_resource_id:
             try:
                 storage_endpoints = self.get_existing_private_endpoints_for_resource(config.storage_account.existing_resource_id)
                 if storage_endpoints:
@@ -346,7 +439,7 @@ class AIFoundryHubDeploymentService:
                 logger.warning(f"Could not auto-detect Storage Account private endpoint: {e}")
         
         # For existing Cosmos DB, try to find existing private endpoint
-        if not config.cosmos_db.create_new and config.cosmos_db.existing_resource_id:
+        if not config.cosmos_db.skip_deployment and not config.cosmos_db.create_new and config.cosmos_db.existing_resource_id:
             try:
                 cosmos_endpoints = self.get_existing_private_endpoints_for_resource(config.cosmos_db.existing_resource_id)
                 if cosmos_endpoints:
@@ -1069,11 +1162,11 @@ class AIFoundryHubDeploymentService:
             if not config.cosmos_db.existing_resource_id.strip():
                 issues.append("Existing Cosmos DB resource ID is required when not creating new Cosmos DB")
         
-        if not config.ai_search.create_new:
+        if not config.ai_search.skip_deployment and not config.ai_search.create_new:
             if not config.ai_search.existing_resource_id.strip():
                 issues.append("Existing AI Search resource ID is required when not creating new AI Search")
         
-        if not config.storage_account.create_new:
+        if not config.storage_account.skip_deployment and not config.storage_account.create_new:
             if not config.storage_account.existing_resource_id.strip():
                 issues.append("Existing Storage Account resource ID is required when not creating new Storage Account")
         
@@ -1463,74 +1556,47 @@ class AIFoundryHubDeploymentService:
                             
                             # Get detailed error message
                             status_msg = props.get("statusMessage", {})
+                            error_code = "Unknown"
+                            error_message = "No message"
+                            
                             if status_msg and isinstance(status_msg, dict):
-                                error_info = status_msg.get("error", {})
-                                if error_info:
-                                    error_code = error_info.get("code", "Unknown")
-                                    error_msg = error_info.get("message", "No message")
-                                    error_details.append(f"    🔴 Error Code: {error_code}")
-                                    error_details.append(f"    📝 Error Message: {error_msg}")
-                                    
-                                    # Handle specific error patterns
-                                    if "VnetIsNotEmpty" in error_code:
-                                        error_details.append(f"    💡 Suggestion: The VNet contains resources. Use an empty VNet or create a new one.")
-                                    elif "SubnetIsNotEmpty" in error_code:
-                                        error_details.append(f"    💡 Suggestion: The subnet contains resources. Use an empty subnet or create a new one.")
-                                    elif "InvalidAddressSpace" in error_code:
-                                        error_details.append(f"    💡 Suggestion: Check VNet and subnet address spaces for conflicts.")
-                                    elif "QuotaExceeded" in error_code:
-                                        error_details.append(f"    💡 Suggestion: Increase subscription quota for this resource type.")
-                                    elif "LocationNotAvailable" in error_code:
-                                        error_details.append(f"    💡 Suggestion: Try a different Azure region that supports this resource.")
-                                    elif "NameAlreadyExists" in error_code:
-                                        error_details.append(f"    💡 Suggestion: Use a different name for this resource.")
-                                    elif "AuthenticationFailed" in error_code:
-                                        error_details.append(f"    💡 Suggestion: Check RBAC permissions for this resource group and subscription.")
-                                    elif "NetworkSecurityGroupCannotBeDeleted" in error_code:
-                                        error_details.append(f"    💡 Suggestion: Remove NSG associations before attempting to delete.")
-                                    
-                                    # Check for additional nested details
-                                    nested_details = error_info.get("details", [])
-                                    if nested_details:
-                                        error_details.append(f"    📋 Additional Details:")
-                                        for detail in nested_details:
-                                            if isinstance(detail, dict):
-                                                detail_code = detail.get("code", "Unknown")
-                                                detail_msg = detail.get("message", "No message")
-                                                error_details.append(f"      - {detail_code}: {detail_msg}")
-                                    error_details.append(f"    🔴 Error Code: {error_code}")
-                                    error_details.append(f"    📝 Error Message: {error_msg}")
-                                    
-                                    # Handle specific error patterns
-                                    if "VnetIsNotEmpty" in error_code:
-                                        error_details.append(f"    💡 Suggestion: The VNet contains resources. Use an empty VNet or create a new one.")
-                                    elif "SubnetIsNotEmpty" in error_code:
-                                        error_details.append(f"    💡 Suggestion: The subnet contains resources. Use an empty subnet or create a new one.")
-                                    elif "InvalidAddressSpace" in error_code:
-                                        error_details.append(f"    💡 Suggestion: Check VNet and subnet address spaces for conflicts.")
-                                    elif "QuotaExceeded" in error_code:
-                                        error_details.append(f"    💡 Suggestion: Increase subscription quota for this resource type.")
-                                    elif "LocationNotAvailable" in error_code:
-                                        error_details.append(f"    💡 Suggestion: Try a different Azure region that supports this resource.")
-                                    elif "NameAlreadyExists" in error_code:
-                                        error_details.append(f"    💡 Suggestion: Use a different name for this resource.")
-                                    elif "AuthenticationFailed" in error_code:
-                                        error_details.append(f"    💡 Suggestion: Check RBAC permissions for this resource group and subscription.")
-                                    elif "NetworkSecurityGroupCannotBeDeleted" in error_code:
-                                        error_details.append(f"    💡 Suggestion: Remove NSG associations before attempting to delete.")
-                                    
-                                    # Check for additional nested details
-                                    nested_details = error_info.get("details", [])
-                                    if nested_details:
-                                        error_details.append(f"    📋 Additional Details:")
-                                        for detail in nested_details:
-                                            if isinstance(detail, dict):
-                                                detail_code = detail.get("code", "Unknown")
-                                                detail_msg = detail.get("message", "No message")
-                                                error_details.append(f"      - {detail_code}: {detail_msg}")
+                                error_code = status_msg.get("error", {}).get("code", "Unknown")
+                                error_message = status_msg.get("error", {}).get("message", "No message")
                             
-                            print(f"🔍 DEBUG: Processed nested failed operation {i}: {resource_name}")
+                            error_details.append(f"    🔴 Error Code: {error_code}")
+                            error_details.append(f"    📝 Error Message: {error_message}")
                             
+                            # Handle specific error patterns
+                            if "VnetIsNotEmpty" in error_code:
+                                error_details.append(f"    💡 Suggestion: The VNet contains resources. Use an empty VNet or create a new one.")
+                            elif "SubnetIsNotEmpty" in error_code:
+                                error_details.append(f"    💡 Suggestion: The subnet contains resources. Use an empty subnet or create a new one.")
+                            elif "InvalidAddressSpace" in error_code:
+                                error_details.append(f"    💡 Suggestion: Check VNet and subnet address spaces for conflicts.")
+                            elif "QuotaExceeded" in error_code:
+                                error_details.append(f"    💡 Suggestion: Increase subscription quota for this resource type.")
+                            elif "LocationNotAvailable" in error_code:
+                                error_details.append(f"    💡 Suggestion: Try a different Azure region that supports this resource.")
+                            elif "NameAlreadyExists" in error_code:
+                                error_details.append(f"    💡 Suggestion: Use a different name for this resource.")
+                            elif "AuthenticationFailed" in error_code:
+                                error_details.append(f"    💡 Suggestion: Check RBAC permissions for this resource group and subscription.")
+                            elif "NetworkSecurityGroupCannotBeDeleted" in error_code:
+                                error_details.append(f"    💡 Suggestion: Remove NSG associations before attempting to delete.")
+                            
+                            # Check for additional nested details
+                            nested_details = error_info.get("details", [])
+                            if nested_details:
+                                error_details.append(f"    📋 Additional Details:")
+                                for detail in nested_details:
+                                    if isinstance(detail, dict):
+                                        detail_code = detail.get("code", "Unknown")
+                                        detail_msg = detail.get("message", "No message")
+                                        error_details.append(f"      - {detail_code}: {detail_msg}")
+                                    if isinstance(detail, dict):
+                                        detail_code = detail.get("code", "Unknown")
+                                        detail_msg = detail.get("message", "No message")
+                                        error_details.append(f"      - {detail_code}: {detail_msg}")
                         except Exception as e:
                             print(f"⚠️ DEBUG: Error processing nested failed operation {i}: {e}")
                             error_details.append(f"    ⚠️ Error processing failed operation {i}: {str(e)}")

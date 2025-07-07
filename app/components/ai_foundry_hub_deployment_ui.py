@@ -178,49 +178,66 @@ class AIFoundryHubDeploymentUI:
             config.skip_openai_deployment = st.checkbox(
                 "⚠️ Skip OpenAI Model Deployment", 
                 value=config.skip_openai_deployment,
-                help="Check this to skip Azure OpenAI deployment (faster deployment, no models). Uncheck to deploy OpenAI models."
+                help="Check this to skip Azure OpenAI deployment (faster deployment, no models). By default, OpenAI models will be deployed."
             )
             
             if not config.skip_openai_deployment:
-                st.info("🔄 OpenAI models will be deployed (adds ~5-10 minutes to deployment)")
+                st.info("� OpenAI models will be deployed by default (adds ~5-10 minutes to deployment)")
                 
+                # Fixed model configuration - display only, no user selection
+                st.markdown("**Fixed Model Configuration:**")
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    config.model_name = st.selectbox(
+                    # Set fixed values and display them as read-only
+                    config.model_name = "gpt-4.1"
+                    st.text_input(
                         "Model Name",
-                        ["gpt-4o", "gpt-4", "gpt-35-turbo"],
-                        index=0 if config.model_name == "gpt-4o" else 1
+                        value="gpt-4.1",
+                        disabled=True,
+                        help="Fixed model configuration for this deployment"
                     )
                     
-                    config.model_format = st.selectbox(
+                    config.model_format = "OpenAI"
+                    st.text_input(
                         "Model Format",
-                        ["OpenAI"],
-                        index=0
+                        value="OpenAI",
+                        disabled=True,
+                        help="Fixed model format"
                     )
                     
-                    config.model_version = st.text_input(
+                    config.model_version = "2025-04-14"
+                    st.text_input(
                         "Model Version",
-                        value=config.model_version
+                        value="2025-04-14",
+                        disabled=True,
+                        help="Fixed model version"
                     )
                 
                 with col2:
-                    config.model_sku_name = st.selectbox(
+                    config.model_sku_name = "GlobalStandard"
+                    st.text_input(
                         "Model SKU",
-                        ["GlobalStandard", "Standard"],
-                        index=0 if config.model_sku_name == "GlobalStandard" else 1
+                        value="GlobalStandard",
+                        disabled=True,
+                        help="Fixed SKU configuration"
                     )
                     
-                    config.model_capacity = st.number_input(
+                    config.model_capacity = 30
+                    st.number_input(
                         "Model Capacity (TPM)",
-                        min_value=1,
-                        max_value=1000,
-                        value=config.model_capacity,
-                        help="Tokens per minute"
+                        value=30,
+                        disabled=True,
+                        help="Fixed capacity: 30 tokens per minute"
                     )
+                
+                st.info("ℹ️ Model configuration is fixed to ensure consistency: gpt-4.1, version 2025-04-14, GlobalStandard SKU, 30 TPM")
             else:
                 st.success("✅ OpenAI deployment will be skipped - faster Account setup!")
                 st.info("💡 You can deploy models later using the Azure portal or Azure CLI")
+        
+        # DNS Zone Configuration
+        self._render_dns_zone_config(config)
         
         # Network Configuration
         self._render_network_config(config)
@@ -231,6 +248,96 @@ class AIFoundryHubDeploymentUI:
         # Update session state
         st.session_state.deployment_config = config
     
+    def _render_dns_zone_config(self, config: AIFoundryHubDeploymentConfig) -> None:
+        """Render DNS zone configuration section."""
+        with st.expander("🔗 Private DNS Zone Configuration", expanded=False):
+            st.markdown("Configure where your private DNS zones are located. These zones are required for private endpoint connectivity.")
+            
+            # DNS zone location option
+            dns_zone_option = st.radio(
+                "DNS Zone Location",
+                options=["Use current deployment location", "Specify custom location"],
+                help="Choose whether to use DNS zones in the same subscription/resource group as deployment, or specify a different location"
+            )
+            
+            if dns_zone_option == "Specify custom location":
+                # Get available subscriptions
+                subscriptions = self.service.get_available_subscriptions()
+                
+                if subscriptions:
+                    # Subscription selection
+                    subscription_options = {f"{sub['display_name']} ({sub['subscription_id']})": sub['subscription_id'] 
+                                          for sub in subscriptions if sub['state'] == 'Enabled'}
+                    
+                    if subscription_options:
+                        selected_subscription_display = st.selectbox(
+                            "🎯 DNS Zone Subscription",
+                            options=list(subscription_options.keys()),
+                            help="Select the subscription containing your private DNS zones"
+                        )
+                        config.dns_zone_subscription_id = subscription_options[selected_subscription_display]
+                        
+                        # Resource group selection
+                        if config.dns_zone_subscription_id:
+                            resource_groups = self.service.get_resource_groups_for_subscription(config.dns_zone_subscription_id)
+                            
+                            if resource_groups:
+                                config.dns_zone_resource_group_name = st.selectbox(
+                                    "📁 DNS Zone Resource Group",
+                                    options=resource_groups,
+                                    help="Select the resource group containing your private DNS zones"
+                                )
+                                
+                                # Validate DNS zones
+                                if config.dns_zone_resource_group_name:
+                                    with st.spinner("Validating DNS zones..."):
+                                        zone_status = self.service.validate_dns_zones_exist(
+                                            config.dns_zone_subscription_id, 
+                                            config.dns_zone_resource_group_name
+                                        )
+                                    
+                                    if zone_status:
+                                        st.subheader("🔍 DNS Zone Validation")
+                                        all_zones_exist = all(zone_status.values())
+                                        
+                                        for zone_name, exists in zone_status.items():
+                                            if exists:
+                                                st.success(f"✅ {zone_name}")
+                                            else:
+                                                st.error(f"❌ {zone_name}")
+                                        
+                                        if not all_zones_exist:
+                                            config.create_dns_zones_if_not_exist = st.checkbox(
+                                                "🆕 Create missing DNS zones automatically",
+                                                value=config.create_dns_zones_if_not_exist,
+                                                help="When checked, missing DNS zones will be created during deployment"
+                                            )
+                                            
+                                            if config.create_dns_zones_if_not_exist:
+                                                st.info("💡 Missing DNS zones will be created with VNet links during deployment")
+                                            else:
+                                                st.warning("⚠️ Deployment may fail if required DNS zones are missing")
+                                        else:
+                                            st.success("🎉 All required DNS zones found!")
+                                            config.create_dns_zones_if_not_exist = False
+                            else:
+                                st.error("❌ No resource groups found in selected subscription")
+                    else:
+                        st.error("❌ No enabled subscriptions found")
+                else:
+                    st.error("❌ Unable to load subscriptions")
+            else:
+                # Use current deployment location
+                config.dns_zone_subscription_id = ""
+                config.dns_zone_resource_group_name = ""
+                config.create_dns_zones_if_not_exist = st.checkbox(
+                    "🆕 Create DNS zones if they don't exist in deployment resource group",
+                    value=config.create_dns_zones_if_not_exist,
+                    help="When checked, DNS zones will be created in the same resource group as the deployment if they don't exist"
+                )
+                
+                st.info("ℹ️ DNS zones will be expected in the same subscription and resource group as your deployment")
+
     def _render_network_config(self, config: AIFoundryHubDeploymentConfig) -> None:
         """Render network configuration section."""
         with st.expander("🌐 Network Configuration", expanded=True):
@@ -571,42 +678,26 @@ class AIFoundryHubDeploymentUI:
             st.markdown(f"#### {title}")
             st.caption(description)
             
-            # Special handling for Cosmos DB - allow skipping deployment
-            if "Cosmos DB" in title:
-                col1, col2 = st.columns([2, 3])
+            # All resources now support skip deployment option
+            col1, col2 = st.columns([2, 3])
+            
+            with col1:
+                deployment_option = st.radio(
+                    f"{title} Deployment",
+                    ["Create New", "Use Existing", "Skip Deployment"],
+                    index=0 if resource.create_new else (1 if not resource.skip_deployment else 2),
+                    key=f"{resource_type}_deployment_option",
+                    help=f"Choose to create new, use existing, or skip {title} deployment entirely"
+                )
                 
-                with col1:
-                    deployment_option = st.radio(
-                        f"{title} Deployment",
-                        ["Create New", "Use Existing", "Skip Deployment"],
-                        index=0 if resource.create_new else (1 if not resource.skip_deployment else 2),
-                        key=f"{resource_type}_deployment_option",
-                        help="Choose to create new, use existing, or skip Cosmos DB deployment entirely"
-                    )
-                    
-                    resource.create_new = deployment_option == "Create New"
-                    resource.skip_deployment = deployment_option == "Skip Deployment"
-                
-                with col2:
-                    if deployment_option == "Skip Deployment":
-                        st.info("ℹ️ Cosmos DB deployment will be skipped. You can configure it later if needed.")
-                    elif deployment_option == "Use Existing":
-                        self._render_existing_resource_config(resource, resource_type, title)
-            else:
-                # Standard resource configuration for AI Search and Storage
-                col1, col2 = st.columns([2, 3])
-                
-                with col1:
-                    resource.create_new = st.radio(
-                        f"{title} Option",
-                        ["Create New", "Use Existing"],
-                        index=0 if resource.create_new else 1,
-                        key=f"{resource_type}_option"
-                    ) == "Create New"
-                
-                with col2:
-                    if not resource.create_new:
-                        self._render_existing_resource_config(resource, resource_type, title)
+                resource.create_new = deployment_option == "Create New"
+                resource.skip_deployment = deployment_option == "Skip Deployment"
+            
+            with col2:
+                if deployment_option == "Skip Deployment":
+                    st.info(f"ℹ️ {title} deployment will be skipped. You can configure it later if needed.")
+                elif deployment_option == "Use Existing":
+                    self._render_existing_resource_config(resource, resource_type, title)
             
             st.divider()
     

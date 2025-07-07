@@ -54,14 +54,14 @@ param existingCosmosDBPrivateEndpointName string = ''
 @description('Skip Cosmos DB deployment entirely (set to true if no Cosmos DB needed)')
 param skipCosmosDB bool = false
 
+@description('Skip AI Search deployment entirely (set to true if no AI Search needed)')
+param skipAiSearch bool = false
+
+@description('Skip Storage Account deployment entirely (set to true if no Storage needed)')
+param skipStorage bool = false
+
 @description('Skip OpenAI deployment entirely (set to true if no OpenAI/AI Services needed)')
 param skipOpenAI bool = true
-
-@description('Skip DNS zone creation if they already exist (set to true to avoid conflicts)')
-param skipDnsZoneCreation bool = true
-
-@description('Skip DNS zone links creation if they already exist (set to true to avoid conflicts)')
-param skipDnsZoneLinks bool = true
 
 @description('Skip DNS zone group creation for existing private endpoints that already have them configured')
 param skipExistingPrivateEndpointDnsGroups bool = true
@@ -89,18 +89,28 @@ param cosmosDBSubscriptionId string = subscription().subscriptionId
 
 @description('Resource group name for Cosmos DB account')
 param cosmosDBResourceGroupName string = resourceGroup().name
+
+// DNS Zone Location Parameters
+@description('Subscription ID where private DNS zones are located')
+param dnsZoneSubscriptionId string = subscription().subscriptionId
+
+@description('Resource group name where private DNS zones are located')
+param dnsZoneResourceGroupName string = resourceGroup().name
+
+@description('Create new private DNS zones if they do not exist in the specified location')
+param createDnsZonesIfNotExist bool = false
 // Reference existing services that need private endpoints
 resource aiAccount 'Microsoft.CognitiveServices/accounts@2023-05-01' existing = if (!skipOpenAI) {
   name: aiAccountName
   scope: resourceGroup()
 }
 
-resource aiSearch 'Microsoft.Search/searchServices@2023-11-01' existing = {
+resource aiSearch 'Microsoft.Search/searchServices@2023-11-01' existing = if (!skipAiSearch) {
   name: aiSearchName
   scope: resourceGroup(aiSearchSubscriptionId, aiSearchResourceGroupName)
 }
 
-resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = if (!skipStorage) {
   name: storageName
   scope: resourceGroup(storageAccountSubscriptionId, storageAccountResourceGroupName)
 }
@@ -169,7 +179,7 @@ resource aiAccountPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01
 // Private endpoint for AI Search (only create if not provided as existing)
 // - Creates network interface in customer hub subnet
 // - Establishes private connection to AI Search service
-resource aiSearchPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (existingAiSearchPrivateEndpointName == '') {
+resource aiSearchPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (existingAiSearchPrivateEndpointName == '' && !skipAiSearch) {
   name: '${aiSearchName}-private-endpoint'
   location: resourceGroup().location
   properties: {
@@ -195,7 +205,7 @@ resource aiSearchPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01'
 // Private endpoint for Storage Account (only create if not provided as existing)
 // - Creates network interface in customer hub subnet
 // - Establishes private connection to blob storage
-resource storagePrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (existingStoragePrivateEndpointName == '') {
+resource storagePrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (existingStoragePrivateEndpointName == '' && !skipStorage) {
   name: '${storageName}-private-endpoint'
   location: resourceGroup().location
   properties: {
@@ -242,29 +252,134 @@ resource cosmosDBPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01'
 
 /* -------------------------------------------- Private DNS Zones -------------------------------------------- */
 
-// Reference existing DNS zones instead of creating new ones to avoid conflicts
-resource aiServicesPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' existing = {
+// Reference existing DNS zones with proper scope or create new ones if needed
+resource aiServicesPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (createDnsZonesIfNotExist) {
   name: 'privatelink.services.ai.azure.com'
+  location: 'global'
 }
 
-resource openAiPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' existing = {
+resource aiServicesPrivateDnsZoneExisting 'Microsoft.Network/privateDnsZones@2020-06-01' existing = if (!createDnsZonesIfNotExist) {
+  name: 'privatelink.services.ai.azure.com'
+  scope: resourceGroup(dnsZoneSubscriptionId, dnsZoneResourceGroupName)
+}
+
+resource openAiPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (createDnsZonesIfNotExist) {
   name: 'privatelink.openai.azure.com'
+  location: 'global'
 }
 
-resource cognitiveServicesPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' existing = {
+resource openAiPrivateDnsZoneExisting 'Microsoft.Network/privateDnsZones@2020-06-01' existing = if (!createDnsZonesIfNotExist) {
+  name: 'privatelink.openai.azure.com'
+  scope: resourceGroup(dnsZoneSubscriptionId, dnsZoneResourceGroupName)
+}
+
+resource cognitiveServicesPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (createDnsZonesIfNotExist) {
   name: 'privatelink.cognitiveservices.azure.com'
+  location: 'global'
 }
 
-resource aiSearchPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' existing = {
+resource cognitiveServicesPrivateDnsZoneExisting 'Microsoft.Network/privateDnsZones@2020-06-01' existing = if (!createDnsZonesIfNotExist) {
+  name: 'privatelink.cognitiveservices.azure.com'
+  scope: resourceGroup(dnsZoneSubscriptionId, dnsZoneResourceGroupName)
+}
+
+resource aiSearchPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (createDnsZonesIfNotExist) {
   name: 'privatelink.search.windows.net'
+  location: 'global'
 }
 
-resource storagePrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' existing = {
+resource aiSearchPrivateDnsZoneExisting 'Microsoft.Network/privateDnsZones@2020-06-01' existing = if (!createDnsZonesIfNotExist) {
+  name: 'privatelink.search.windows.net'
+  scope: resourceGroup(dnsZoneSubscriptionId, dnsZoneResourceGroupName)
+}
+
+resource storagePrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (createDnsZonesIfNotExist) {
   name: 'privatelink.blob.${environment().suffixes.storage}'
+  location: 'global'
 }
 
-resource cosmosDBPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' existing = if (!skipCosmosDB) {
+resource storagePrivateDnsZoneExisting 'Microsoft.Network/privateDnsZones@2020-06-01' existing = if (!createDnsZonesIfNotExist) {
+  name: 'privatelink.blob.${environment().suffixes.storage}'
+  scope: resourceGroup(dnsZoneSubscriptionId, dnsZoneResourceGroupName)
+}
+
+resource cosmosDBPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (!skipCosmosDB && createDnsZonesIfNotExist) {
   name: 'privatelink.documents.azure.com'
+  location: 'global'
+}
+
+resource cosmosDBPrivateDnsZoneExisting 'Microsoft.Network/privateDnsZones@2020-06-01' existing = if (!skipCosmosDB && !createDnsZonesIfNotExist) {
+  name: 'privatelink.documents.azure.com'
+  scope: resourceGroup(dnsZoneSubscriptionId, dnsZoneResourceGroupName)
+}
+
+// Variables to determine which DNS zone to use
+var aiServicesPrivateDnsZoneId = createDnsZonesIfNotExist ? aiServicesPrivateDnsZone.id : aiServicesPrivateDnsZoneExisting.id
+var openAiPrivateDnsZoneId = createDnsZonesIfNotExist ? openAiPrivateDnsZone.id : openAiPrivateDnsZoneExisting.id
+var cognitiveServicesPrivateDnsZoneId = createDnsZonesIfNotExist ? cognitiveServicesPrivateDnsZone.id : cognitiveServicesPrivateDnsZoneExisting.id
+var aiSearchPrivateDnsZoneId = createDnsZonesIfNotExist ? aiSearchPrivateDnsZone.id : aiSearchPrivateDnsZoneExisting.id
+var storagePrivateDnsZoneId = createDnsZonesIfNotExist ? storagePrivateDnsZone.id : storagePrivateDnsZoneExisting.id
+var cosmosDBPrivateDnsZoneId = (!skipCosmosDB) ? (createDnsZonesIfNotExist ? cosmosDBPrivateDnsZone.id : cosmosDBPrivateDnsZoneExisting.id) : ''
+
+// VNet Links for newly created DNS zones (only if creating new DNS zones)
+resource aiServicesVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (createDnsZonesIfNotExist) {
+  parent: aiServicesPrivateDnsZone
+  location: 'global'
+  name: 'aiServices-${suffix}-link'
+  properties: {
+    virtualNetwork: { id: vnet.id }
+    registrationEnabled: false
+  }
+}
+
+resource openAiVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (createDnsZonesIfNotExist) {
+  parent: openAiPrivateDnsZone
+  location: 'global'
+  name: 'openAi-${suffix}-link'
+  properties: {
+    virtualNetwork: { id: vnet.id }
+    registrationEnabled: false
+  }
+}
+
+resource cognitiveServicesVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (createDnsZonesIfNotExist) {
+  parent: cognitiveServicesPrivateDnsZone
+  location: 'global'
+  name: 'cognitiveServices-${suffix}-link'
+  properties: {
+    virtualNetwork: { id: vnet.id }
+    registrationEnabled: false
+  }
+}
+
+resource aiSearchVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (createDnsZonesIfNotExist) {
+  parent: aiSearchPrivateDnsZone
+  location: 'global'
+  name: 'aiSearch-${suffix}-link'
+  properties: {
+    virtualNetwork: { id: vnet.id }
+    registrationEnabled: false
+  }
+}
+
+resource storageVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (createDnsZonesIfNotExist) {
+  parent: storagePrivateDnsZone
+  location: 'global'
+  name: 'storage-${suffix}-link'
+  properties: {
+    virtualNetwork: { id: vnet.id }
+    registrationEnabled: false
+  }
+}
+
+resource cosmosDBVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (!skipCosmosDB && createDnsZonesIfNotExist) {
+  parent: cosmosDBPrivateDnsZone
+  location: 'global'
+  name: 'cosmosDB-${suffix}-link'
+  properties: {
+    virtualNetwork: { id: vnet.id }
+    registrationEnabled: false
+  }
 }
 
 // DNS Zone Groups for AI Services - skip VNet links since they already exist
@@ -278,19 +393,19 @@ resource aiServicesDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGr
       {
         name: '${aiAccountName}-dns-aiserv-config'
         properties: {
-          privateDnsZoneId: aiServicesPrivateDnsZone.id
+          privateDnsZoneId: aiServicesPrivateDnsZoneId
         }
       }
       {
         name: '${aiAccountName}-dns-openai-config'
         properties: {
-          privateDnsZoneId: openAiPrivateDnsZone.id
+          privateDnsZoneId: openAiPrivateDnsZoneId
         }
       }
       {
         name: '${aiAccountName}-dns-cogserv-config'
         properties: {
-          privateDnsZoneId: cognitiveServicesPrivateDnsZone.id
+          privateDnsZoneId: cognitiveServicesPrivateDnsZoneId
         }
       }
     ]
@@ -306,19 +421,19 @@ resource existingAiServicesDnsGroup 'Microsoft.Network/privateEndpoints/privateD
       {
         name: '${aiAccountName}-dns-aiserv-config'
         properties: {
-          privateDnsZoneId: aiServicesPrivateDnsZone.id
+          privateDnsZoneId: aiServicesPrivateDnsZoneId
         }
       }
       {
         name: '${aiAccountName}-dns-openai-config'
         properties: {
-          privateDnsZoneId: openAiPrivateDnsZone.id
+          privateDnsZoneId: openAiPrivateDnsZoneId
         }
       }
       {
         name: '${aiAccountName}-dns-cogserv-config'
         properties: {
-          privateDnsZoneId: cognitiveServicesPrivateDnsZone.id
+          privateDnsZoneId: cognitiveServicesPrivateDnsZoneId
         }
       }
     ]
@@ -327,7 +442,7 @@ resource existingAiServicesDnsGroup 'Microsoft.Network/privateEndpoints/privateD
 
 // AI Search DNS Zone Groups using existing DNS zone
 // 3) DNS Zone Group for AI Search - New Private Endpoint
-resource aiSearchDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (existingAiSearchPrivateEndpointName == '') {
+resource aiSearchDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (existingAiSearchPrivateEndpointName == '' && !skipAiSearch) {
   parent: aiSearchPrivateEndpoint
   name: '${aiSearchName}-dns-group'
   properties: {
@@ -335,7 +450,7 @@ resource aiSearchDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGrou
       {
         name: '${aiSearchName}-dns-config'
         properties: {
-          privateDnsZoneId: aiSearchPrivateDnsZone.id
+          privateDnsZoneId: aiSearchPrivateDnsZoneId
         }
       }
     ]
@@ -351,7 +466,7 @@ resource existingAiSearchDnsGroup 'Microsoft.Network/privateEndpoints/privateDns
       {
         name: '${aiSearchName}-dns-config'
         properties: {
-          privateDnsZoneId: aiSearchPrivateDnsZone.id
+          privateDnsZoneId: aiSearchPrivateDnsZoneId
         }
       }
     ]
@@ -360,7 +475,7 @@ resource existingAiSearchDnsGroup 'Microsoft.Network/privateEndpoints/privateDns
 
 // Storage DNS Zone Groups using existing DNS zone
 // 3) DNS Zone Group for Storage - New Private Endpoint
-resource storageDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (existingStoragePrivateEndpointName == '') {
+resource storageDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (existingStoragePrivateEndpointName == '' && !skipStorage) {
   parent: storagePrivateEndpoint
   name: '${storageName}-dns-group'
   properties: {
@@ -368,7 +483,7 @@ resource storageDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroup
       {
         name: '${storageName}-dns-config'
         properties: {
-          privateDnsZoneId: storagePrivateDnsZone.id
+          privateDnsZoneId: storagePrivateDnsZoneId
         }
       }
     ]
@@ -384,7 +499,7 @@ resource existingStorageDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZ
       {
         name: '${storageName}-dns-config'
         properties: {
-          privateDnsZoneId: storagePrivateDnsZone.id
+          privateDnsZoneId: storagePrivateDnsZoneId
         }
       }
     ]
@@ -401,7 +516,7 @@ resource cosmosDBDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGrou
       {
         name: '${cosmosDBName}-dns-config'
         properties: {
-          privateDnsZoneId: cosmosDBPrivateDnsZone.id
+          privateDnsZoneId: cosmosDBPrivateDnsZoneId
         }
       }
     ]
@@ -417,7 +532,7 @@ resource existingCosmosDBDnsGroup 'Microsoft.Network/privateEndpoints/privateDns
       {
         name: '${cosmosDBName}-dns-config'
         properties: {
-          privateDnsZoneId: cosmosDBPrivateDnsZone.id
+          privateDnsZoneId: cosmosDBPrivateDnsZoneId
         }
       }
     ]
