@@ -1,12 +1,14 @@
 """
-Enhanced AI Foundry Tab
+Enhanced AI Foundry Tab - Full Version with Delete Tab Fix
 
 Comprehensive UI for managing AI Foundry Accounts and agent deployment.
+This version includes all original functionality while ensuring the delete tab works properly.
 
 Features:
 - 🔍 Resource Discovery: Discover AI Foundry Accounts only
 - 🤖 Agent Management: Deploy and manage agents
 - 🚀 Account Deployment: Deploy new AI Foundry Accounts (manual process)
+- 🗑️ Delete Deployment: Safe resource group deletion
 """
 
 import streamlit as st
@@ -28,8 +30,8 @@ def render_enhanced_ai_foundry_tab(
     # Track timing for performance monitoring - initialize at function start
     tab_start_time = time.time()
     
-    st.header("🏭 AI Foundry Account Management (Accounts Only)")
-    
+    st.header("🏭 AI Foundry Account Management")
+
     # Add important notice about supported resources
     st.info("""
     **📋 Resource Support**: 
@@ -40,7 +42,7 @@ def render_enhanced_ai_foundry_tab(
     
     **💡 Focus**: This tab discovers and works with AI Foundry Accounts only - NO HUBS.
     """)
-    
+        
     # Add refresh button to clear cached services
     col1, col2 = st.columns([6, 1])
     with col2:
@@ -60,46 +62,66 @@ def render_enhanced_ai_foundry_tab(
     
     st.markdown("---")
     
-    # Initialize services (lazy-loaded for better performance)
-    if 'ai_foundry_discovery_service' not in st.session_state:
-        from services.ai_foundry_discovery import ai_foundry_discovery
-        st.session_state.ai_foundry_discovery_service = ai_foundry_discovery
+    # Initialize services with lazy loading to prevent blocking
     
-    # Only initialize other services when needed to improve tab loading speed
+    # Primary discovery service - initialize immediately but lightweight
+    if 'ai_foundry_discovery_service' not in st.session_state:
+        try:
+            from services.ai_foundry_discovery import ai_foundry_discovery
+            st.session_state.ai_foundry_discovery_service = ai_foundry_discovery
+        except Exception as e:
+            st.error(f"❌ Failed to initialize discovery service: {e}")
+            st.session_state.ai_foundry_discovery_service = None
+    
     discovery_service = st.session_state.ai_foundry_discovery_service
     
-    # Initialize other services only when first accessed
+    # Other services - initialize only when first accessed to improve tab loading speed
     def get_rbac_service():
         if 'ai_foundry_rbac_service' not in st.session_state:
-            from services.azure_rbac_manager import AzureRBACManager
-            st.session_state.ai_foundry_rbac_service = AzureRBACManager()
+            try:
+                from services.azure_rbac_manager import AzureRBACManager
+                st.session_state.ai_foundry_rbac_service = AzureRBACManager()
+            except Exception as e:
+                st.error(f"❌ Failed to initialize RBAC service: {e}")
+                st.session_state.ai_foundry_rbac_service = None
         return st.session_state.ai_foundry_rbac_service
     
     def get_ai_foundry_service():
         if 'ai_foundry_service' not in st.session_state:
-            from services.ai_foundry_service import AIFoundryService
-            st.session_state.ai_foundry_service = AIFoundryService()
+            try:
+                from services.ai_foundry_service import AIFoundryService
+                st.session_state.ai_foundry_service = AIFoundryService()
+            except Exception as e:
+                st.error(f"❌ Failed to initialize AI Foundry service: {e}")
+                st.session_state.ai_foundry_service = None
         return st.session_state.ai_foundry_service
     
     def get_deployment_service():
         if 'ai_foundry_deployment_service' not in st.session_state:
-            from services.ai_foundry_agent_deployment import get_ai_foundry_agent_deployment_service
-            st.session_state.ai_foundry_deployment_service = get_ai_foundry_agent_deployment_service()
+            try:
+                from services.ai_foundry_agent_deployment import get_ai_foundry_agent_deployment_service
+                st.session_state.ai_foundry_deployment_service = get_ai_foundry_agent_deployment_service()
+            except Exception as e:
+                st.error(f"❌ Failed to initialize deployment service: {e}")
+                st.session_state.ai_foundry_deployment_service = None
         return st.session_state.ai_foundry_deployment_service
     
     # Debug information - show service status (only load services when debug is expanded)
     with st.expander("🔧 Service Debug Info", expanded=False):
         st.write("**Service Status:**")
-        st.write(f"- Discovery Service: {type(discovery_service).__name__}")
+        st.write(f"- Discovery Service: {type(discovery_service).__name__ if discovery_service else 'Not initialized'}")
         
         # Only load other services if debug is being viewed
-        rbac_service = get_rbac_service()
-        ai_foundry_service = get_ai_foundry_service()
-        deployment_service = get_deployment_service()
-        
-        st.write(f"- RBAC Service: {type(rbac_service).__name__}")
-        st.write(f"- AI Foundry Service: {type(ai_foundry_service).__name__}")
-        st.write(f"- Deployment Service: {type(deployment_service).__name__}")
+        try:
+            rbac_service = get_rbac_service()
+            ai_foundry_service = get_ai_foundry_service()
+            deployment_service = get_deployment_service()
+            
+            st.write(f"- RBAC Service: {type(rbac_service).__name__ if rbac_service else 'Not initialized'}")
+            st.write(f"- AI Foundry Service: {type(ai_foundry_service).__name__ if ai_foundry_service else 'Not initialized'}")
+            st.write(f"- Deployment Service: {type(deployment_service).__name__ if deployment_service else 'Not initialized'}")
+        except Exception as e:
+            st.write(f"- Service initialization error: {e}")
         
         st.write("**Session State Keys:**")
         relevant_keys = [k for k in st.session_state.keys() if 'ai_foundry' in k.lower() or 'discovered' in k.lower()]
@@ -113,7 +135,7 @@ def render_enhanced_ai_foundry_tab(
     # Store subscription ID but don't initialize clients until actually needed
     if subscription_id:
         # Just store the subscription ID, don't call set_subscription yet (avoid slow client init)
-        if not hasattr(discovery_service, '_subscription_id'):
+        if discovery_service and not hasattr(discovery_service, '_subscription_id'):
             discovery_service._subscription_id = subscription_id
         st.sidebar.success(f"✅ Subscription ID ready: {subscription_id[:8]}...")
     else:
@@ -133,22 +155,84 @@ def render_enhanced_ai_foundry_tab(
         with st.expander("⏱️ Performance Info", expanded=False):
             st.text(f"Tab load time: {total_time:.3f}s")
     
+    # Tab 1: Deploy Hub - with proper error handling
     with tab_deploy_hub:
-        render_ai_foundry_hub_deployment_ui()
+        try:
+            render_ai_foundry_hub_deployment_ui()
+        except Exception as e:
+            st.error(f"❌ ERROR in deploy hub tab: {e}")
+            import traceback
+            st.code(traceback.format_exc())
     
+    # Tab 2: Discover - with proper error handling
     with tab_discover:
-        render_resource_discovery_section(discovery_service)
+        try:
+            render_resource_discovery_section(discovery_service)
+        except Exception as e:
+            st.error(f"❌ ERROR in discover tab: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+
+    # Tab 3: Delete Deployment - CRITICAL: This must always work
+    with tab_delete:
+        try:
+            from app.tabs.delete_deployment_tab import render_delete_deployment_tab
+            render_delete_deployment_tab(
+                session_state=session_state,
+                **kwargs
+            )
+        except Exception as e:
+            st.error(f"❌ ERROR in delete deployment tab: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+
+
+def render_ai_foundry_hub_deployment_ui():
+    """Render the AI Foundry Hub deployment UI with lazy loading."""
+    
+    # Lazy loading to avoid slow initialization during tab creation
+    st.subheader("🚀 Deploy New AI Foundry Account")
+    
+    # Add a note about lazy loading
+    st.info("💡 Account deployment UI loads when first accessed to improve performance.")
+    
+    # Only import and initialize when user actually wants to use it
+    if st.button("🔧 Initialize Account Deployment UI", type="primary"):
+        with st.spinner("Loading account deployment interface..."):
+            try:
+                from app.components.ai_foundry_hub_deployment_ui import AIFoundryHubDeploymentUI
+                ui = AIFoundryHubDeploymentUI()
+                ui.render_deployment_tab()
+                st.success("✅ Account deployment UI loaded!")
+                # Store in session state so it doesn't reload
+                st.session_state.account_ui_loaded = True
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Failed to load account deployment UI: {e}")
+                st.code(str(e))
+                import traceback
+                st.code(traceback.format_exc())
+    
+    # If already loaded, show the UI
+    if st.session_state.get('account_ui_loaded', False):
+        try:
+            from app.components.ai_foundry_hub_deployment_ui import AIFoundryHubDeploymentUI
+            ui = AIFoundryHubDeploymentUI()
+            ui.render_deployment_tab()
+        except Exception as e:
+            st.error(f"❌ Error in account deployment UI: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+            # Reset the loaded state so user can try again
+            st.session_state.account_ui_loaded = False
+            if st.button("🔄 Retry Loading"):
+                st.rerun()
+
 
 def render_resource_discovery_section(discovery_service):
     """Render the AI Foundry resource discovery section."""
+    
     st.subheader("🔍 Discover and Deploy Agent")
-    
-    # Force UI refresh with timestamp
-    import datetime
-    st.caption(f"🕒 Code reloaded: {datetime.datetime.now().strftime('%H:%M:%S')} - ACCOUNTS ONLY")
-    
-    # VERY OBVIOUS MARKER - IF YOU SEE OLD TEXT, THIS FILE IS NOT BEING USED!
-    st.success("✅ NEW FILE LOADED - ACCOUNTS ONLY VERSION ACTIVE!")
     
     st.info("🔎 **Account Discovery Only**: This will scan for AI Foundry Accounts only (NOT Hubs) in your subscription.")
     
@@ -160,6 +244,10 @@ def render_resource_discovery_section(discovery_service):
     - ❌ **NOT scanning for AI Foundry Hubs**
     """)
     
+    if not discovery_service:
+        st.error("❌ Discovery service not initialized. Please refresh the page.")
+        return
+    
     if st.button("🔄 Scan for AI Foundry Accounts", type="primary"):
         with st.spinner("Scanning subscriptions for AI Foundry Accounts..."):
             try:
@@ -169,10 +257,8 @@ def render_resource_discovery_section(discovery_service):
                 if subscription_id:
                     # Use the configured subscription
                     discovery_service.set_subscription(subscription_id)
-                    st.write(f"🔍 **DEBUG:** Using configured subscription: {subscription_id[:8]}...")
                 else:
                     # Auto-discover subscriptions like before
-                    st.write("🔍 **DEBUG:** No AZURE_SUBSCRIPTION_ID configured, auto-discovering subscriptions...")
                     
                     # Initialize credentials first
                     discovery_service._ensure_credential_initialized()
@@ -180,14 +266,12 @@ def render_resource_discovery_section(discovery_service):
                     # Try to discover available subscriptions using the discovery service
                     try:
                         # Use the discovery service's list_subscriptions method instead
-                        st.write("🔍 **DEBUG:** Listing available subscriptions...")
                         subscriptions = discovery_service.list_subscriptions()
                         
                         if subscriptions:
                             # Use the first available subscription
                             auto_subscription_id = subscriptions[0]['id']
                             discovery_service.set_subscription(auto_subscription_id)
-                            st.write(f"🔍 **DEBUG:** Auto-discovered subscription: {auto_subscription_id[:8]}...")
                             st.info(f"💡 **Auto-discovery**: Using subscription '{subscriptions[0]['name'][:50]}...' ({auto_subscription_id[:8]}...)")
                         else:
                             st.error("❌ No accessible subscriptions found")
@@ -203,14 +287,11 @@ def render_resource_discovery_section(discovery_service):
                 accounts = []
                 
                 # Discover AI Foundry Accounts only (NO HUBS)
-                st.write("🔍 **DEBUG:** Starting AI Foundry Account discovery (hubs excluded)...")
                 accounts = discovery_service.discover_ai_foundry_accounts()
-                st.write(f"🔍 **DEBUG:** Raw accounts discovered: {len(accounts)}")
                 if accounts:
-                    st.write("🔍 **DEBUG:** Sample account data:")
-                    st.json(accounts[0])
+                    st.success(f"✅ Discovery completed! Found {len(accounts)} AI Foundry Account(s).")
                 else:
-                    st.write("🔍 **DEBUG:** No accounts found")
+                    st.warning("⚠️ No AI Foundry Accounts found. Check your subscription or permissions.")
                 
                 # Store in session state - clear any hub data
                 st.session_state.discovered_accounts = accounts
@@ -232,12 +313,6 @@ def render_resource_discovery_section(discovery_service):
     
     # Display discovered resources
     accounts = getattr(st.session_state, 'discovered_accounts', [])
-    
-    # 🔍 DEBUG: Enhanced debugging for discovery issue
-    st.write("🔍 **DEBUG ENHANCED:** Session state analysis:")
-    st.write(f"   - accounts from session_state: {len(accounts)} items")
-    st.write(f"   - accounts type: {type(accounts)}")
-    st.write(f"   - session_state.discovered_accounts exists: {hasattr(st.session_state, 'discovered_accounts')}")
     
     if accounts:
         st.markdown("### 🏢 AI Foundry Accounts")
@@ -298,10 +373,18 @@ def render_resource_discovery_section(discovery_service):
                     
                     # Initialize deployment service (lazy loading)
                     if 'ai_foundry_deployment_service' not in st.session_state:
-                        from services.ai_foundry_agent_deployment import get_ai_foundry_agent_deployment_service
-                        st.session_state.ai_foundry_deployment_service = get_ai_foundry_agent_deployment_service()
+                        try:
+                            from services.ai_foundry_agent_deployment import get_ai_foundry_agent_deployment_service
+                            st.session_state.ai_foundry_deployment_service = get_ai_foundry_agent_deployment_service()
+                        except Exception as e:
+                            st.error(f"❌ Failed to initialize deployment service: {e}")
+                            st.session_state.ai_foundry_deployment_service = None
                     
                     deployment_service = st.session_state.ai_foundry_deployment_service
+                    
+                    if not deployment_service:
+                        st.error("❌ Deployment service not available. Check service configuration.")
+                        continue
                     
                     # Load Function Apps (from the main session state)
                     func_map = getattr(st.session_state, 'func_map', {})
@@ -424,17 +507,9 @@ def render_resource_discovery_section(discovery_service):
                                     with st.spinner(f"Creating AI Foundry agent '{agent_name}' from Function App '{func_sel}'..."):
                                         # Get function app details
                                         app_name, resource_group = func_map[func_sel]
-                                        
-                                        # Build function URL (basic pattern - may need adjustment based on function structure)
                                         func_url = f"https://{app_name}.azurewebsites.net/api"
                                         
                                         # Create AI Foundry agent using the Function App
-                                        print(f"🔍 DEBUG: Creating agent with parameters:")
-                                        print(f"   - project_endpoint: {project_endpoint}")
-                                        print(f"   - agent_name: {agent_name}")
-                                        print(f"   - base_url: {func_url}")
-                                        print(f"   - function_key: {'***' if function_key else 'NOT SET'}")
-                                        
                                         success, message, agent_data = deployment_service.create_ai_foundry_agent(
                                             project_endpoint=project_endpoint,
                                             agent_name=agent_name,
@@ -442,74 +517,16 @@ def render_resource_discovery_section(discovery_service):
                                             function_key=function_key
                                         )
                                         
-                                        print(f"🔍 DEBUG: Agent creation result:")
-                                        print(f"   - success: {success}")
-                                        print(f"   - message: {message}")
-                                        print(f"   - agent_data: {agent_data}")
-                                        
                                         if success:
-                                            st.success(message)
-                                            st.markdown("**🎉 Agent Created Successfully!**")
-                                            
-                                            # Show agent details
+                                            st.success(f"✅ {message}")
                                             st.markdown("**Agent Details:**")
-                                            agent_info = {
-                                                "Agent Name": agent_name,
-                                                "Function App": func_sel,
-                                                "Function URL": func_url,
-                                                "Project Endpoint": project_endpoint,
-                                                "Type": "Function App Agent"
-                                            }
-                                            st.json(agent_info)
-                                            
-                                            # Show usage instructions
-                                            st.markdown("**💬 How to use this agent:**")
-                                            st.markdown(f"""
-                                            1. Go to [Azure AI Foundry Studio]({project_endpoint.replace('/api/projects/', '/studio/projects/')})
-                                            2. Find your agent: **{agent_name}**
-                                            3. Start a conversation - the agent will automatically call your Function App for answers
-                                            4. Your RAG system (via the Function App) will provide responses with citations
-                                            """)
-                                            
+                                            st.json(agent_data)
                                         else:
-                                            st.error(message)
+                                            st.error(f"❌ {message}")
                                             
-                                            # Add specific guidance for 401 errors
-                                            if "401" in message or "unauthorized" in message.lower():
-                                                st.error("🔒 **401 Unauthorized Error Detected!**")
-                                                st.markdown("""
-                                                **This means you don't have permission to create agents in this AI Foundry project.**
-                                                
-                                                **🔧 Quick Fix:**
-                                                1. **Grant yourself permissions** using the commands below
-                                                2. **Or ask your Azure admin** to grant you `Cognitive Services Contributor` role
-                                                3. **Try the permission checker** to diagnose the issue
-                                                """)
-                                                
-                                                # Show the exact Azure CLI command to fix the issue
-                                                subscription_id = os.getenv('AZURE_SUBSCRIPTION_ID') or discovery_service.get_subscription_id()
-                                                if subscription_id:
-                                                    st.markdown("**🚀 Run this command to fix the issue:**")
-                                                    st.code(f"""
-# Grant yourself Cognitive Services Contributor role
-az role assignment create \\
-  --assignee $(az ad signed-in-user show --query id -o tsv) \\
-  --role "Cognitive Services Contributor" \\
-  --scope "/subscriptions/{subscription_id}/resourceGroups/{account_rg}/providers/Microsoft.CognitiveServices/accounts/{account_name}"
-                                                    """)
-                                            
-                                            st.markdown("**🔍 Troubleshooting:**")
-                                            st.markdown("""
-                                            - Ensure your Function App is running and accessible
-                                            - Check that AGENT_FUNC_KEY is correctly set
-                                            - Verify Azure CLI is logged in: `az login`
-                                            - Confirm you have permissions to create agents in the AI Foundry project
-                                            """)
-                                            
-                                            # Add permission diagnostic button
+                                            # Add permission check button
                                             if st.button("🔍 Check My Permissions", key=f"check_perms_{i}"):
-                                                with st.spinner("Checking Azure permissions..."):
-                                                    check_ai_foundry_permissions(account_name, account_rg)
+                                                check_ai_foundry_permissions(account_name, account_rg)
                                             
                                 except Exception as e:
                                     st.error(f"❌ Failed to create AI Foundry agent: {str(e)}")
@@ -592,8 +609,10 @@ az role assignment create \\
                 if st.button("🧪 Test Discovery Service", type="secondary"):
                     with st.spinner("Testing discovery service..."):
                         try:
-                            discovery_service = st.session_state.ai_foundry_discovery_service
-                            
+                            if not discovery_service:
+                                st.error("❌ Discovery service not initialized")
+                                return
+                                
                             # Test credentials first
                             discovery_service._ensure_credential_initialized()
                             st.success("✅ Credentials initialized")
@@ -622,7 +641,6 @@ az role assignment create \\
                             # Test account listing (simplified)
                             st.info("🔍 Testing account discovery...")
                             accounts = discovery_service.discover_ai_foundry_accounts()
-                            st.write(f"🔍 **Raw discovery result**: {len(accounts)} accounts found")
                             
                             if accounts:
                                 st.success("✅ Accounts found! Try the scan button again.")
@@ -635,413 +653,12 @@ az role assignment create \\
         else:
             st.info("🔍 Click 'Scan for AI Foundry Accounts' above to discover resources.")
 
-def render_agent_deployment_section(deployment_service, discovery_service):
-    """Render the agent deployment section."""
-    st.subheader("🤖 Deploy Agents")
-    
-    # Check if we have a generated endpoint from Discover and Deploy Agent
-    has_generated_endpoint = hasattr(st.session_state, 'ready_for_agent_deployment') and st.session_state.ready_for_agent_deployment
-    
-    deployment_endpoint = None
-    deployment_source = None
-    
-    if has_generated_endpoint:
-        deployment_endpoint = st.session_state.deployment_endpoint
-        deployment_source = "Generated from Discover and Deploy Agent"
-        st.success(f"✅ **Ready to deploy!** Using endpoint from Discover and Deploy Agent")
-        st.code(deployment_endpoint)
-        
-    else:
-        # Allow manual endpoint input as fallback
-        st.info("🎯 **Agent Deployment Options:**")
-        st.markdown("""
-        **Option 1:** Use **Discover and Deploy Agent** tab → Select AI Foundry Account → Generate PROJECT_ENDPOINT
-        
-        **Option 2:** Enter a PROJECT_ENDPOINT manually below
-        
-        **Option 3:** Use Function Apps to deploy agents (advanced)
-        """)
-        
-        # Manual endpoint input
-        with st.expander("✍️ Manual Endpoint Input", expanded=True):
-            manual_endpoint = st.text_input(
-                "PROJECT_ENDPOINT",
-                placeholder="https://your-account.services.ai.azure.com/api/projects/your-project",
-                help="Enter your AI Foundry project endpoint manually"
-            )
-            
-            if manual_endpoint:
-                if st.button("🚀 Use This Endpoint"):
-                    st.session_state.deployment_endpoint = manual_endpoint
-                    st.session_state.ready_for_agent_deployment = True
-                    st.success("✅ Manual endpoint set! You can now deploy agents.")
-                    st.rerun()
-        
-        # If no endpoint is available, show current agent deployment sections but with limited functionality
-        if not has_generated_endpoint:
-            st.warning("⚠️ **No deployment endpoint configured.** Some features may be limited.")
-            deployment_endpoint = None
-            deployment_source = "No endpoint configured"
-    
-    # Show deployment details
-    st.markdown("---")
-    st.markdown("### 📄 Deployment Details")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown(f"**Source**: {deployment_source}")
-    with col2:
-        if deployment_endpoint:
-            st.markdown(f"**Endpoint**: `{deployment_endpoint[:50]}...`")
-        else:
-            st.markdown("**Endpoint**: Not configured")
-    
-    # Add Function Apps section for advanced deployment
-    st.markdown("---")
-    st.markdown("### 🔧 Advanced: Deploy via Function Apps")
-    
-    with st.expander("🚀 Function App Agent Deployment", expanded=False):
-        render_function_app_agent_deployment(discovery_service, deployment_endpoint)
-    
-    # Get Function Apps data if available
-    func_map = st.session_state.get('function_apps', {}).get('map', {})
-    func_choices = st.session_state.get('function_apps', {}).get('choices', [])
-    
-    # Render the actual agent deployment sections
-    render_current_agents_section(deployment_endpoint, deployment_service)
-    render_deploy_agent_section(deployment_endpoint, func_map, func_choices, deployment_service)
-    render_agent_details_section(deployment_endpoint, deployment_service)
-
-def render_current_agents_section(deployment_endpoint, deployment_service):
-    """Render the current agents management section."""
-    st.markdown("### 🤖 Current Agents")
-    
-    if not deployment_endpoint:
-        st.warning("⚠️ **No deployment endpoint configured.** Please set up an endpoint first.")
-        return
-    
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("🔄 Refresh Agents"):
-            # Force refresh of agents
-            if 'current_agents' in st.session_state:
-                del st.session_state['current_agents']
-            st.rerun()
-    
-    # Load and display current agents
-    try:
-        if 'current_agents' not in st.session_state:
-            with st.spinner("Loading current agents..."):
-                agents = deployment_service.list_agents(deployment_endpoint)
-                st.session_state.current_agents = agents
-        
-        agents = st.session_state.current_agents
-        
-        if agents:
-            for agent in agents:
-                agent_name = agent.get('name', 'Unknown')
-                agent_type = agent.get('type', 'Unknown')
-                
-                with st.expander(f"🤖 {agent_name}", expanded=False):
-                    st.markdown(f"**Type**: {agent_type}")
-                    st.markdown(f"**Details**: {agent}")
-                    
-                    if st.button(f"🗑️ Delete {agent_name}", key=f"delete_{agent_name}"):
-                        try:
-                            deployment_service.delete_agent(deployment_endpoint, agent_name)
-                            st.success(f"✅ Agent {agent_name} deleted!")
-                            # Refresh agents list
-                            del st.session_state['current_agents']
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Failed to delete agent: {e}")
-        else:
-            st.info("ℹ️ No agents found. Deploy an agent to get started.")
-            
-    except Exception as e:
-        st.error(f"❌ Failed to load agents: {e}")
-        st.code(str(e))
-
-def render_deploy_agent_section(deployment_endpoint, func_map, func_choices, deployment_service):
-    """Render the deploy new agent section."""
-    st.markdown("### ➕ Deploy New Agent")
-    
-    if not deployment_endpoint:
-        st.warning("⚠️ **No deployment endpoint configured.** Please set up an endpoint first.")
-        return
-    
-    with st.form("deploy_agent_form"):
-        agent_name = st.text_input(
-            "Agent Name",
-            help="Enter a unique name for your agent"
-        )
-        
-        agent_description = st.text_area(
-            "Agent Description",
-            help="Describe what this agent does"
-        )
-        
-        agent_type = st.selectbox(
-            "Agent Type",
-            ["knowledge-agent", "chat-agent", "task-agent"],
-            help="Select the type of agent to deploy"
-        )
-        
-        deploy_submitted = st.form_submit_button("🚀 Deploy Agent")
-        
-        if deploy_submitted:
-            if agent_name and agent_description:
-                try:
-                    with st.spinner(f"Deploying agent {agent_name}..."):
-                        result = deployment_service.deploy_agent(
-                            deployment_endpoint=deployment_endpoint,
-                            agent_name=agent_name,
-                            agent_description=agent_description,
-                            agent_type=agent_type
-                        )
-                        st.success(f"✅ Agent {agent_name} deployed successfully!")
-                        st.json(result)
-                        
-                        # Refresh agents list
-                        if 'current_agents' in st.session_state:
-                            del st.session_state['current_agents']
-                        
-                except Exception as e:
-                    st.error(f"❌ Failed to deploy agent: {e}")
-                    st.code(str(e))
-            else:
-                st.error("❌ Please provide both agent name and description.")
-
-def render_agent_details_section(deployment_endpoint, deployment_service):
-    """Render agent details and testing section."""
-    st.markdown("### 🔍 Agent Details & Testing")
-    
-    if not deployment_endpoint:
-        st.warning("⚠️ **No deployment endpoint configured.** Please set up an endpoint first.")
-        return
-    
-    # Agent selection for details
-    try:
-        if 'current_agents' in st.session_state:
-            agents = st.session_state.current_agents
-            
-            if agents:
-                agent_names = [agent.get('name', 'Unknown') for agent in agents]
-                selected_agent = st.selectbox(
-                    "Select agent for details:",
-                    agent_names,
-                    key="agent_details_selection"
-                )
-                
-                if selected_agent:
-                    with st.spinner("Loading agent details..."):
-                        try:
-                            details = deployment_service.get_agent_details(deployment_endpoint, selected_agent)
-                            st.json(details)
-                        except Exception as e:
-                            st.error(f"❌ Failed to load agent details: {e}")
-            else:
-                st.info("ℹ️ No agents available for details view.")
-        else:
-            st.info("ℹ️ Load agents first using the refresh button above.")
-            
-    except Exception as e:
-        st.error(f"❌ Error in agent details section: {e}")
-
-def render_ai_foundry_hub_deployment_ui():
-    """Render the AI Foundry Hub deployment UI with lazy loading."""
-    # Lazy loading to avoid slow initialization during tab creation
-    st.subheader("🚀 Deploy New AI Foundry Account")
-    
-    # Add a note about lazy loading
-    st.info("💡 Account deployment UI loads when first accessed to improve performance.")
-    
-    # Only import and initialize when user actually wants to use it
-    if st.button("🔧 Initialize Account Deployment UI", type="primary"):
-        with st.spinner("Loading account deployment interface..."):
-            try:
-                from app.components.ai_foundry_hub_deployment_ui import render_ai_foundry_hub_deployment_ui as render_hub_ui
-                st.success("✅ Account deployment UI loaded!")
-                # Store in session state so it doesn't reload
-                st.session_state.account_ui_loaded = True
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ Failed to load account deployment UI: {e}")
-                st.code(str(e))
-    
-    # If already loaded, show the UI
-    if st.session_state.get('account_ui_loaded', False):
-        try:
-            from app.components.ai_foundry_hub_deployment_ui import render_ai_foundry_hub_deployment_ui as render_hub_ui
-            render_hub_ui()
-        except Exception as e:
-            st.error(f"❌ Error in account deployment UI: {e}")
-            # Reset the loaded state so user can try again
-            st.session_state.account_ui_loaded = False
-            if st.button("🔄 Retry Loading"):
-                st.rerun()
-
-def render_function_app_agent_deployment(discovery_service, deployment_endpoint):
-    """Render the Function App agent deployment section."""
-    st.subheader("🔧 Deploy Function Apps as AI Foundry Agents")
-    
-    st.info("""
-    **Advanced Feature**: Deploy your Azure Function Apps as AI Foundry agents.
-    This allows your functions to be called by AI assistants in conversations.
-    """)
-    
-    if not deployment_endpoint:
-        st.warning("⚠️ **Function App deployment requires a project endpoint.** Please configure one first.")
-        return
-    
-    # Get subscription ID for Function App discovery
-    subscription_id = os.getenv('AZURE_SUBSCRIPTION_ID')
-    if not subscription_id:
-        # Try to get from discovery service
-        try:
-            discovery_service._ensure_credential_initialized()
-            subscriptions = discovery_service.list_subscriptions()
-            if subscriptions:
-                subscription_id = subscriptions[0]['id']
-            else:
-                st.error("❌ No subscription found. Set AZURE_SUBSCRIPTION_ID or ensure you have access to subscriptions.")
-                return
-        except Exception as e:
-            st.error(f"❌ Failed to get subscription: {e}")
-            return
-    
-    # Load Function Apps
-    if 'function_apps' not in st.session_state:
-        with st.spinner("Loading Function Apps..."):
-            try:
-                from azure_function_helper import list_function_apps
-                func_choices, func_map = list_function_apps(subscription_id)
-                st.session_state.function_apps = {
-                    'choices': func_choices,
-                    'map': func_map
-                }
-            except Exception as e:
-                st.error(f"❌ Failed to load Function Apps: {e}")
-                st.session_state.function_apps = {'choices': [], 'map': {}}
-                return
-    
-    func_choices = st.session_state.function_apps['choices']
-    func_map = st.session_state.function_apps['map']
-    
-    if not func_choices:
-        st.warning("⚠️ No Function Apps found in your subscription.")
-        if st.button("🔄 Refresh Function Apps"):
-            if 'function_apps' in st.session_state:
-                del st.session_state['function_apps']
-            st.rerun()
-        return
-    
-    # Function App selection and deployment
-    with st.form("function_app_agent_form"):
-        st.markdown("**Select Function App to Deploy as Agent**")
-        
-        func_sel = st.selectbox(
-            "Function App to Deploy",
-            func_choices,
-            index=0,
-            help="Select an Azure Function App to deploy as an AI Foundry agent"
-        )
-        
-        # Custom agent name (optional)
-        custom_agent_name = st.text_input(
-            "Custom Agent Name (Optional)",
-            placeholder="Leave empty to use function app name",
-            help="Customize the agent name, or leave empty to use the function app name"
-        )
-        
-        # Agent description
-        agent_description = st.text_area(
-            "Agent Description",
-            placeholder="Describe what this function does and when to use it...",
-            help="Provide a description of the function's purpose and capabilities",
-            height=100
-        )
-        
-        deploy_func_submitted = st.form_submit_button("🚀 Deploy Function App as Agent", type="primary")
-        
-        if deploy_func_submitted:
-            if func_sel and agent_description:
-                try:
-                    with st.spinner(f"Deploying {func_sel} as AI Foundry agent..."):
-                        # Get function app details
-                        app_name, resource_group = func_map[func_sel]
-                        
-                        # Build function URL (basic pattern - may need adjustment based on function structure)
-                        func_url = f"https://{app_name}.azurewebsites.net/api"
-                        
-                        # Use custom name or function app name
-                        agent_name = custom_agent_name.strip() if custom_agent_name.strip() else f"{app_name}-agent"
-                        
-                        # Get deployment service
-                        deployment_service = st.session_state.ai_foundry_deployment_service
-                        deployment_service.set_project_endpoint(deployment_endpoint)
-                        
-                        # Get function key from environment
-                        function_key = os.getenv('AGENT_FUNC_KEY', '')
-                        if not function_key:
-                            st.error("❌ AGENT_FUNC_KEY environment variable not set. This is required for Function App authentication.")
-                            st.markdown("💡 **Solution**: Set `AGENT_FUNC_KEY` in your `.env` file with your Function App host key")
-                            return  # Exit the function if no key is provided
-                        
-                        # Deploy the function as an agent
-                        print(f"🔍 DEBUG: [Advanced Section] Creating agent with parameters:")
-                        print(f"   - project_endpoint: {deployment_endpoint}")
-                        print(f"   - agent_name: {agent_name}")
-                        print(f"   - base_url: {func_url}")
-                        print(f"   - function_key: {'***' if function_key else 'NOT SET'}")
-                        
-                        success, message, agent_data = deployment_service.create_ai_foundry_agent(
-                            project_endpoint=deployment_endpoint,
-                            agent_name=agent_name,
-                            base_url=func_url,
-                            function_key=function_key
-                        )
-                        
-                        print(f"🔍 DEBUG: [Advanced Section] Agent creation result:")
-                        print(f"   - success: {success}")
-                        print(f"   - message: {message}")
-                        print(f"   - agent_data: {agent_data}")
-                        
-                        if success:
-                            st.success(f"✅ {message}")
-                            st.markdown("**Agent Details:**")
-                            st.json(agent_data)
-                            
-                            # Show deployment info
-                            st.info(f"""
-                            **Deployment Summary:**
-                            - **Function App**: {app_name} (Resource Group: {resource_group})
-                            - **Agent Name**: {agent_name}
-                            - **Project Endpoint**: {deployment_endpoint}
-                            - **Function URL**: {func_url}
-                            """)
-                            
-                            # Clear agents cache to refresh
-                            if 'current_agents' in st.session_state:
-                                del st.session_state['current_agents']
-                                
-                        else:
-                            st.error(f"❌ {message}")
-                            
-                except Exception as e:
-                    st.error(f"❌ Failed to deploy Function App as agent: {str(e)}")
-                    with st.expander("🔍 Error Details", expanded=False):
-                        st.code(str(e))
-            else:
-                st.warning("⚠️ Please select a Function App and provide a description")
 
 def check_ai_foundry_permissions(account_name: str, resource_group: str):
     """Check if the user has the required permissions for AI Foundry agent deployment."""
     try:
         from azure.identity import DefaultAzureCredential
         from azure.mgmt.cognitiveservices import CognitiveServicesManagementClient
-        import subprocess
-        import json
         
         st.info("🔍 **Checking your Azure permissions for AI Foundry agent deployment...**")
         
@@ -1151,12 +768,3 @@ az role assignment list \\
     except Exception as e:
         st.error(f"❌ **Permission Check Failed**: {str(e)}")
         st.code(traceback.format_exc())
-
-    # Delete Deployment Tab
-    with tab_delete:
-        # Import and render the delete deployment tab
-        from app.tabs.delete_deployment_tab import render_delete_deployment_tab
-        render_delete_deployment_tab(
-            session_state=session_state,
-            **kwargs
-        )
