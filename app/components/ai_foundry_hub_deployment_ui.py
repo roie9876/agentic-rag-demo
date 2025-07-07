@@ -256,11 +256,38 @@ class AIFoundryHubDeploymentUI:
             # DNS zone location option
             dns_zone_option = st.radio(
                 "DNS Zone Location",
-                options=["Use current deployment location", "Specify custom location"],
-                help="Choose whether to use DNS zones in the same subscription/resource group as deployment, or specify a different location"
+                options=["Use existing DNS zones in private-rg", "Specify custom location", "Create new zones in deployment location"],
+                help="Choose whether to use existing DNS zones in private-rg, specify a different location, or create new zones"
             )
             
-            if dns_zone_option == "Specify custom location":
+            if dns_zone_option == "Use existing DNS zones in private-rg":
+                # Default to private-rg resource group
+                config.dns_zone_subscription_id = ""  # Current subscription
+                config.dns_zone_resource_group_name = "private-rg"
+                config.create_dns_zones_if_not_exist = False
+                
+                st.info("ℹ️ Using existing DNS zones in the 'private-rg' resource group")
+                
+                # Validate DNS zones exist in private-rg
+                with st.spinner("Validating DNS zones in private-rg..."):
+                    zone_status = self.service.validate_dns_zones_exist("", "private-rg")
+                
+                if zone_status:
+                    st.subheader("🔍 DNS Zone Validation")
+                    all_zones_exist = all(zone_status.values())
+                    
+                    for zone_name, exists in zone_status.items():
+                        if exists:
+                            st.success(f"✅ {zone_name}")
+                        else:
+                            st.error(f"❌ {zone_name}")
+                    
+                    if not all_zones_exist:
+                        st.error("⚠️ Some required DNS zones are missing in private-rg. Please create them or use a different option.")
+                    else:
+                        st.success("🎉 All required DNS zones found in private-rg!")
+                
+            elif dns_zone_option == "Specify custom location":
                 # Get available subscriptions
                 subscriptions = self.service.get_available_subscriptions()
                 
@@ -327,16 +354,13 @@ class AIFoundryHubDeploymentUI:
                 else:
                     st.error("❌ Unable to load subscriptions")
             else:
-                # Use current deployment location
+                # Create new zones in deployment location
                 config.dns_zone_subscription_id = ""
                 config.dns_zone_resource_group_name = ""
-                config.create_dns_zones_if_not_exist = st.checkbox(
-                    "🆕 Create DNS zones if they don't exist in deployment resource group",
-                    value=config.create_dns_zones_if_not_exist,
-                    help="When checked, DNS zones will be created in the same resource group as the deployment if they don't exist"
-                )
+                config.create_dns_zones_if_not_exist = True
                 
-                st.info("ℹ️ DNS zones will be expected in the same subscription and resource group as your deployment")
+                st.warning("⚠️ New DNS zones will be created in the deployment resource group")
+                st.info("ℹ️ DNS zones will be created in the same subscription and resource group as your deployment")
 
     def _render_network_config(self, config: AIFoundryHubDeploymentConfig) -> None:
         """Render network configuration section."""
@@ -1179,15 +1203,19 @@ class AIFoundryHubDeploymentUI:
             st.write(f"**Status:** {deployment['status']}")
         
         with col2:
-            if deployment['status'] == 'completed':
+            if deployment['status'] in ['completed', 'succeeded']:
                 if deployment.get('success', False):
                     st.success("✅ Deployment Completed Successfully")
                 else:
                     st.error("❌ Deployment Failed")
-            elif deployment['status'] == 'starting':
+            elif deployment['status'] in ['starting', 'running', 'accepted']:
                 st.info("🚀 Deployment In Progress")
+            elif deployment['status'] in ['failed']:
+                st.error("❌ Deployment Failed")
+            elif deployment['status'] in ['cancelled']:
+                st.warning("⚠️ Deployment Cancelled")
             else:
-                st.warning("⚠️ Unknown Status")
+                st.warning(f"⚠️ Status: {deployment['status']}")
         
         # Refresh button
         if st.button("🔄 Refresh Status"):
@@ -1204,6 +1232,7 @@ class AIFoundryHubDeploymentUI:
                 provisioning_state = properties.get('provisioningState', 'Unknown')
                 
                 st.session_state.current_deployment['status'] = provisioning_state.lower()
+                st.session_state.current_deployment['success'] = (provisioning_state == 'Succeeded')
                 
                 # Display detailed status
                 st.markdown("### 📊 Detailed Status")

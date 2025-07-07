@@ -5,9 +5,13 @@ param projectName string
 param accountName string
 param projectCapHost string
 
-var threadConnections = ['${cosmosDBConnection}']
-var storageConnections = ['${azureStorageConnection}']
-var vectorStoreConnections = ['${aiSearchConnection}']
+// Create arrays only for non-empty connections
+var threadConnections = cosmosDBConnection != '' ? [cosmosDBConnection] : []
+var storageConnections = azureStorageConnection != '' ? [azureStorageConnection] : []
+var vectorStoreConnections = aiSearchConnection != '' ? [aiSearchConnection] : []
+
+// Check if we have any connections at all
+var hasAnyConnections = length(threadConnections) > 0 || length(storageConnections) > 0 || length(vectorStoreConnections) > 0
 
 
 resource account 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' existing = {
@@ -19,7 +23,9 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-04-01-previ
   parent: account
 }
 
-resource projectCapabilityHost 'Microsoft.CognitiveServices/accounts/projects/capabilityHosts@2025-04-01-preview' = {
+// Only create capability host if we have at least one service connection
+// AI Foundry Agent capability hosts require at least one service to be useful
+resource projectCapabilityHost 'Microsoft.CognitiveServices/accounts/projects/capabilityHosts@2025-04-01-preview' = if (hasAnyConnections) {
   name: projectCapHost
   parent: project
   properties: {
@@ -28,7 +34,6 @@ resource projectCapabilityHost 'Microsoft.CognitiveServices/accounts/projects/ca
     storageConnections: storageConnections
     threadStorageConnections: threadConnections
   }
-
 }
 
-output projectCapHost string = projectCapabilityHost.name
+output projectCapHost string = hasAnyConnections ? projectCapabilityHost.name : ''

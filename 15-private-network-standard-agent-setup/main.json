@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.36.1.42791",
-      "templateHash": "11314829526716199661"
+      "templateHash": "16180141189593263275"
     }
   },
   "parameters": {
@@ -40,37 +40,37 @@
     },
     "modelName": {
       "type": "string",
-      "defaultValue": "gpt-4o",
+      "defaultValue": "gpt-4.1",
       "metadata": {
-        "description": "The name of the model you want to deploy"
+        "description": "The name of the model to deploy - FIXED: gpt-4.1"
       }
     },
     "modelFormat": {
       "type": "string",
       "defaultValue": "OpenAI",
       "metadata": {
-        "description": "The provider of your model"
+        "description": "The provider of your model - FIXED: OpenAI"
       }
     },
     "modelVersion": {
       "type": "string",
-      "defaultValue": "2024-11-20",
+      "defaultValue": "2025-04-14",
       "metadata": {
-        "description": "The version of your model"
+        "description": "The version of your model - FIXED: 2025-04-14"
       }
     },
     "modelSkuName": {
       "type": "string",
       "defaultValue": "GlobalStandard",
       "metadata": {
-        "description": "The sku of your model deployment"
+        "description": "The sku of your model deployment - FIXED: GlobalStandard"
       }
     },
     "modelCapacity": {
       "type": "int",
       "defaultValue": 30,
       "metadata": {
-        "description": "The tokens per minute (TPM) of your model deployment"
+        "description": "The tokens per minute (TPM) of your model deployment - FIXED: 30"
       }
     },
     "deploymentTimestamp": {
@@ -196,6 +196,20 @@
         "description": "Skip Cosmos DB deployment entirely. When true, no Cosmos DB will be created or used."
       }
     },
+    "skipAiSearchDeployment": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Skip AI Search deployment entirely. When true, no AI Search will be created or used."
+      }
+    },
+    "skipStorageAccountDeployment": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Skip Storage Account deployment entirely. When true, no Storage Account will be created or used."
+      }
+    },
     "skipOpenAIDeployment": {
       "type": "bool",
       "defaultValue": true,
@@ -231,6 +245,27 @@
         "description": "Name of existing AI Services private endpoint (optional - if exists, will be used instead of creating new)"
       }
     },
+    "dnsZoneSubscriptionId": {
+      "type": "string",
+      "defaultValue": "[subscription().subscriptionId]",
+      "metadata": {
+        "description": "Subscription ID where private DNS zones are located"
+      }
+    },
+    "dnsZoneResourceGroupName": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().name]",
+      "metadata": {
+        "description": "Resource group name where private DNS zones are located"
+      }
+    },
+    "createDnsZonesIfNotExist": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Create new private DNS zones if they do not exist in the specified location"
+      }
+    },
     "projectCapHost": {
       "type": "string",
       "defaultValue": "caphostproj",
@@ -246,8 +281,8 @@
     "cosmosDBName": "[toLower(format('{0}{1}cosmosdb', parameters('aiServices'), variables('uniqueSuffix')))]",
     "aiSearchName": "[toLower(format('{0}{1}search', parameters('aiServices'), variables('uniqueSuffix')))]",
     "azureStorageName": "[toLower(format('{0}{1}storage', parameters('aiServices'), variables('uniqueSuffix')))]",
-    "storagePassedIn": "[not(equals(parameters('azureStorageAccountResourceId'), ''))]",
-    "searchPassedIn": "[not(equals(parameters('aiSearchResourceId'), ''))]",
+    "storagePassedIn": "[and(not(equals(parameters('azureStorageAccountResourceId'), '')), not(parameters('skipStorageAccountDeployment')))]",
+    "searchPassedIn": "[and(not(equals(parameters('aiSearchResourceId'), '')), not(parameters('skipAiSearchDeployment')))]",
     "cosmosPassedIn": "[and(not(equals(parameters('azureCosmosDBAccountResourceId'), '')), not(parameters('skipCosmosDBDeployment')))]",
     "existingVnetPassedIn": "[not(equals(parameters('existingVnetResourceId'), ''))]",
     "acsParts": "[split(parameters('aiSearchResourceId'), '/')]",
@@ -323,7 +358,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.36.1.42791",
-              "templateHash": "1639384254435944543"
+              "templateHash": "5723529139385198482"
             }
           },
           "parameters": {
@@ -616,12 +651,6 @@
                   },
                   "peSubnetName": {
                     "value": "[parameters('peSubnetName')]"
-                  },
-                  "agentSubnetPrefix": {
-                    "value": "[parameters('agentSubnetPrefix')]"
-                  },
-                  "peSubnetPrefix": {
-                    "value": "[parameters('peSubnetPrefix')]"
                   }
                 },
                 "template": {
@@ -631,7 +660,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.36.1.42791",
-                      "templateHash": "11205474059954286787"
+                      "templateHash": "7698527181182368415"
                     }
                   },
                   "parameters": {
@@ -667,20 +696,6 @@
                       "defaultValue": "pe-subnet",
                       "metadata": {
                         "description": "The name of existing Private Endpoint subnet"
-                      }
-                    },
-                    "agentSubnetPrefix": {
-                      "type": "string",
-                      "defaultValue": "",
-                      "metadata": {
-                        "description": "Address prefix for the agent subnet (not used, for compatibility)"
-                      }
-                    },
-                    "peSubnetPrefix": {
-                      "type": "string",
-                      "defaultValue": "",
-                      "metadata": {
-                        "description": "Address prefix for the private endpoint subnet (not used, for compatibility)"
                       }
                     }
                   },
@@ -1216,11 +1231,17 @@
           "aiSearchExists": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', format('validate-existing-resources-{0}-deployment', variables('uniqueSuffix'))), '2022-09-01').outputs.aiSearchExists.value]"
           },
+          "skipAiSearchDeployment": {
+            "value": "[parameters('skipAiSearchDeployment')]"
+          },
           "azureStorageAccountResourceId": {
             "value": "[parameters('azureStorageAccountResourceId')]"
           },
           "azureStorageExists": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', format('validate-existing-resources-{0}-deployment', variables('uniqueSuffix'))), '2022-09-01').outputs.azureStorageExists.value]"
+          },
+          "skipStorageAccountDeployment": {
+            "value": "[parameters('skipStorageAccountDeployment')]"
           },
           "cosmosDBResourceId": {
             "value": "[parameters('azureCosmosDBAccountResourceId')]"
@@ -1239,7 +1260,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.36.1.42791",
-              "templateHash": "10310363242563940378"
+              "templateHash": "11529983997066263618"
             }
           },
           "parameters": {
@@ -1290,6 +1311,20 @@
               "defaultValue": false,
               "metadata": {
                 "description": "Skip Cosmos DB deployment entirely. When true, no Cosmos DB will be created."
+              }
+            },
+            "skipAiSearchDeployment": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Skip AI Search deployment entirely. When true, no AI Search will be created."
+              }
+            },
+            "skipStorageAccountDeployment": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Skip Storage Account deployment entirely. When true, no Storage Account will be created."
               }
             },
             "aiSearchExists": {
@@ -1351,7 +1386,7 @@
               }
             },
             {
-              "condition": "[not(parameters('aiSearchExists'))]",
+              "condition": "[and(not(parameters('aiSearchExists')), not(parameters('skipAiSearchDeployment')))]",
               "type": "Microsoft.Search/searchServices",
               "apiVersion": "2024-06-01-preview",
               "name": "[parameters('aiSearchName')]",
@@ -1384,7 +1419,7 @@
               }
             },
             {
-              "condition": "[not(parameters('azureStorageExists'))]",
+              "condition": "[and(not(parameters('azureStorageExists')), not(parameters('skipStorageAccountDeployment')))]",
               "type": "Microsoft.Storage/storageAccounts",
               "apiVersion": "2023-05-01",
               "name": "[parameters('azureStorageName')]",
@@ -1407,35 +1442,35 @@
           "outputs": {
             "aiSearchName": {
               "type": "string",
-              "value": "[if(parameters('aiSearchExists'), variables('acsParts')[8], parameters('aiSearchName'))]"
+              "value": "[if(parameters('skipAiSearchDeployment'), '', if(parameters('aiSearchExists'), variables('acsParts')[8], parameters('aiSearchName')))]"
             },
             "aiSearchID": {
               "type": "string",
-              "value": "[if(parameters('aiSearchExists'), extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('acsParts')[2], variables('acsParts')[4]), 'Microsoft.Search/searchServices', variables('acsParts')[8]), resourceId('Microsoft.Search/searchServices', parameters('aiSearchName')))]"
+              "value": "[if(parameters('skipAiSearchDeployment'), '', if(parameters('aiSearchExists'), extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('acsParts')[2], variables('acsParts')[4]), 'Microsoft.Search/searchServices', variables('acsParts')[8]), resourceId('Microsoft.Search/searchServices', parameters('aiSearchName'))))]"
             },
             "aiSearchServiceResourceGroupName": {
               "type": "string",
-              "value": "[if(parameters('aiSearchExists'), variables('acsParts')[4], resourceGroup().name)]"
+              "value": "[if(parameters('skipAiSearchDeployment'), '', if(parameters('aiSearchExists'), variables('acsParts')[4], resourceGroup().name))]"
             },
             "aiSearchServiceSubscriptionId": {
               "type": "string",
-              "value": "[if(parameters('aiSearchExists'), variables('acsParts')[2], subscription().subscriptionId)]"
+              "value": "[if(parameters('skipAiSearchDeployment'), '', if(parameters('aiSearchExists'), variables('acsParts')[2], subscription().subscriptionId))]"
             },
             "azureStorageName": {
               "type": "string",
-              "value": "[if(parameters('azureStorageExists'), variables('azureStorageParts')[8], parameters('azureStorageName'))]"
+              "value": "[if(parameters('skipStorageAccountDeployment'), '', if(parameters('azureStorageExists'), variables('azureStorageParts')[8], parameters('azureStorageName')))]"
             },
             "azureStorageId": {
               "type": "string",
-              "value": "[if(parameters('azureStorageExists'), extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('azureStorageParts')[2], variables('azureStorageParts')[4]), 'Microsoft.Storage/storageAccounts', variables('azureStorageParts')[8]), resourceId('Microsoft.Storage/storageAccounts', parameters('azureStorageName')))]"
+              "value": "[if(parameters('skipStorageAccountDeployment'), '', if(parameters('azureStorageExists'), extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('azureStorageParts')[2], variables('azureStorageParts')[4]), 'Microsoft.Storage/storageAccounts', variables('azureStorageParts')[8]), resourceId('Microsoft.Storage/storageAccounts', parameters('azureStorageName'))))]"
             },
             "azureStorageResourceGroupName": {
               "type": "string",
-              "value": "[if(parameters('azureStorageExists'), variables('azureStorageParts')[4], resourceGroup().name)]"
+              "value": "[if(parameters('skipStorageAccountDeployment'), '', if(parameters('azureStorageExists'), variables('azureStorageParts')[4], resourceGroup().name))]"
             },
             "azureStorageSubscriptionId": {
               "type": "string",
-              "value": "[if(parameters('azureStorageExists'), variables('azureStorageParts')[2], subscription().subscriptionId)]"
+              "value": "[if(parameters('skipStorageAccountDeployment'), '', if(parameters('azureStorageExists'), variables('azureStorageParts')[2], subscription().subscriptionId))]"
             },
             "cosmosDBName": {
               "type": "string",
@@ -1471,15 +1506,9 @@
         "mode": "Incremental",
         "parameters": {
           "aiAccountName": "[if(parameters('skipOpenAIDeployment'), createObject('value', ''), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix'))), '2022-09-01').outputs.accountName.value))]",
-          "aiSearchName": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix'))), '2022-09-01').outputs.aiSearchName.value]"
-          },
-          "storageName": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix'))), '2022-09-01').outputs.azureStorageName.value]"
-          },
-          "cosmosDBName": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix'))), '2022-09-01').outputs.cosmosDBName.value]"
-          },
+          "aiSearchName": "[if(parameters('skipAiSearchDeployment'), createObject('value', ''), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix'))), '2022-09-01').outputs.aiSearchName.value))]",
+          "storageName": "[if(parameters('skipStorageAccountDeployment'), createObject('value', ''), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix'))), '2022-09-01').outputs.azureStorageName.value))]",
+          "cosmosDBName": "[if(parameters('skipCosmosDBDeployment'), createObject('value', ''), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix'))), '2022-09-01').outputs.cosmosDBName.value))]",
           "vnetName": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', format('vnet-{0}-{1}-deployment', variables('trimVnetName'), variables('uniqueSuffix'))), '2022-09-01').outputs.virtualNetworkName.value]"
           },
@@ -1528,8 +1557,23 @@
           "skipCosmosDB": {
             "value": "[parameters('skipCosmosDBDeployment')]"
           },
+          "skipAiSearch": {
+            "value": "[parameters('skipAiSearchDeployment')]"
+          },
+          "skipStorage": {
+            "value": "[parameters('skipStorageAccountDeployment')]"
+          },
           "skipOpenAI": {
             "value": "[parameters('skipOpenAIDeployment')]"
+          },
+          "dnsZoneSubscriptionId": {
+            "value": "[parameters('dnsZoneSubscriptionId')]"
+          },
+          "dnsZoneResourceGroupName": {
+            "value": "[parameters('dnsZoneResourceGroupName')]"
+          },
+          "createDnsZonesIfNotExist": {
+            "value": "[parameters('createDnsZonesIfNotExist')]"
           }
         },
         "template": {
@@ -1539,7 +1583,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.36.1.42791",
-              "templateHash": "16327419179321770764"
+              "templateHash": "12594897074065929876"
             }
           },
           "parameters": {
@@ -1620,25 +1664,25 @@
                 "description": "Skip Cosmos DB deployment entirely (set to true if no Cosmos DB needed)"
               }
             },
+            "skipAiSearch": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Skip AI Search deployment entirely (set to true if no AI Search needed)"
+              }
+            },
+            "skipStorage": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Skip Storage Account deployment entirely (set to true if no Storage needed)"
+              }
+            },
             "skipOpenAI": {
               "type": "bool",
               "defaultValue": true,
               "metadata": {
                 "description": "Skip OpenAI deployment entirely (set to true if no OpenAI/AI Services needed)"
-              }
-            },
-            "skipDnsZoneCreation": {
-              "type": "bool",
-              "defaultValue": true,
-              "metadata": {
-                "description": "Skip DNS zone creation if they already exist (set to true to avoid conflicts)"
-              }
-            },
-            "skipDnsZoneLinks": {
-              "type": "bool",
-              "defaultValue": true,
-              "metadata": {
-                "description": "Skip DNS zone links creation if they already exist (set to true to avoid conflicts)"
               }
             },
             "skipExistingPrivateEndpointDnsGroups": {
@@ -1703,6 +1747,27 @@
               "metadata": {
                 "description": "Resource group name for Cosmos DB account"
               }
+            },
+            "dnsZoneSubscriptionId": {
+              "type": "string",
+              "defaultValue": "[subscription().subscriptionId]",
+              "metadata": {
+                "description": "Subscription ID where private DNS zones are located"
+              }
+            },
+            "dnsZoneResourceGroupName": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().name]",
+              "metadata": {
+                "description": "Resource group name where private DNS zones are located"
+              }
+            },
+            "createDnsZonesIfNotExist": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Create new private DNS zones if they do not exist in the specified location"
+              }
             }
           },
           "resources": [
@@ -1730,7 +1795,7 @@
               }
             },
             {
-              "condition": "[equals(parameters('existingAiSearchPrivateEndpointName'), '')]",
+              "condition": "[and(equals(parameters('existingAiSearchPrivateEndpointName'), ''), not(parameters('skipAiSearch')))]",
               "type": "Microsoft.Network/privateEndpoints",
               "apiVersion": "2024-05-01",
               "name": "[format('{0}-private-endpoint', parameters('aiSearchName'))]",
@@ -1753,7 +1818,7 @@
               }
             },
             {
-              "condition": "[equals(parameters('existingStoragePrivateEndpointName'), '')]",
+              "condition": "[and(equals(parameters('existingStoragePrivateEndpointName'), ''), not(parameters('skipStorage')))]",
               "type": "Microsoft.Network/privateEndpoints",
               "apiVersion": "2024-05-01",
               "name": "[format('{0}-private-endpoint', parameters('storageName'))]",
@@ -1808,25 +1873,26 @@
                   {
                     "name": "[format('{0}-dns-aiserv-config', parameters('aiAccountName'))]",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.services.ai.azure.com')]"
+                      "privateDnsZoneId": "[if(parameters('createDnsZonesIfNotExist'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation'), '2022-09-01').outputs.aiServicesZoneId.value, extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Network/privateDnsZones', 'privatelink.services.ai.azure.com'))]"
                     }
                   },
                   {
                     "name": "[format('{0}-dns-openai-config', parameters('aiAccountName'))]",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.openai.azure.com')]"
+                      "privateDnsZoneId": "[if(parameters('createDnsZonesIfNotExist'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation'), '2022-09-01').outputs.openAiZoneId.value, extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Network/privateDnsZones', 'privatelink.openai.azure.com'))]"
                     }
                   },
                   {
                     "name": "[format('{0}-dns-cogserv-config', parameters('aiAccountName'))]",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com')]"
+                      "privateDnsZoneId": "[if(parameters('createDnsZonesIfNotExist'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation'), '2022-09-01').outputs.cognitiveServicesZoneId.value, extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com'))]"
                     }
                   }
                 ]
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-private-endpoint', parameters('aiAccountName')))]"
+                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-private-endpoint', parameters('aiAccountName')))]",
+                "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation')]"
               ]
             },
             {
@@ -1839,26 +1905,29 @@
                   {
                     "name": "[format('{0}-dns-aiserv-config', parameters('aiAccountName'))]",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.services.ai.azure.com')]"
+                      "privateDnsZoneId": "[if(parameters('createDnsZonesIfNotExist'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation'), '2022-09-01').outputs.aiServicesZoneId.value, extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Network/privateDnsZones', 'privatelink.services.ai.azure.com'))]"
                     }
                   },
                   {
                     "name": "[format('{0}-dns-openai-config', parameters('aiAccountName'))]",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.openai.azure.com')]"
+                      "privateDnsZoneId": "[if(parameters('createDnsZonesIfNotExist'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation'), '2022-09-01').outputs.openAiZoneId.value, extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Network/privateDnsZones', 'privatelink.openai.azure.com'))]"
                     }
                   },
                   {
                     "name": "[format('{0}-dns-cogserv-config', parameters('aiAccountName'))]",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com')]"
+                      "privateDnsZoneId": "[if(parameters('createDnsZonesIfNotExist'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation'), '2022-09-01').outputs.cognitiveServicesZoneId.value, extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com'))]"
                     }
                   }
                 ]
-              }
+              },
+              "dependsOn": [
+                "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation')]"
+              ]
             },
             {
-              "condition": "[equals(parameters('existingAiSearchPrivateEndpointName'), '')]",
+              "condition": "[and(equals(parameters('existingAiSearchPrivateEndpointName'), ''), not(parameters('skipAiSearch')))]",
               "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
               "apiVersion": "2024-05-01",
               "name": "[format('{0}/{1}', format('{0}-private-endpoint', parameters('aiSearchName')), format('{0}-dns-group', parameters('aiSearchName')))]",
@@ -1867,13 +1936,14 @@
                   {
                     "name": "[format('{0}-dns-config', parameters('aiSearchName'))]",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.search.windows.net')]"
+                      "privateDnsZoneId": "[if(parameters('createDnsZonesIfNotExist'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation'), '2022-09-01').outputs.aiSearchZoneId.value, extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Network/privateDnsZones', 'privatelink.search.windows.net'))]"
                     }
                   }
                 ]
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-private-endpoint', parameters('aiSearchName')))]"
+                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-private-endpoint', parameters('aiSearchName')))]",
+                "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation')]"
               ]
             },
             {
@@ -1886,14 +1956,17 @@
                   {
                     "name": "[format('{0}-dns-config', parameters('aiSearchName'))]",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.search.windows.net')]"
+                      "privateDnsZoneId": "[if(parameters('createDnsZonesIfNotExist'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation'), '2022-09-01').outputs.aiSearchZoneId.value, extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Network/privateDnsZones', 'privatelink.search.windows.net'))]"
                     }
                   }
                 ]
-              }
+              },
+              "dependsOn": [
+                "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation')]"
+              ]
             },
             {
-              "condition": "[equals(parameters('existingStoragePrivateEndpointName'), '')]",
+              "condition": "[and(equals(parameters('existingStoragePrivateEndpointName'), ''), not(parameters('skipStorage')))]",
               "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
               "apiVersion": "2024-05-01",
               "name": "[format('{0}/{1}', format('{0}-private-endpoint', parameters('storageName')), format('{0}-dns-group', parameters('storageName')))]",
@@ -1902,12 +1975,13 @@
                   {
                     "name": "[format('{0}-dns-config', parameters('storageName'))]",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', format('privatelink.blob.{0}', environment().suffixes.storage))]"
+                      "privateDnsZoneId": "[if(parameters('createDnsZonesIfNotExist'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation'), '2022-09-01').outputs.storageZoneId.value, extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Network/privateDnsZones', format('privatelink.blob.{0}', environment().suffixes.storage)))]"
                     }
                   }
                 ]
               },
               "dependsOn": [
+                "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation')]",
                 "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-private-endpoint', parameters('storageName')))]"
               ]
             },
@@ -1921,11 +1995,14 @@
                   {
                     "name": "[format('{0}-dns-config', parameters('storageName'))]",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', format('privatelink.blob.{0}', environment().suffixes.storage))]"
+                      "privateDnsZoneId": "[if(parameters('createDnsZonesIfNotExist'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation'), '2022-09-01').outputs.storageZoneId.value, extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Network/privateDnsZones', format('privatelink.blob.{0}', environment().suffixes.storage)))]"
                     }
                   }
                 ]
-              }
+              },
+              "dependsOn": [
+                "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation')]"
+              ]
             },
             {
               "condition": "[and(equals(parameters('existingCosmosDBPrivateEndpointName'), ''), not(parameters('skipCosmosDB')))]",
@@ -1937,13 +2014,14 @@
                   {
                     "name": "[format('{0}-dns-config', parameters('cosmosDBName'))]",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com')]"
+                      "privateDnsZoneId": "[if(not(parameters('skipCosmosDB')), if(parameters('createDnsZonesIfNotExist'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation'), '2022-09-01').outputs.cosmosDBZoneId.value, extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com')), '')]"
                     }
                   }
                 ]
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-private-endpoint', parameters('cosmosDBName')))]"
+                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-private-endpoint', parameters('cosmosDBName')))]",
+                "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation')]"
               ]
             },
             {
@@ -1956,10 +2034,286 @@
                   {
                     "name": "[format('{0}-dns-config', parameters('cosmosDBName'))]",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com')]"
+                      "privateDnsZoneId": "[if(not(parameters('skipCosmosDB')), if(parameters('createDnsZonesIfNotExist'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation'), '2022-09-01').outputs.cosmosDBZoneId.value, extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com')), '')]"
                     }
                   }
                 ]
+              },
+              "dependsOn": [
+                "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('dnsZoneSubscriptionId'), parameters('dnsZoneResourceGroupName')), 'Microsoft.Resources/deployments', 'dns-zones-creation')]"
+              ]
+            },
+            {
+              "condition": "[parameters('createDnsZonesIfNotExist')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2022-09-01",
+              "name": "dns-zones-creation",
+              "subscriptionId": "[parameters('dnsZoneSubscriptionId')]",
+              "resourceGroup": "[parameters('dnsZoneResourceGroupName')]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "createAiServicesZone": {
+                    "value": "[not(parameters('skipOpenAI'))]"
+                  },
+                  "createOpenAiZone": {
+                    "value": "[not(parameters('skipOpenAI'))]"
+                  },
+                  "createCognitiveServicesZone": {
+                    "value": "[not(parameters('skipOpenAI'))]"
+                  },
+                  "createAiSearchZone": {
+                    "value": "[not(parameters('skipAiSearch'))]"
+                  },
+                  "createStorageZone": {
+                    "value": "[not(parameters('skipStorage'))]"
+                  },
+                  "createCosmosDBZone": {
+                    "value": "[not(parameters('skipCosmosDB'))]"
+                  },
+                  "vnetId": {
+                    "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('vnetSubscriptionId'), parameters('vnetResourceGroupName')), 'Microsoft.Network/virtualNetworks', parameters('vnetName'))]"
+                  },
+                  "suffix": {
+                    "value": "[parameters('suffix')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.36.1.42791",
+                      "templateHash": "13258257240620880287"
+                    }
+                  },
+                  "parameters": {
+                    "createAiServicesZone": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Create AI Services private DNS zone"
+                      }
+                    },
+                    "createOpenAiZone": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Create OpenAI private DNS zone"
+                      }
+                    },
+                    "createCognitiveServicesZone": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Create Cognitive Services private DNS zone"
+                      }
+                    },
+                    "createAiSearchZone": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Create AI Search private DNS zone"
+                      }
+                    },
+                    "createStorageZone": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Create Storage private DNS zone"
+                      }
+                    },
+                    "createCosmosDBZone": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Create Cosmos DB private DNS zone"
+                      }
+                    },
+                    "vnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Virtual Network Resource ID for linking"
+                      }
+                    },
+                    "suffix": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Suffix for unique resource names"
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "condition": "[parameters('createAiServicesZone')]",
+                      "type": "Microsoft.Network/privateDnsZones",
+                      "apiVersion": "2020-06-01",
+                      "name": "privatelink.services.ai.azure.com",
+                      "location": "global"
+                    },
+                    {
+                      "condition": "[parameters('createOpenAiZone')]",
+                      "type": "Microsoft.Network/privateDnsZones",
+                      "apiVersion": "2020-06-01",
+                      "name": "privatelink.openai.azure.com",
+                      "location": "global"
+                    },
+                    {
+                      "condition": "[parameters('createCognitiveServicesZone')]",
+                      "type": "Microsoft.Network/privateDnsZones",
+                      "apiVersion": "2020-06-01",
+                      "name": "privatelink.cognitiveservices.azure.com",
+                      "location": "global"
+                    },
+                    {
+                      "condition": "[parameters('createAiSearchZone')]",
+                      "type": "Microsoft.Network/privateDnsZones",
+                      "apiVersion": "2020-06-01",
+                      "name": "privatelink.search.windows.net",
+                      "location": "global"
+                    },
+                    {
+                      "condition": "[parameters('createStorageZone')]",
+                      "type": "Microsoft.Network/privateDnsZones",
+                      "apiVersion": "2020-06-01",
+                      "name": "[format('privatelink.blob.{0}', environment().suffixes.storage)]",
+                      "location": "global"
+                    },
+                    {
+                      "condition": "[parameters('createCosmosDBZone')]",
+                      "type": "Microsoft.Network/privateDnsZones",
+                      "apiVersion": "2020-06-01",
+                      "name": "privatelink.documents.azure.com",
+                      "location": "global"
+                    },
+                    {
+                      "condition": "[parameters('createAiServicesZone')]",
+                      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+                      "apiVersion": "2024-06-01",
+                      "name": "[format('{0}/{1}', 'privatelink.services.ai.azure.com', format('aiServices-{0}-link', parameters('suffix')))]",
+                      "location": "global",
+                      "properties": {
+                        "virtualNetwork": {
+                          "id": "[parameters('vnetId')]"
+                        },
+                        "registrationEnabled": false
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.services.ai.azure.com')]"
+                      ]
+                    },
+                    {
+                      "condition": "[parameters('createOpenAiZone')]",
+                      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+                      "apiVersion": "2024-06-01",
+                      "name": "[format('{0}/{1}', 'privatelink.openai.azure.com', format('openAi-{0}-link', parameters('suffix')))]",
+                      "location": "global",
+                      "properties": {
+                        "virtualNetwork": {
+                          "id": "[parameters('vnetId')]"
+                        },
+                        "registrationEnabled": false
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.openai.azure.com')]"
+                      ]
+                    },
+                    {
+                      "condition": "[parameters('createCognitiveServicesZone')]",
+                      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+                      "apiVersion": "2024-06-01",
+                      "name": "[format('{0}/{1}', 'privatelink.cognitiveservices.azure.com', format('cognitiveServices-{0}-link', parameters('suffix')))]",
+                      "location": "global",
+                      "properties": {
+                        "virtualNetwork": {
+                          "id": "[parameters('vnetId')]"
+                        },
+                        "registrationEnabled": false
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com')]"
+                      ]
+                    },
+                    {
+                      "condition": "[parameters('createAiSearchZone')]",
+                      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+                      "apiVersion": "2024-06-01",
+                      "name": "[format('{0}/{1}', 'privatelink.search.windows.net', format('aiSearch-{0}-link', parameters('suffix')))]",
+                      "location": "global",
+                      "properties": {
+                        "virtualNetwork": {
+                          "id": "[parameters('vnetId')]"
+                        },
+                        "registrationEnabled": false
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.search.windows.net')]"
+                      ]
+                    },
+                    {
+                      "condition": "[parameters('createStorageZone')]",
+                      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+                      "apiVersion": "2024-06-01",
+                      "name": "[format('{0}/{1}', format('privatelink.blob.{0}', environment().suffixes.storage), format('storage-{0}-link', parameters('suffix')))]",
+                      "location": "global",
+                      "properties": {
+                        "virtualNetwork": {
+                          "id": "[parameters('vnetId')]"
+                        },
+                        "registrationEnabled": false
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateDnsZones', format('privatelink.blob.{0}', environment().suffixes.storage))]"
+                      ]
+                    },
+                    {
+                      "condition": "[parameters('createCosmosDBZone')]",
+                      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+                      "apiVersion": "2024-06-01",
+                      "name": "[format('{0}/{1}', 'privatelink.documents.azure.com', format('cosmosDB-{0}-link', parameters('suffix')))]",
+                      "location": "global",
+                      "properties": {
+                        "virtualNetwork": {
+                          "id": "[parameters('vnetId')]"
+                        },
+                        "registrationEnabled": false
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com')]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "aiServicesZoneId": {
+                      "type": "string",
+                      "value": "[if(parameters('createAiServicesZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.services.ai.azure.com'), '')]"
+                    },
+                    "openAiZoneId": {
+                      "type": "string",
+                      "value": "[if(parameters('createOpenAiZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.openai.azure.com'), '')]"
+                    },
+                    "cognitiveServicesZoneId": {
+                      "type": "string",
+                      "value": "[if(parameters('createCognitiveServicesZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com'), '')]"
+                    },
+                    "aiSearchZoneId": {
+                      "type": "string",
+                      "value": "[if(parameters('createAiSearchZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.search.windows.net'), '')]"
+                    },
+                    "storageZoneId": {
+                      "type": "string",
+                      "value": "[if(parameters('createStorageZone'), resourceId('Microsoft.Network/privateDnsZones', format('privatelink.blob.{0}', environment().suffixes.storage)), '')]"
+                    },
+                    "cosmosDBZoneId": {
+                      "type": "string",
+                      "value": "[if(parameters('createCosmosDBZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com'), '')]"
+                    }
+                  }
+                }
               }
             }
           ]
@@ -2030,7 +2384,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.36.1.42791",
-              "templateHash": "7933177748798994308"
+              "templateHash": "8823779839860241806"
             }
           },
           "parameters": {
@@ -2077,8 +2431,27 @@
               "type": "string"
             }
           },
+          "variables": {
+            "hasCosmosDB": "[not(equals(parameters('cosmosDBName'), ''))]",
+            "hasAiSearch": "[not(equals(parameters('aiSearchName'), ''))]",
+            "hasStorage": "[not(equals(parameters('azureStorageName'), ''))]"
+          },
           "resources": [
             {
+              "type": "Microsoft.CognitiveServices/accounts/projects",
+              "apiVersion": "2025-04-01-preview",
+              "name": "[format('{0}/{1}', parameters('accountName'), parameters('projectName'))]",
+              "location": "[parameters('location')]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {
+                "description": "[parameters('projectDescription')]",
+                "displayName": "[parameters('displayName')]"
+              }
+            },
+            {
+              "condition": "[variables('hasCosmosDB')]",
               "type": "Microsoft.CognitiveServices/accounts/projects/connections",
               "apiVersion": "2025-04-01-preview",
               "name": "[format('{0}/{1}/{2}', parameters('accountName'), parameters('projectName'), parameters('cosmosDBName'))]",
@@ -2097,6 +2470,7 @@
               ]
             },
             {
+              "condition": "[variables('hasStorage')]",
               "type": "Microsoft.CognitiveServices/accounts/projects/connections",
               "apiVersion": "2025-04-01-preview",
               "name": "[format('{0}/{1}/{2}', parameters('accountName'), parameters('projectName'), parameters('azureStorageName'))]",
@@ -2115,6 +2489,7 @@
               ]
             },
             {
+              "condition": "[variables('hasAiSearch')]",
               "type": "Microsoft.CognitiveServices/accounts/projects/connections",
               "apiVersion": "2025-04-01-preview",
               "name": "[format('{0}/{1}/{2}', parameters('accountName'), parameters('projectName'), parameters('aiSearchName'))]",
@@ -2131,19 +2506,6 @@
               "dependsOn": [
                 "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('accountName'), parameters('projectName'))]"
               ]
-            },
-            {
-              "type": "Microsoft.CognitiveServices/accounts/projects",
-              "apiVersion": "2025-04-01-preview",
-              "name": "[format('{0}/{1}', parameters('accountName'), parameters('projectName'))]",
-              "location": "[parameters('location')]",
-              "identity": {
-                "type": "SystemAssigned"
-              },
-              "properties": {
-                "description": "[parameters('projectDescription')]",
-                "displayName": "[parameters('displayName')]"
-              }
             }
           ],
           "outputs": {
@@ -2165,15 +2527,15 @@
             },
             "cosmosDBConnection": {
               "type": "string",
-              "value": "[parameters('cosmosDBName')]"
+              "value": "[if(variables('hasCosmosDB'), parameters('cosmosDBName'), '')]"
             },
             "azureStorageConnection": {
               "type": "string",
-              "value": "[parameters('azureStorageName')]"
+              "value": "[if(variables('hasStorage'), parameters('azureStorageName'), '')]"
             },
             "aiSearchConnection": {
               "type": "string",
-              "value": "[parameters('aiSearchName')]"
+              "value": "[if(variables('hasAiSearch'), parameters('aiSearchName'), '')]"
             }
           }
         }
@@ -2236,7 +2598,7 @@
       ]
     },
     {
-      "condition": "[not(parameters('skipOpenAIDeployment'))]",
+      "condition": "[and(not(parameters('skipOpenAIDeployment')), not(parameters('skipStorageAccountDeployment')))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
       "name": "[format('storage-{0}-{1}-deployment', variables('azureStorageName'), variables('uniqueSuffix'))]",
@@ -2360,6 +2722,7 @@
       ]
     },
     {
+      "condition": "[and(not(parameters('skipAiSearchDeployment')), not(parameters('skipOpenAIDeployment')))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
       "name": "[format('ai-search-ra-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix'))]",
@@ -2435,6 +2798,7 @@
       ]
     },
     {
+      "condition": "[and(not(parameters('skipOpenAIDeployment')), or(or(not(parameters('skipCosmosDBDeployment')), not(parameters('skipAiSearchDeployment'))), not(parameters('skipStorageAccountDeployment'))))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
       "name": "[format('capabilityHost-configuration-{0}-deployment', variables('uniqueSuffix'))]",
@@ -2450,15 +2814,9 @@
           "projectName": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix'))), '2022-09-01').outputs.projectName.value]"
           },
-          "cosmosDBConnection": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix'))), '2022-09-01').outputs.cosmosDBConnection.value]"
-          },
-          "azureStorageConnection": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix'))), '2022-09-01').outputs.azureStorageConnection.value]"
-          },
-          "aiSearchConnection": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix'))), '2022-09-01').outputs.aiSearchConnection.value]"
-          },
+          "cosmosDBConnection": "[if(parameters('skipCosmosDBDeployment'), createObject('value', ''), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix'))), '2022-09-01').outputs.cosmosDBConnection.value))]",
+          "azureStorageConnection": "[if(parameters('skipStorageAccountDeployment'), createObject('value', ''), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix'))), '2022-09-01').outputs.azureStorageConnection.value))]",
+          "aiSearchConnection": "[if(parameters('skipAiSearchDeployment'), createObject('value', ''), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix'))), '2022-09-01').outputs.aiSearchConnection.value))]",
           "projectCapHost": {
             "value": "[parameters('projectCapHost')]"
           }
@@ -2470,7 +2828,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.36.1.42791",
-              "templateHash": "16582287343638166779"
+              "templateHash": "15335329741398271231"
             }
           },
           "parameters": {
@@ -2494,18 +2852,14 @@
             }
           },
           "variables": {
-            "threadConnections": [
-              "[format('{0}', parameters('cosmosDBConnection'))]"
-            ],
-            "storageConnections": [
-              "[format('{0}', parameters('azureStorageConnection'))]"
-            ],
-            "vectorStoreConnections": [
-              "[format('{0}', parameters('aiSearchConnection'))]"
-            ]
+            "threadConnections": "[if(not(equals(parameters('cosmosDBConnection'), '')), createArray(parameters('cosmosDBConnection')), createArray())]",
+            "storageConnections": "[if(not(equals(parameters('azureStorageConnection'), '')), createArray(parameters('azureStorageConnection')), createArray())]",
+            "vectorStoreConnections": "[if(not(equals(parameters('aiSearchConnection'), '')), createArray(parameters('aiSearchConnection')), createArray())]",
+            "hasAnyConnections": "[or(or(greater(length(variables('threadConnections')), 0), greater(length(variables('storageConnections')), 0)), greater(length(variables('vectorStoreConnections')), 0))]"
           },
           "resources": [
             {
+              "condition": "[variables('hasAnyConnections')]",
               "type": "Microsoft.CognitiveServices/accounts/projects/capabilityHosts",
               "apiVersion": "2025-04-01-preview",
               "name": "[format('{0}/{1}/{2}', parameters('accountName'), parameters('projectName'), parameters('projectCapHost'))]",
@@ -2520,22 +2874,19 @@
           "outputs": {
             "projectCapHost": {
               "type": "string",
-              "value": "[parameters('projectCapHost')]"
+              "value": "[if(variables('hasAnyConnections'), parameters('projectCapHost'), '')]"
             }
           }
         }
       },
       "dependsOn": [
         "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix')))]",
         "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix')))]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('aiSearchServiceSubscriptionId'), variables('aiSearchServiceResourceGroupName')), 'Microsoft.Resources/deployments', format('ai-search-ra-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix')))]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('cosmosDBSubscriptionId'), variables('cosmosDBResourceGroupName')), 'Microsoft.Resources/deployments', format('cosmos-account-ra-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('{0}-private-endpoint', variables('uniqueSuffix')))]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('azureStorageSubscriptionId'), variables('azureStorageResourceGroupName')), 'Microsoft.Resources/deployments', format('storage-{0}-{1}-deployment', variables('azureStorageName'), variables('uniqueSuffix')))]"
+        "[resourceId('Microsoft.Resources/deployments', format('{0}-private-endpoint', variables('uniqueSuffix')))]"
       ]
     },
     {
+      "condition": "[and(not(parameters('skipOpenAIDeployment')), not(parameters('skipStorageAccountDeployment')))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
       "name": "[format('storage-containers-{0}-deployment', variables('uniqueSuffix'))]",
@@ -2608,13 +2959,13 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Resources/deployments', format('capabilityHost-configuration-{0}-deployment', variables('uniqueSuffix')))]",
         "[resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix')))]",
         "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix')))]",
         "[resourceId('Microsoft.Resources/deployments', format('format-project-workspace-id-{0}-deployment', variables('uniqueSuffix')))]"
       ]
     },
     {
+      "condition": "[and(not(parameters('skipOpenAIDeployment')), not(parameters('skipCosmosDBDeployment')))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
       "name": "[format('cosmos-ra-{0}-deployment', variables('uniqueSuffix'))]",
@@ -2707,7 +3058,6 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Resources/deployments', format('capabilityHost-configuration-{0}-deployment', variables('uniqueSuffix')))]",
         "[resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix')))]",
         "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix')))]",
         "[resourceId('Microsoft.Resources/deployments', format('format-project-workspace-id-{0}-deployment', variables('uniqueSuffix')))]",

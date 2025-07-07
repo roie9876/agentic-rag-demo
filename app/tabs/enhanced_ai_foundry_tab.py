@@ -121,9 +121,10 @@ def render_enhanced_ai_foundry_tab(
         st.sidebar.info("🔍 Or use discovery service to list subscriptions when needed")
     
     # Create tabs for different sections
-    tab_deploy_hub, tab_discover = st.tabs([
+    tab_deploy_hub, tab_discover, tab_delete = st.tabs([
         "🚀 Deploy New Account",
-        "🔍 Discover and Deploy Agent"
+        "🔍 Discover and Deploy Agent",
+        "🗑️ Delete Deployment"
     ])
     
     # Show performance info in debug section only (calculate after tabs are created)
@@ -1150,3 +1151,12 @@ az role assignment list \\
     except Exception as e:
         st.error(f"❌ **Permission Check Failed**: {str(e)}")
         st.code(traceback.format_exc())
+
+    # Delete Deployment Tab
+    with tab_delete:
+        # Import and render the delete deployment tab
+        from app.tabs.delete_deployment_tab import render_delete_deployment_tab
+        render_delete_deployment_tab(
+            session_state=session_state,
+            **kwargs
+        )

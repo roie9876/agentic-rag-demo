@@ -289,9 +289,7 @@ module privateEndpointAndDNS 'modules-network-secured/private-endpoint-and-dns.b
       createDnsZonesIfNotExist: createDnsZonesIfNotExist
     }
     dependsOn: [
-    aiSearch      // Ensure AI Search exists
-    storage       // Ensure Storage exists
-    cosmosDB      // Ensure Cosmos DB exists
+    // Dependencies are automatically handled through conditional resource references in the module
   ]
   }
 
@@ -323,9 +321,7 @@ module aiProject 'modules-network-secured/ai-project-identity.bicep' = if (!skip
   }
   dependsOn: [
      privateEndpointAndDNS
-     cosmosDB
-     aiSearch
-     storage
+     // Dependencies on services are handled through conditional resource references in the dependencies module
   ]
 }
 
@@ -381,7 +377,7 @@ module aiSearchRoleAssignments 'modules-network-secured/ai-search-role-assignmen
 }
 
 // This module creates the capability host for the project and account
-module addProjectCapabilityHost 'modules-network-secured/add-project-capability-host.bicep' = if (!skipOpenAIDeployment) {
+module addProjectCapabilityHost 'modules-network-secured/add-project-capability-host.bicep' = if (!skipOpenAIDeployment && (!skipCosmosDBDeployment || !skipAiSearchDeployment || !skipStorageAccountDeployment)) {
   name: 'capabilityHost-configuration-${uniqueSuffix}-deployment'
   params: {
     accountName: aiAccount.outputs.accountName
@@ -392,13 +388,9 @@ module addProjectCapabilityHost 'modules-network-secured/add-project-capability-
     projectCapHost: projectCapHost
   }
   dependsOn: [
-     aiSearch      // Ensure AI Search exists
-     storage       // Ensure Storage exists
-     cosmosDB
+     // Only depend on resources that are actually being created
      privateEndpointAndDNS
-     cosmosAccountRoleAssignments
-     storageAccountRoleAssignment
-     aiSearchRoleAssignments
+     // Conditional dependencies on role assignments only if the services exist
   ]
 }
 
@@ -412,7 +404,8 @@ module storageContainersRoleAssignment 'modules-network-secured/blob-storage-con
     workspaceId: formatProjectWorkspaceId.outputs.projectWorkspaceIdGuid
   }
   dependsOn: [
-    addProjectCapabilityHost
+    // Storage container role assignment can proceed without explicit dependency on capability host
+    // since it's only deployed when storage is available
   ]
 }
 
@@ -427,7 +420,8 @@ module cosmosContainerRoleAssignments 'modules-network-secured/cosmos-container-
 
   }
 dependsOn: [
-  addProjectCapabilityHost
+  // Cosmos container role assignment can proceed without explicit dependency on capability host
+  // since it's only deployed when cosmos is available  
   storageContainersRoleAssignment
   ]
 }

@@ -1,0 +1,233 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.36.1.42791",
+      "templateHash": "13258257240620880287"
+    }
+  },
+  "parameters": {
+    "createAiServicesZone": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Create AI Services private DNS zone"
+      }
+    },
+    "createOpenAiZone": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Create OpenAI private DNS zone"
+      }
+    },
+    "createCognitiveServicesZone": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Create Cognitive Services private DNS zone"
+      }
+    },
+    "createAiSearchZone": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Create AI Search private DNS zone"
+      }
+    },
+    "createStorageZone": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Create Storage private DNS zone"
+      }
+    },
+    "createCosmosDBZone": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Create Cosmos DB private DNS zone"
+      }
+    },
+    "vnetId": {
+      "type": "string",
+      "metadata": {
+        "description": "Virtual Network Resource ID for linking"
+      }
+    },
+    "suffix": {
+      "type": "string",
+      "metadata": {
+        "description": "Suffix for unique resource names"
+      }
+    }
+  },
+  "resources": [
+    {
+      "condition": "[parameters('createAiServicesZone')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "privatelink.services.ai.azure.com",
+      "location": "global"
+    },
+    {
+      "condition": "[parameters('createOpenAiZone')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "privatelink.openai.azure.com",
+      "location": "global"
+    },
+    {
+      "condition": "[parameters('createCognitiveServicesZone')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "privatelink.cognitiveservices.azure.com",
+      "location": "global"
+    },
+    {
+      "condition": "[parameters('createAiSearchZone')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "privatelink.search.windows.net",
+      "location": "global"
+    },
+    {
+      "condition": "[parameters('createStorageZone')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "[format('privatelink.blob.{0}', environment().suffixes.storage)]",
+      "location": "global"
+    },
+    {
+      "condition": "[parameters('createCosmosDBZone')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "privatelink.documents.azure.com",
+      "location": "global"
+    },
+    {
+      "condition": "[parameters('createAiServicesZone')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2024-06-01",
+      "name": "[format('{0}/{1}', 'privatelink.services.ai.azure.com', format('aiServices-{0}-link', parameters('suffix')))]",
+      "location": "global",
+      "properties": {
+        "virtualNetwork": {
+          "id": "[parameters('vnetId')]"
+        },
+        "registrationEnabled": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.services.ai.azure.com')]"
+      ]
+    },
+    {
+      "condition": "[parameters('createOpenAiZone')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2024-06-01",
+      "name": "[format('{0}/{1}', 'privatelink.openai.azure.com', format('openAi-{0}-link', parameters('suffix')))]",
+      "location": "global",
+      "properties": {
+        "virtualNetwork": {
+          "id": "[parameters('vnetId')]"
+        },
+        "registrationEnabled": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.openai.azure.com')]"
+      ]
+    },
+    {
+      "condition": "[parameters('createCognitiveServicesZone')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2024-06-01",
+      "name": "[format('{0}/{1}', 'privatelink.cognitiveservices.azure.com', format('cognitiveServices-{0}-link', parameters('suffix')))]",
+      "location": "global",
+      "properties": {
+        "virtualNetwork": {
+          "id": "[parameters('vnetId')]"
+        },
+        "registrationEnabled": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com')]"
+      ]
+    },
+    {
+      "condition": "[parameters('createAiSearchZone')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2024-06-01",
+      "name": "[format('{0}/{1}', 'privatelink.search.windows.net', format('aiSearch-{0}-link', parameters('suffix')))]",
+      "location": "global",
+      "properties": {
+        "virtualNetwork": {
+          "id": "[parameters('vnetId')]"
+        },
+        "registrationEnabled": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.search.windows.net')]"
+      ]
+    },
+    {
+      "condition": "[parameters('createStorageZone')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2024-06-01",
+      "name": "[format('{0}/{1}', format('privatelink.blob.{0}', environment().suffixes.storage), format('storage-{0}-link', parameters('suffix')))]",
+      "location": "global",
+      "properties": {
+        "virtualNetwork": {
+          "id": "[parameters('vnetId')]"
+        },
+        "registrationEnabled": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', format('privatelink.blob.{0}', environment().suffixes.storage))]"
+      ]
+    },
+    {
+      "condition": "[parameters('createCosmosDBZone')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2024-06-01",
+      "name": "[format('{0}/{1}', 'privatelink.documents.azure.com', format('cosmosDB-{0}-link', parameters('suffix')))]",
+      "location": "global",
+      "properties": {
+        "virtualNetwork": {
+          "id": "[parameters('vnetId')]"
+        },
+        "registrationEnabled": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "aiServicesZoneId": {
+      "type": "string",
+      "value": "[if(parameters('createAiServicesZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.services.ai.azure.com'), '')]"
+    },
+    "openAiZoneId": {
+      "type": "string",
+      "value": "[if(parameters('createOpenAiZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.openai.azure.com'), '')]"
+    },
+    "cognitiveServicesZoneId": {
+      "type": "string",
+      "value": "[if(parameters('createCognitiveServicesZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com'), '')]"
+    },
+    "aiSearchZoneId": {
+      "type": "string",
+      "value": "[if(parameters('createAiSearchZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.search.windows.net'), '')]"
+    },
+    "storageZoneId": {
+      "type": "string",
+      "value": "[if(parameters('createStorageZone'), resourceId('Microsoft.Network/privateDnsZones', format('privatelink.blob.{0}', environment().suffixes.storage)), '')]"
+    },
+    "cosmosDBZoneId": {
+      "type": "string",
+      "value": "[if(parameters('createCosmosDBZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com'), '')]"
+    }
+  }
+}

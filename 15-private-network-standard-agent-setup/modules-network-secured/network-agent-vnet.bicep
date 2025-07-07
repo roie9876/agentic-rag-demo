@@ -60,8 +60,6 @@ module existingVNet 'existing-vnet.bicep' = if (useExistingVnet && !createSubnet
     vnetSubscriptionId: existingVnetSubscriptionId
     agentSubnetName: agentSubnetName
     peSubnetName: peSubnetName
-    agentSubnetPrefix: agentSubnetPrefix
-    peSubnetPrefix: peSubnetPrefix
   }
 }
 
