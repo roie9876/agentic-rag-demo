@@ -365,19 +365,18 @@ def render_function_config_tab(
             col1, col2 = st.columns([2, 1])
             
             with col1:
-                # Test message input
+                # Test message input (used as path param)
                 test_message = st.text_area(
-                    "Test Message",
+                    "Test Message (Path Parameter)",
                     value="Hello, can you help me find information about Azure services?",
                     height=100,
-                    help="Enter a message to test your function with"
+                    help="Enter a message to test your function with (will be used as the path parameter)"
                 )
-                
-                # Function endpoint name
+                # Function endpoint name (legacy, for backward compatibility)
                 endpoint_name = st.text_input(
-                    "Function Endpoint",
+                    "Function Endpoint (Legacy, optional)",
                     value="agent_chat",
-                    help="The name of your function endpoint (usually 'agent_chat' or 'api')"
+                    help="(Optional) The name of your function endpoint (for legacy format)"
                 )
             
             with col2:
@@ -388,60 +387,30 @@ def render_function_config_tab(
                     type="password",
                     help="Function key for authentication (if required)"
                 )
-                
-                # URL format selection
+                # URL format selection (disabled, always Path Parameter)
                 url_format = st.selectbox(
                     "URL Format",
-                    ["Query Parameter", "JSON Body"],
-                    help="How to send the message to the function"
+                    ["Path Parameter"],
+                    help="How to send the message to the function",
+                    disabled=True
                 )
             
             if st.button("🔗 Generate Test URL"):
                 if test_message.strip():
-                    # Generate the test URL
-                    base_url = f"https://{app}.azurewebsites.net/api/{endpoint_name}"
-                    
-                    if url_format == "Query Parameter":
-                        # Encode the message as a query parameter
-                        encoded_message = urllib.parse.quote(test_message)
-                        
-                        if test_func_key:
-                            test_url = f"{base_url}?message={encoded_message}&code={test_func_key}"
-                        else:
-                            test_url = f"{base_url}?message={encoded_message}"
-                        
-                        st.success("✅ Test URL Generated!")
-                        st.markdown("**Copy this URL to test your function:**")
-                        st.code(test_url, language="text")
-                        
-                        # Also show curl command
-                        st.markdown("**Or use this curl command:**")
-                        curl_cmd = f'curl "{test_url}"'
-                        st.code(curl_cmd, language="bash")
-                        
-                    else:  # JSON Body format
-                        # For JSON body, show curl command with POST
-                        if test_func_key:
-                            json_url = f"{base_url}?code={test_func_key}"
-                        else:
-                            json_url = base_url
-                        
-                        st.success("✅ Test URL Generated!")
-                        st.markdown("**Use this curl command to test with JSON body:**")
-                        
-                        json_payload = {
-                            "message": test_message
-                        }
-                        
-                        curl_cmd = f'''curl -X POST "{json_url}" \\
-  -H "Content-Type: application/json" \\
-  -d '{{"message": "{test_message.replace('"', '\\"')}"}}' '''
-                        
-                        st.code(curl_cmd, language="bash")
-                        
-                        st.markdown("**Or simple GET URL:**")
-                        st.code(json_url, language="text")
-                    
+                    # Always use AgentFunction as function name
+                    base_url = f"https://{app}.azurewebsites.net/api/AgentFunction"
+                    encoded_message = urllib.parse.quote(test_message, safe="")
+                    test_url = f"{base_url}/{encoded_message}"
+                    # Always append &includesrc=true, with correct ?/& logic
+                    if test_func_key:
+                        test_url = f"{test_url}?code={test_func_key}&includesrc=true"
+                    else:
+                        test_url = f"{test_url}?includesrc=true"
+                    st.success("✅ Test URL Generated!")
+                    st.markdown("**Copy this URL to test your function:**")
+                    st.code(test_url, language="text")
+                    st.markdown("**Or use this curl command:**")
+                    st.code(f'curl "{test_url}"', language="bash")
                     # Additional testing information
                     st.info("""
                     **💡 Testing Tips:**
@@ -450,6 +419,5 @@ def render_function_config_tab(
                     - Monitor Azure Function logs for any errors
                     - Verify that managed identity and search index are configured correctly
                     """)
-                    
                 else:
                     st.warning("⚠️ Please enter a test message first")
