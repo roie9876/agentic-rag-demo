@@ -52,6 +52,9 @@ from app.ui.sharepoint_reports_tab import render_sharepoint_reports_tab, render_
 # Import enhanced AI Foundry components
 from app.tabs.enhanced_ai_foundry_tab import render_enhanced_ai_foundry_tab
 
+# Import Function Config tab
+from app.tabs.function_config_tab import render_function_config_tab
+
 # Import extracted modules
 from utils.azure_helpers import (
     get_search_credential,
@@ -62,6 +65,7 @@ from utils.azure_helpers import (
     reload_env_and_restart,
     env
 )
+from utils.file_utils import _st_data_editor
 from core.azure_clients import init_openai, init_search_client, init_agent_client
 # Import services
 from services.index_service import index_service
@@ -78,22 +82,6 @@ from app.ui.document_processing_info import display_processing_info
 from app.ui.components.index_creation_ui import render_index_creation_tab
 from utils.function_deployment import zip_function_folder
 
-def _st_data_editor(*args, **kwargs):
-    """
-    Wrapper that tries st.data_editor (Streamlit ≥ 1.29) and falls back to
-    st.experimental_data_editor for older releases.
-    """
-    if hasattr(st, "data_editor"):
-        return st.data_editor(*args, **kwargs)
-    elif hasattr(st, "experimental_data_editor"):
-        return st.experimental_data_editor(*args, **kwargs)
-    else:
-        st.error(
-            "⚠️ Your Streamlit version is too old for data‑editor. "
-            "Upgrade with:\n\n"
-            "    pip install --upgrade streamlit"
-        )
-        st.stop()
 # Reliable check whether code runs under `streamlit run …`
 try:
     from streamlit.runtime import exists as _st_in_runtime
@@ -1836,234 +1824,9 @@ def run_streamlit_ui() -> None:
     # ─────────────────── Tab 6 – Function Config ─────────────────────────
     with tab_cfg:
         health_block()
-        st.header("⚙️ Azure Function Configuration")
-        
-        # Load environment variables (updated for managed identity)
-        # Map local .env variables to Function App settings
-        local_to_function_mapping = {
-            # INDEX_NAME will be set from UI selection below - not from .env
-            "AGENT_NAME": "AGENT_NAME", 
-            "AZURE_SEARCH_ENDPOINT": "SERVICE_NAME",  # Extract service name from endpoint
-            "AZURE_OPENAI_ENDPOINT": "OPENAI_ENDPOINT",
-            "AZURE_OPENAI_ENDPOINT_41": "OPENAI_ENDPOINT",  # Support _41 suffix (preferred)
-            "AZURE_OPENAI_DEPLOYMENT": "OPENAI_DEPLOYMENT", 
-            "AZURE_OPENAI_DEPLOYMENT_41": "OPENAI_DEPLOYMENT",  # Support _41 suffix (preferred)
-            "AZURE_OPENAI_CHATGPT_DEPLOYMENT": "OPENAI_DEPLOYMENT",  # Alternative deployment name
-            # API_VERSION removed - should be empty when loading settings
-            "MAX_OUTPUT_SIZE": "MAX_OUTPUT_SIZE",
-            "RERANKER_THRESHOLD": "RERANKER_THRESHOLD", 
-            "TOP_K": "TOP_K",
-            "debug": "debug",
-            "includesrc": "includesrc",
-            # Legacy keys (optional for development/fallback compatibility)
-            "AZURE_OPENAI_KEY": "OPENAI_KEY",
-            "AZURE_OPENAI_KEY_41": "OPENAI_KEY",  # Support _41 suffix
-            "AZURE_SEARCH_KEY": "SEARCH_API_KEY"
-        }
-        
-        env_vars = {}
-        for local_key, function_key in local_to_function_mapping.items():
-            local_value = os.getenv(local_key, "")
-            
-            # Special handling for SERVICE_NAME - extract from AZURE_SEARCH_ENDPOINT
-            if function_key == "SERVICE_NAME" and local_value:
-                # Extract service name from https://service-name.search.windows.net
-                import re
-                match = re.search(r'https://([^.]+)\.search\.windows\.net', local_value)
-                if match:
-                    env_vars[function_key] = match.group(1)
-                else:
-                    env_vars[function_key] = ""
-            else:
-                # Only update if we don't have this function_key already, or if this is a _41 variant (preferred)
-                if function_key not in env_vars or local_key.endswith('_41'):
-                    if local_value:  # Only set if there's a value
-                        env_vars[function_key] = local_value
-        
-        # Set defaults for missing critical values
-        # NOTE: INDEX_NAME should come from UI selection, not from .env
-        # if not env_vars.get("INDEX_NAME") and st.session_state.get("selected_index"):
-        #     env_vars["INDEX_NAME"] = st.session_state.selected_index
-        
-        # Set default AGENT_NAME based on INDEX_NAME (will be set from UI below)
-        # if env_vars.get("INDEX_NAME") and not env_vars.get("AGENT_NAME"):
-        #     env_vars["AGENT_NAME"] = f"{env_vars['INDEX_NAME']}-agent"
-            
-        # API_VERSION now included - Function App needs this for OpenAI API calls
-
-        st.markdown("Configure environment variables for Azure Function deployment.")
-        
-        # Add information about managed identity
-        st.info("💡 **Managed Identity Configuration**: This setup prioritizes managed identity authentication. "
-                "API keys (AZURE_OPENAI_KEY, AZURE_SEARCH_KEY) are optional fallback credentials.")
-        
-        with st.expander("🔧 Managed Identity Setup Guide", expanded=False):
-            st.markdown("""
-            **Prerequisites for Managed Identity:**
-            1. **Function App Identity**: Enable system-assigned managed identity on your Function App
-            2. **RBAC Roles Required**:
-               - **Azure AI Search**: `Search Index Data Contributor` + `Search Service Contributor` 
-               - **Azure OpenAI**: `Cognitive Services OpenAI User`
-            3. **Environment Variables**: Only endpoint URLs and deployment names are required
-            
-            **Benefits:**
-            - ✅ No API keys to manage or rotate
-            - ✅ Enhanced security with Azure RBAC
-            - ✅ Automatic credential management
-            - ✅ Fallback to API keys for development/testing
-            """)
-
-        # Index selection for function config
-        index_options = st.session_state.get("available_indexes", [])
-        if index_options:
-            # Pre‑select value from .env if present
-            try:
-                preselect = index_options.index(env_vars.get("INDEX_NAME", index_options[0]))
-            except ValueError:
-                preselect = 0
-            idx_selected = st.selectbox("INDEX_NAME", index_options, index=preselect)
-        else:
-            st.warning("No index list detected – enter manually.")
-            idx_selected = st.text_input("INDEX_NAME", env_vars.get("INDEX_NAME", ""))
-
-        # Update env_vars with the chosen/typed value
-        env_vars["INDEX_NAME"] = idx_selected.strip()
-        env_vars["AGENT_NAME"] = f"{idx_selected.strip()}-agent" if idx_selected else ""
-
-        # Display the derived AGENT_NAME (read‑only)
-        st.text_input("AGENT_NAME", env_vars["AGENT_NAME"], disabled=True)
-
-        # Try to pre‑fill subscription from az cli
-        cli_sub = get_azure_subscription()
-        sub_id = st.text_input("Subscription ID", cli_sub)
-
-        # List Function Apps in this subscription
-        func_choices, func_map = list_function_apps(sub_id)
-        
-        if not func_choices and sub_id:
-            st.warning("⚠️ Could not list Function Apps automatically; fill manually.")
-
-        # Initialize session state for function app selection
-        if "selected_function_app" not in st.session_state:
-            st.session_state.selected_function_app = "-- manual input --"
-
-        func_sel_lbl = st.selectbox(
-            "Choose Function App",
-            ["-- manual input --"] + func_choices,
-            index=0 if st.session_state.selected_function_app == "-- manual input --" else 
-                  (func_choices.index(st.session_state.selected_function_app) + 1 
-                   if st.session_state.selected_function_app in func_choices else 0),
-            key="function_app_selector"
+        render_function_config_tab(
+            session_state=st.session_state
         )
-        
-        # Update session state when selection changes
-        st.session_state.selected_function_app = func_sel_lbl
-        st.session_state["func_map"] = func_map
-        st.session_state["func_choices"] = func_choices
-        
-        if func_sel_lbl != "-- manual input --":
-            app, rg, hostname = func_map[func_sel_lbl]
-            # Store in session state to prevent resets
-            st.session_state["current_rg"] = rg
-            st.session_state["current_app"] = app
-            st.session_state["current_hostname"] = hostname
-        else:
-            rg = st.text_input("Resource Group", 
-                             value=st.session_state.get("current_rg", os.getenv("AZURE_RG", "")),
-                             key="manual_rg_input")
-            app = st.text_input("Function App name", 
-                              value=st.session_state.get("current_app", os.getenv("AZURE_FUNCTION_APP", "")),
-                              key="manual_app_input")
-            # Update session state
-            st.session_state["current_rg"] = rg
-            st.session_state["current_app"] = app
-        
-        # Normalise variable names (func_name / func_rg) and keep old aliases
-        func_name = app
-        func_rg = rg
-
-        if not all((sub_id, rg, app)):
-            st.info("Fill subscription / RG / Function-App and click 🔄 Load settings.")
-        else:
-            if "func_raw" not in st.session_state:
-                st.session_state.func_raw = {}
-            if "func_df" not in st.session_state:
-                st.session_state.func_df = pd.DataFrame(columns=["key", "value"])
-
-            if st.button("🔄 Load settings"):
-                with st.spinner("Loading Function App settings..."):
-                    success, df, raw, error_msg = load_function_settings(rg, app, sub_id, env_vars)
-                    if success:
-                        st.session_state.func_raw = raw
-                        st.session_state.func_df = df
-                        st.success(f"Loaded & merged {len(df)} setting(s).")
-                        
-                        # Debug information
-                        with st.expander("🔍 Debug: Loaded Settings", expanded=False):
-                            st.write("**Environment variables mapped:**")
-                            for key, value in env_vars.items():
-                                if value:
-                                    display_value = value[:50] + "..." if len(value) > 50 else value
-                                    # Mask sensitive values
-                                    if "key" in key.lower() or "secret" in key.lower():
-                                        display_value = "••••••"
-                                    st.write(f"- `{key}`: {display_value}")
-                            
-                            st.write(f"**Function App settings loaded:** {len(raw)} items")
-                            st.write(f"**Final merged settings:** {len(df)} items")
-                    else:
-                        st.error(f"Failed to load: {error_msg}")
-                        
-                        # Show debug info on failure
-                        st.write("**Debug Information:**")
-                        st.write(f"- Resource Group: `{rg}`")
-                        st.write(f"- Function App: `{app}`") 
-                        st.write(f"- Subscription: `{sub_id}`")
-                        st.write(f"- Environment variables provided: {len([k for k, v in env_vars.items() if v])}")
-                        
-                        # Show available env vars (masked)
-                        with st.expander("Available Environment Variables", expanded=False):
-                            for key, value in env_vars.items():
-                                if value:
-                                    display_value = "••••••" if "key" in key.lower() else value[:30] + "..."
-                                    st.write(f"- `{key}`: {display_value}")
-
-        # Show editable table on every render once loaded
-        if st.session_state.get("func_df") is not None and not st.session_state.func_df.empty:
-            st.markdown("#### Function App Settings")
-            st.session_state.func_df = _st_data_editor(
-                st.session_state.func_df,
-                num_rows="dynamic",
-                use_container_width=True,
-                key="func_editor",
-            )
-
-            # Push edited settings back to the Function App
-            st.divider()
-            if st.button("💾 Push settings to Function"):
-                success, message = push_function_settings(
-                    func_rg, 
-                    func_name, 
-                    sub_id, 
-                    st.session_state.func_df,
-                    st.session_state.func_raw
-                )
-                if success:
-                    st.success(f"✅ {message} on **{func_name}**")
-                else:
-                    st.error(f"Failed to update Function settings:\n{message}")
-
-        # Deploy local ./function code to this Function App
-        st.divider()
-        if st.button("🚀 Deploy local code to Function"):
-            with st.spinner("⏳ Zipping and deploying, please wait…"):
-                success, message, stdout = deploy_function_code(func_rg, func_name, sub_id)
-                if success:
-                    st.success(f"✅ {message}")
-                    if stdout:
-                        st.text(stdout)
-                else:
-                    st.error(message)
 
     # ── Studio2Foundry Tab ────────────────────────────────────────────────
     with tab_studio2foundry:
