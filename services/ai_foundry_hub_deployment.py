@@ -195,18 +195,37 @@ class AIFoundryHubDeploymentService:
             return {}
 
     def validate_template_path(self) -> Tuple[bool, str]:
-        """Validate that the bicep template exists."""
+        """Validate that either ARM or Bicep template exists."""
         try:
+            main_json = os.path.join(self.template_path, "main.json")
             main_bicep = os.path.join(self.template_path, "main.bicep")
-            if not os.path.exists(main_bicep):
-                return False, f"Template not found: {main_bicep}"
             
-            # Check for modules directory
-            modules_dir = os.path.join(self.template_path, "modules-network-secured")
-            if not os.path.exists(modules_dir):
-                return False, f"Modules directory not found: {modules_dir}"
+            # Check for ARM template first (preferred to avoid BCP177)
+            if os.path.exists(main_json):
+                print(f"✅ DEBUG: ARM template found: {main_json}")
+                
+                # Check for modules directory
+                modules_dir = os.path.join(self.template_path, "modules-network-secured")
+                if not os.path.exists(modules_dir):
+                    return False, f"Modules directory not found: {modules_dir}"
+                
+                return True, f"ARM template validation successful: {main_json}"
             
-            return True, "Template validation successful"
+            # Fallback to Bicep template
+            elif os.path.exists(main_bicep):
+                print(f"⚠️ DEBUG: Bicep template found: {main_bicep}")
+                print(f"💡 DEBUG: Note: ARM template (main.json) is preferred to avoid Bicep compilation issues")
+                
+                # Check for modules directory
+                modules_dir = os.path.join(self.template_path, "modules-network-secured")
+                if not os.path.exists(modules_dir):
+                    return False, f"Modules directory not found: {modules_dir}"
+                
+                return True, f"Bicep template validation successful: {main_bicep}"
+            
+            else:
+                return False, f"Neither main.json nor main.bicep template found in: {self.template_path}"
+            
         except Exception as e:
             return False, f"Template validation failed: {str(e)}"
     
@@ -485,15 +504,15 @@ class AIFoundryHubDeploymentService:
             logger.error(f"Error creating parameters file: {str(e)}")
             return False
     
-    def _validate_bicep_template(self, main_bicep: str, params_file: str, resource_group: str) -> Tuple[bool, str]:
-        """Validate bicep template and parameters before deployment."""
+    def _validate_template(self, template_file: str, params_file: str, resource_group: str, template_type: str) -> Tuple[bool, str]:
+        """Validate ARM or Bicep template and parameters before deployment."""
         try:
-            print(f"🔍 DEBUG: Validating bicep template: {main_bicep}")
+            print(f"🔍 DEBUG: Validating {template_type} template: {template_file}")
             
             validate_cmd = [
                 "az", "deployment", "group", "validate",
                 "--resource-group", resource_group,
-                "--template-file", main_bicep,
+                "--template-file", template_file,
                 "--parameters", f"@{params_file}",
                 "--output", "json"
             ]
@@ -527,7 +546,12 @@ class AIFoundryHubDeploymentService:
                 print(f"🔍 DEBUG: Analyzing non-zero return code validation result")
                 print(f"🔍 DEBUG: Stderr starts with: {validate_result.stderr[:100]}...")
                 
-                # Check for bicep-specific warnings vs errors
+                # Check for specific issues based on template type
+                if template_type == "Bicep" and "bcp177" in stderr_lower:
+                    print(f"❌ DEBUG: Detected BCP177 error in Bicep template")
+                    print(f"💡 DEBUG: Consider using main.json ARM template instead")
+                    return False, f"BCP177 error in Bicep template. Try using the main.json ARM template: {validate_result.stderr}"
+                
                 # Bicep warnings can appear in different formats:
                 # - "Warning BCP036:" (bicep compiler warnings)  
                 # - "Warning no-unused-params:" (bicep linter warnings)
@@ -635,7 +659,7 @@ class AIFoundryHubDeploymentService:
             return False, f"Template validation error: {str(e)}"
     
     def deploy_ai_foundry_hub(self, config: AIFoundryHubDeploymentConfig, resource_group: str, deployment_name: str) -> Tuple[bool, str, Optional[str]]:
-        """Deploy AI Foundry Hub using bicep template."""
+        """Deploy AI Foundry Hub using ARM or Bicep template (prefers ARM to avoid BCP177 issues)."""
         try:
             print(f"🔍 DEBUG: Starting AI Foundry Hub deployment")
             print(f"📋 DEBUG: Deployment Name: {deployment_name}")
@@ -747,11 +771,34 @@ class AIFoundryHubDeploymentService:
             except Exception as e:
                 print(f"⚠️ DEBUG: Could not read parameters file: {e}")
             
-            # Validate the bicep template before deployment
-            print(f"🔍 DEBUG: Validating bicep template...")
+            # Choose template file: prefer main.json (ARM) over main.bicep to avoid BCP177 error
+            main_json = os.path.join(self.template_path, "main.json")
             main_bicep = os.path.join(self.template_path, "main.bicep")
             
-            validation_success, validation_message = self._validate_bicep_template(main_bicep, params_file, resource_group)
+            template_file = None
+            template_type = None
+            
+            if os.path.exists(main_json):
+                template_file = main_json
+                template_type = "ARM (JSON)"
+                print(f"✅ DEBUG: Using ARM template: {main_json}")
+                print(f"💡 DEBUG: ARM template avoids Bicep compilation issues (BCP177)")
+            elif os.path.exists(main_bicep):
+                template_file = main_bicep
+                template_type = "Bicep"
+                print(f"⚠️ DEBUG: Using Bicep template: {main_bicep}")
+                print(f"⚠️ DEBUG: Bicep template may have compilation issues - consider using ARM template")
+            else:
+                # Clean up parameters file
+                try:
+                    os.remove(params_file)
+                except:
+                    pass
+                return False, "Neither main.json nor main.bicep template found", None
+            
+            # Validate template before deployment
+            print(f"🔍 DEBUG: Validating {template_type} template...")
+            validation_success, validation_message = self._validate_template(template_file, params_file, resource_group, template_type)
             
             if not validation_success:
                 # Clean up parameters file
@@ -766,7 +813,7 @@ class AIFoundryHubDeploymentService:
                 "az", "deployment", "group", "create",
                 "--resource-group", resource_group,
                 "--name", deployment_name,
-                "--template-file", main_bicep,
+                "--template-file", template_file,
                 "--parameters", f"@{params_file}",
                 "--mode", "Incremental",  # Explicit mode
                 "--no-wait",  # Don't wait for completion to avoid response consumption
@@ -775,7 +822,8 @@ class AIFoundryHubDeploymentService:
             
             print(f"🚀 DEBUG: Deployment command: {' '.join(cmd)}")
             print(f"📁 DEBUG: Working directory: {os.getcwd()}")
-            print(f"🎯 DEBUG: Template file exists: {os.path.exists(main_bicep)}")
+            print(f"🎯 DEBUG: Template file ({template_type}): {template_file}")
+            print(f"🎯 DEBUG: Template file exists: {os.path.exists(template_file)}")
             print(f"📄 DEBUG: Parameters file exists: {os.path.exists(params_file)}")
             
             # Execute deployment without waiting
@@ -908,20 +956,36 @@ class AIFoundryHubDeploymentService:
             if not self.create_parameters_file(config, params_file):
                 return False, "Failed to create parameters file for synchronous deployment", None
             
+            # Choose template file: prefer main.json (ARM) over main.bicep to avoid BCP177 error
+            main_json = os.path.join(self.template_path, "main.json")
             main_bicep = os.path.join(self.template_path, "main.bicep")
+            
+            template_file = None
+            template_type = None
+            
+            if os.path.exists(main_json):
+                template_file = main_json
+                template_type = "ARM (JSON)"
+                print(f"✅ DEBUG: Using ARM template for sync deployment: {main_json}")
+            elif os.path.exists(main_bicep):
+                template_file = main_bicep
+                template_type = "Bicep"
+                print(f"⚠️ DEBUG: Using Bicep template for sync deployment: {main_bicep}")
+            else:
+                return False, "Neither main.json nor main.bicep template found", None
             
             # Use synchronous deployment command
             cmd = [
                 "az", "deployment", "group", "create",
                 "--resource-group", resource_group,
                 "--name", f"{deployment_name}-sync",
-                "--template-file", main_bicep,
+                "--template-file", template_file,
                 "--parameters", f"@{params_file}",
                 "--mode", "Incremental",
                 "--output", "json"
             ]
             
-            print(f"🔄 DEBUG: Synchronous deployment command: {' '.join(cmd)}")
+            print(f"🔄 DEBUG: Synchronous deployment command ({template_type}): {' '.join(cmd)}")
             
             # Execute with extended timeout for synchronous deployment
             result = subprocess.run(

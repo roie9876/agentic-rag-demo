@@ -1,0 +1,61 @@
+Microsoft Azure Support Ticket Template
+=========================================
+
+Subject: Resource Group Deletion Blocked by Orphaned Service Association Link
+
+Priority: Standard
+
+Issue Type: Technical Issue
+
+Problem Description:
+Resource group 'bciep-test-8' cannot be deleted due to an orphaned service association link that is blocking deletion.
+
+Technical Details:
+- Resource Group: bciep-test-8
+- Subscription: 7aa77d2e-cbec-48b4-8518-9802543b25af (ME-MngEnvMCAP623661-robenhai-1)
+- Location: swedencentral
+
+Root Cause:
+The subnet 'agent-subnet' in VNet 'agent-vnet-test' has a service association link called 'legionservicelink' with the following properties:
+- linkedResourceType: Microsoft.App/environments
+- allowDelete: false
+- Resource ID: /subscriptions/7aa77d2e-cbec-48b4-8518-9802543b25af/resourceGroups/bciep-test-8/providers/Microsoft.Network/virtualNetworks/agent-vnet-test/subnets/agent-subnet/serviceAssociationLinks/legionservicelink
+
+The Container App Environment that created this link appears to have been deleted, but the service association link was not properly cleaned up, creating an orphaned reference that blocks resource group deletion.
+
+Error Messages:
+1. "Subnet /subscriptions/.../.../agent-subnet requires any of the following delegation(s) [Microsoft.App/environments] to reference service association link"
+2. "Subnet agent-subnet is in use by .../serviceAssociationLinks/legionservicelink and cannot be deleted"
+
+Steps Already Attempted:
+- Standard resource group deletion (multiple attempts over 24+ hours)
+- Attempted to remove subnet delegations (blocked by service association link)
+- Attempted to delete the subnet directly (blocked by service association link)
+- Force deletion attempts via CLI and REST API
+- Verified no active Container App Environments exist
+- Followed official Microsoft documentation for AI Foundry resource deletion:
+  1. Deleted AI Foundry project resources
+  2. Purged deleted Cognitive Services accounts via "Manage deleted resources" portal
+  3. Confirmed all Foundry resources are purged before attempting VNet deletion
+- Even after following the correct deletion order, the orphaned service association link still blocks subnet/VNet deletion
+- Followed official Microsoft documentation procedure for AI Foundry network-secured deletion
+- Checked for deleted AI Foundry resources that need purging
+
+Official Documentation Reference:
+https://learn.microsoft.com/en-us/azure/ai-foundry/agents/how-to/virtual-networks
+
+The Microsoft documentation states:
+"If you want to delete your Foundry resource and Standard Agent with secured network set-up, delete your AI Foundry resource and virtual network last. Before deleting the virtual network, ensure to delete and purge your AI Foundry resource. Navigate to Manage deleted resources, then select your subscription and the Foundry resource you would like to purge."
+
+Issue Analysis:
+This resource group appears to contain remnants of an AI Foundry Standard Setup with Private Networking deployment. The service association link 'legionservicelink' was created as part of the private network isolation setup but was not properly cleaned up when the AI Foundry resources were removed.
+
+Expected Resolution:
+1. Microsoft support to manually remove the orphaned service association link 'legionservicelink'
+2. OR guidance on proper purging procedure for AI Foundry network-secured deployments
+
+Business Impact:
+Resource group cannot be deleted, preventing cleanup of test resources and potentially blocking billing optimization. This blocks proper lifecycle management of AI Foundry test environments.
+
+Additional Context:
+This appears to be related to Azure AI Foundry's Standard Setup with Private Networking where service association links are not properly cleaned up during resource deletion, creating orphaned references that block subnet and resource group deletion. The issue may be specific to the Container Apps managed environment integration used by AI Foundry agents.

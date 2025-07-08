@@ -320,6 +320,12 @@ python scripts/validate_modular_architecture.py
 
 ### Common Issues
 
+**BCP177 Bicep Deployment Error** ✅ **RESOLVED**
+- **Issue**: BCP177 error during AI Foundry Hub deployment with Bicep templates
+- **Solution**: Automatically resolved - deployment service now uses ARM template (`main.json`) instead of Bicep (`main.bicep`)
+- **Status**: No user action required - deployments work automatically
+- **Verification**: Run `python3 tests/diagnostics/diagnose_sudden_bcp177.py` to confirm fix
+
 **XLSX Processing Failures**
 - Ensure `AZURE_OPENAI_CHATGPT_DEPLOYMENT` matches your actual deployment name
 - Check that your Azure OpenAI deployment is accessible

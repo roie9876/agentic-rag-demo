@@ -45,7 +45,12 @@ When implementing new features, create separate modules in these directories:
 📁 RECOMMENDED FUTURE STRUCTURE:
 ├── app/tabs/               # Individual Streamlit tab modules (CREATE AS NEEDED)
 ├── services/               # Business services (CREATE AS NEEDED)
-└── config/                 # Configuration management (CREATE AS NEEDED)
+├── config/                 # Configuration management (CREATE AS NEEDED)
+└── tests/                  # Test files, debug scripts, diagnostics
+    ├── debug/              # Debug scripts (CREATE AS NEEDED)
+    ├── diagnostics/        # Diagnostic scripts (CREATE AS NEEDED)
+    ├── unit/               # Unit tests (CREATE AS NEEDED)
+    └── integration/        # Integration tests (CREATE AS NEEDED)
 ```
 
 ### 3. **Import Strategy**
@@ -300,3 +305,142 @@ When implementing new features, follow this order:
 6. **Update documentation**
 
 Remember: **Every line of new code should justify its placement in the main file. If it's not core orchestration, it belongs in a module.**
+
+## 🧪 **Script Organization Policy**
+
+### **Current State**: 
+The main project directory contains many legacy debug, fix, diagnostic, and test scripts that will be cleaned up later. **DO NOT add new scripts to the root directory.**
+
+### **New Script Placement Rules**:
+
+#### 🔍 **Debug Scripts** → `tests/debug/`
+- Resource group deletion debug scripts
+- Azure service troubleshooting scripts  
+- Network connectivity diagnostics
+- Authentication debugging tools
+
+#### 🩺 **Diagnostic Scripts** → `tests/diagnostics/`
+- Health check scripts
+- Performance analysis tools
+- System status checkers
+- Configuration validators
+
+#### 🧪 **Test Scripts** → `tests/unit/` or `tests/integration/`
+- Unit test files
+- Integration test suites
+- End-to-end test scenarios
+- Mock data generators
+
+#### 📋 **Utility Scripts** → `scripts/`
+- Deployment scripts
+- Setup/installation helpers
+- Data migration tools
+- Administrative utilities
+
+### **Script Naming Convention**:
+```
+tests/debug/debug_<feature>_<issue>.py
+tests/diagnostics/diagnose_<service>_<component>.py
+tests/unit/test_<module>_<functionality>.py
+tests/integration/test_<workflow>_<scenario>.py
+scripts/<action>_<target>.py
+```
+
+### **Examples**:
+```
+✅ GOOD (New scripts):
+tests/debug/debug_resource_group_deletion.py
+tests/diagnostics/diagnose_azure_search_connectivity.py
+tests/unit/test_document_processor_chunking.py
+scripts/deploy_ai_foundry_project.py
+
+❌ BAD (Root directory clutter):
+debug_resource_group_deletion.py
+fix_azure_search.py
+test_new_feature.py
+deployment_helper.py
+```
+
+### **Legacy Script Cleanup**:
+- **Current root-level scripts will remain** for now and be addressed later
+- **Do not move existing scripts** unless specifically requested
+- **Focus on preventing new clutter** in the root directory
+
+### **When Creating New Scripts**:
+1. **Check if functionality belongs in an existing module first**
+2. **Create in appropriate `tests/` subdirectory**
+3. **Use descriptive, standardized naming**
+4. **Include proper documentation header**
+5. **Make executable with proper shebang**
+
+## 📄 **Documentation Organization Policy**
+
+### **Current State**: 
+The main project directory contains many legacy status and implementation summary MD files. **These should be organized properly.**
+
+### **Documentation Placement Rules**:
+
+#### 📚 **Core Documentation** → **Stay in Root**
+- `README.md` - Main project documentation
+- `CHANGELOG.md` - Version history (if exists)
+- `CONTRIBUTING.md` - Contribution guidelines (if exists)
+- `LICENSE.md` - License information (if exists)
+
+#### 📋 **Implementation Status/Summary Files** → `docs/status/`
+- Implementation summaries (AI_FOUNDRY_IMPLEMENTATION_*.md)
+- Deployment success summaries (AI_FOUNDRY_DEPLOYMENT_*.md)
+- Integration completion reports (*_INTEGRATION_*.md)
+- Fix/enhancement reports (*_FIX*.md, *_FIXES*.md)
+
+#### 🔧 **Technical Documentation** → `docs/technical/`
+- Architecture documentation
+- API documentation
+- Configuration guides
+- Troubleshooting guides
+
+#### 🎯 **Feature Documentation** → `docs/features/`
+- Feature-specific documentation
+- User guides for specific capabilities
+- Feature implementation details
+
+### **MD File Naming Convention**:
+```
+docs/status/ai_foundry_implementation_final_summary.md
+docs/status/delete_deployment_integration_complete.md
+docs/technical/dns_zone_configuration_guide.md
+docs/features/enhanced_ai_foundry_capabilities.md
+```
+
+### **Examples**:
+```
+✅ GOOD (Organized structure):
+README.md (root)
+docs/status/ai_foundry_deployment_success_summary.md
+docs/technical/dns_zone_resource_group_configuration.md
+docs/features/delete_deployment_tab_integration.md
+
+❌ BAD (Root directory clutter):
+AI_FOUNDRY_DEPLOYMENT_SUCCESS_SUMMARY.md (root)
+DELETE_DEPLOYMENT_INTEGRATION_FIXED.md (root)
+DNS_ZONE_RESOURCE_GROUP_FIX_COMPLETE.md (root)
+```
+
+### **MD Files to Move**:
+
+#### To `docs/status/`:
+- `AI_FOUNDRY_CAPABILITY_HOST_DNS_FIXES.md`
+- `AI_FOUNDRY_DEPLOYMENT_SUCCESS_SUMMARY.md`
+- `AI_FOUNDRY_IMPLEMENTATION_FINAL_SUMMARY.md`
+- `AI_FOUNDRY_UI_STATUS_DNS_ZONE_FIXES.md`
+- `DELETE_DEPLOYMENT_INTEGRATION_FIXED.md`
+- `DELETE_DEPLOYMENT_SERVICE_LINKS_FIX.md`
+- `DELETE_DEPLOYMENT_TAB_INTEGRATION_COMPLETE.md`
+- `DNS_ZONE_RESOURCE_GROUP_FIX_COMPLETE.md`
+- `ENHANCED_DELETE_DEPLOYMENT_LEGIONSERVICELINK_FIX.md`
+
+### **When Creating New Documentation**:
+1. **Determine the documentation type** (core, status, technical, feature)
+2. **Place in appropriate `docs/` subdirectory**
+3. **Use lowercase, underscore-separated naming**
+4. **Include proper front matter if using a documentation system**
+5. **Keep README.md and other core docs in root**

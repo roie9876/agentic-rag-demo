@@ -1,0 +1,236 @@
+Microsoft Azure Support Ticket - Comprehensive Troubleshooting Documentation
+=============================================================================
+
+PRIORITY: Standard
+ISSUE TYPE: Technical Issue - Resource Management
+CATEGORY: Virtual Network / Resource Group Deletion
+
+SUBJECT: Resource Group Deletion Blocked by Orphaned Service Association Link After Container Apps Environment Removal
+
+ENVIRONMENT DETAILS:
+==================
+- Subscription ID: 7aa77d2e-cbec-48b4-8518-9802543b25af
+- Subscription Name: ME-MngEnvMCAP623661-robenhai-1
+- Resource Group: bciep-test-8
+- Location: swedencentral
+- User: admin@MngEnvMCAP623661.onmicrosoft.com
+- Date Issue Started: 2025-07-07 (over 24 hours ago)
+
+PROBLEM DESCRIPTION:
+===================
+Resource group 'bciep-test-8' cannot be deleted due to an orphaned Service Association Link (SAL) 
+that remains after a Container Apps managed environment was removed. The SAL has 'allowDelete: false' 
+and is blocking all deletion attempts.
+
+AFFECTED RESOURCES:
+==================
+1. Resource Group: bciep-test-8
+2. Virtual Network: agent-vnet-test  
+3. Subnet: agent-subnet (contains the problematic SAL)
+4. Service Association Link: legionservicelink
+5. Network Security Groups: 
+   - agent-vnet-test-pe-subnet-nsg-swedencentral
+   - agent-vnet-test-agent-subnet-nsg-swedencentral
+
+ORPHANED SERVICE ASSOCIATION LINK DETAILS:
+==========================================
+Resource ID: /subscriptions/7aa77d2e-cbec-48b4-8518-9802543b25af/resourceGroups/bciep-test-8/providers/Microsoft.Network/virtualNetworks/agent-vnet-test/subnets/agent-subnet/serviceAssociationLinks/legionservicelink
+
+Properties:
+- name: "legionservicelink"
+- linkedResourceType: "Microsoft.App/environments"
+- allowDelete: false
+- provisioningState: "Succeeded"
+- etag: "W/\"27052838-be46-432e-9410-14cc5072f1d6\""
+
+ROOT CAUSE:
+===========
+A Container Apps managed environment was previously created that established a Service Association Link 
+to the subnet with delegation to Microsoft.App/environments. When the Container Apps environment was 
+deleted, the Service Association Link was not properly cleaned up, creating an orphaned reference 
+that prevents resource group deletion.
+
+ERROR MESSAGES RECEIVED:
+========================
+
+1. Resource Group Deletion Error:
+   "Cannot delete resource group because it contains resources that are in use."
+
+2. Subnet Delegation Removal Error:
+   ERROR: (SubnetMissingRequiredDelegation) Subnet /subscriptions/7aa77d2e-cbec-48b4-8518-9802543b25af/resourceGroups/bciep-test-8/providers/Microsoft.Network/virtualNetworks/agent-vnet-test/subnets/agent-subnet requires any of the following delegation(s) [Microsoft.App/environments] to reference service association link /subscriptions/7aa77d2e-cbec-48b4-8518-9802543b25af/resourceGroups/bciep-test-8/providers/Microsoft.Network/virtualNetworks/agent-vnet-test/subnets/agent-subnet/serviceAssociationLinks/legionservicelink.
+   Code: SubnetMissingRequiredDelegation
+
+3. Service Association Link Direct Deletion Error:
+   ERROR: (UnauthorizedClientApplication) Unauthorized client application id 04b07795-8ddb-461a-bbee-02f9e1bf7b46.
+   Code: UnauthorizedClientApplication
+
+COMPREHENSIVE TROUBLESHOOTING ATTEMPTS:
+=======================================
+
+METHOD 1: Standard Resource Group Deletion
+------------------------------------------
+Commands Attempted:
+- az group delete --name bciep-test-8 --yes
+- az group delete --name bciep-test-8 --yes --no-wait
+
+Result: FAILED
+Error: Resource group contains resources that are in use
+Duration: Multiple attempts over 24+ hours
+
+METHOD 2: Force Resource Group Deletion with Supported Types
+------------------------------------------------------------
+Commands Attempted:
+- az group delete --name bciep-test-8 --yes --force-deletion-types Microsoft.Compute/virtualMachines
+- az group delete --name bciep-test-8 --yes --force-deletion-types Microsoft.Compute/virtualMachineScaleSets
+- az group delete --name bciep-test-8 --yes --force-deletion-types Microsoft.Databricks/workspaces
+
+Result: FAILED
+Error: No resources of supported force deletion types found
+Note: Microsoft.Network resources are not supported for force deletion
+
+METHOD 3: Attempted Force Deletion with Network Types (Not Supported)
+---------------------------------------------------------------------
+Commands Attempted:
+- az group delete --name bciep-test-8 --force-deletion-types Microsoft.Network/virtualNetworks --yes
+
+Result: FAILED
+Error: 'Microsoft.Network/virtualNetworks' is not a valid value for '--force-deletion-types'. 
+Allowed values: Microsoft.Compute/virtualMachines, Microsoft.Compute/virtualMachineScaleSets, Microsoft.Databricks/workspaces
+
+METHOD 4: Direct Service Association Link Deletion via REST API
+---------------------------------------------------------------
+Commands Attempted:
+- az rest --method delete --url "https://management.azure.com/subscriptions/7aa77d2e-cbec-48b4-8518-9802543b25af/resourceGroups/bciep-test-8/providers/Microsoft.Network/virtualNetworks/agent-vnet-test/subnets/agent-subnet/serviceAssociationLinks/legionservicelink?api-version=2024-05-01"
+- az rest --method delete --url "https://management.azure.com/subscriptions/7aa77d2e-cbec-48b4-8518-9802543b25af/resourceGroups/bciep-test-8/providers/Microsoft.Network/virtualNetworks/agent-vnet-test/subnets/agent-subnet/serviceAssociationLinks/legionservicelink?api-version=2018-10-01"
+
+Result: FAILED
+Error: (UnauthorizedClientApplication) Unauthorized client application id 04b07795-8ddb-461a-bbee-02f9e1bf7b46
+Analysis: Azure CLI does not have permission to delete Service Association Links directly
+
+METHOD 5: Direct Resource Deletion by ID
+----------------------------------------
+Commands Attempted:
+- az resource delete --ids "/subscriptions/7aa77d2e-cbec-48b4-8518-9802543b25af/resourceGroups/bciep-test-8/providers/Microsoft.Network/virtualNetworks/agent-vnet-test/subnets/agent-subnet/serviceAssociationLinks/legionservicelink" --api-version 2018-10-01
+- az resource delete --ids "/subscriptions/7aa77d2e-cbec-48b4-8518-9802543b25af/resourceGroups/bciep-test-8/providers/Microsoft.Network/virtualNetworks/agent-vnet-test/subnets/agent-subnet/serviceAssociationLinks/legionservicelink" --api-version 2024-05-01
+
+Result: FAILED
+Error: Some resources failed to be deleted - UnauthorizedClientApplication
+Analysis: Same permission issue as REST API approach
+
+METHOD 6: Subnet Delegation Removal (Blocked by SAL)
+----------------------------------------------------
+Commands Attempted:
+- az network vnet subnet update --resource-group bciep-test-8 --vnet-name agent-vnet-test --name agent-subnet --remove delegations
+- az network vnet subnet update --resource-group bciep-test-8 --vnet-name agent-vnet-test --name agent-subnet --set delegations=[]
+
+Result: FAILED
+Error: SubnetMissingRequiredDelegation - Subnet requires delegation to reference service association link
+Analysis: Cannot remove delegation while orphaned SAL exists
+
+METHOD 7: Subnet Deletion (Blocked by SAL)
+------------------------------------------
+Commands Attempted:
+- az network vnet subnet delete --resource-group bciep-test-8 --vnet-name agent-vnet-test --name agent-subnet
+
+Result: FAILED
+Error: Subnet is in use by service association link and cannot be deleted
+Analysis: Cannot delete subnet while orphaned SAL exists
+
+METHOD 8: Container Apps Environment Search and Cleanup
+-------------------------------------------------------
+Commands Attempted:
+- az resource list --resource-type "Microsoft.App/managedEnvironments" --output json
+- az containerapp env list --output json
+- Search across all resource groups for linked Container Apps environments
+
+Result: NO PROBLEMATIC ENVIRONMENTS FOUND
+Analysis: The Container Apps environment that created the SAL appears to have been deleted, but the SAL was not properly cleaned up
+
+METHOD 9: Individual Resource Deletion
+--------------------------------------
+Commands Attempted:
+- Attempted to delete Network Security Groups first
+- Attempted to delete VNet resources individually
+- Attempted to clear subnet service endpoints and other properties
+
+Result: PARTIAL SUCCESS
+Analysis: Network Security Groups can be deleted, but VNet and subnet deletion blocked by SAL
+
+METHOD 10: Azure Portal Manual Deletion
+---------------------------------------
+Attempts:
+- Tried resource group deletion through Azure Portal
+- Tried individual resource deletion through Portal
+- Checked for hidden or soft-deleted resources
+
+Result: FAILED
+Analysis: Portal shows same errors as CLI - SAL blocks deletion
+
+METHOD 11: PowerShell Azure Module Attempts
+-------------------------------------------
+Commands Attempted:
+- Remove-AzResourceGroup -Name bciep-test-8 -Force
+- Individual resource removal via PowerShell cmdlets
+
+Result: FAILED
+Error: Same underlying API limitations as Azure CLI
+Analysis: PowerShell encounters same Service Association Link restrictions
+
+METHOD 12: Wait and Monitor Approach
+------------------------------------
+Action: Monitored resource group for automatic cleanup over 24+ hours
+Result: NO CHANGE
+Analysis: The orphaned SAL does not self-resolve over time
+
+OFFICIAL MICROSOFT DOCUMENTATION REVIEW:
+========================================
+Reviewed: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/how-to/virtual-networks
+
+Key Finding: "If you want to delete your Foundry resource and Standard Agent with secured network set-up, delete your AI Foundry resource and virtual network last. Before deleting the virtual network, ensure to delete and purge your AI Foundry resource. Navigate to Manage deleted resources, then select your subscription and the Foundry resource you would like to purge."
+
+However: No AI Foundry resources are found in this subscription that could be linked to this SAL.
+
+CURRENT RESOURCE STATE:
+=======================
+Resource Group: bciep-test-8 (EXISTS - cannot be deleted)
+├── agent-vnet-test (Virtual Network)
+│   ├── agent-subnet (BLOCKED by orphaned SAL)
+│   │   ├── Delegation: Microsoft.App/environments (CANNOT REMOVE)
+│   │   └── SAL: legionservicelink (ORPHANED - allowDelete: false)
+│   └── pe-subnet (normal subnet - no issues)
+├── agent-vnet-test-pe-subnet-nsg-swedencentral (Network Security Group)
+└── agent-vnet-test-agent-subnet-nsg-swedencentral (Network Security Group)
+
+BUSINESS IMPACT:
+===============
+- Unable to clean up test environment resources
+- Ongoing costs for unused infrastructure
+- Blocks ability to recreate similar test environments
+- Impacts development and testing workflows
+
+REQUEST FOR MICROSOFT SUPPORT:
+==============================
+Based on the comprehensive troubleshooting above, this appears to be an orphaned Service Association Link that requires Microsoft backend intervention to resolve. The SAL has 'allowDelete: false' and the Azure CLI client application lacks permission to remove it directly.
+
+SPECIFIC ACTION REQUESTED:
+1. Manually remove the orphaned Service Association Link 'legionservicelink' from the subnet
+2. Allow the resource group deletion to proceed normally
+3. If possible, provide guidance on preventing this issue in future Container Apps deployments
+
+SUPPORTING EVIDENCE:
+===================
+1. Error logs from all attempted methods (available upon request)
+2. Resource JSON dumps showing SAL properties
+3. Azure CLI verbose output demonstrating permission issues
+4. Timeline showing 24+ hours of unsuccessful deletion attempts
+
+URGENCY JUSTIFICATION:
+=====================
+While this is a cleanup issue rather than a production outage, it represents a clear gap in Azure's resource lifecycle management that prevents normal administrative operations. The comprehensive troubleshooting demonstrates that this requires backend intervention and cannot be resolved through standard customer-available tools.
+
+Thank you for your assistance in resolving this Service Association Link cleanup issue.
+
+---
+Generated: 2025-07-08 by automated troubleshooting and documentation process
+Contact: admin@MngEnvMCAP623661.onmicrosoft.com
+Subscription: ME-MngEnvMCAP623661-robenhai-1 (7aa77d2e-cbec-48b4-8518-9802543b25af)
