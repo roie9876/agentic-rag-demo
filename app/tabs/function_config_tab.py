@@ -12,7 +12,8 @@ from azure_function_helper import (
     list_function_apps, 
     load_function_settings,
     push_function_settings,
-    deploy_function_code
+    deploy_function_code,
+    assign_search_rbac_roles
 )
 from utils.file_utils import _st_data_editor
 
@@ -348,6 +349,83 @@ def render_function_config_tab(
                         
                         # Provide a download link for the function code
                         st.info("💡 **Quick Solution**: Download the function code as a zip file and upload it manually via Azure Portal")
+
+        # RBAC Configuration for Azure AI Search
+        st.divider()
+        st.subheader("🔐 Azure AI Search RBAC Configuration")
+        st.markdown("Configure managed identity permissions for Azure AI Search access.")
+        
+        # Get Azure Search service name from environment variables
+        search_service_name = env_vars.get("SERVICE_NAME", "")
+        search_endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "")
+        
+        if search_service_name or search_endpoint:
+            if not search_service_name and search_endpoint:
+                # Extract service name from endpoint if not already extracted
+                import re
+                match = re.search(r'https://([^.]+)\.search\.windows\.net', search_endpoint)
+                if match:
+                    search_service_name = match.group(1)
+            
+            if search_service_name:
+                st.info(f"🔍 **Target Azure AI Search Service**: `{search_service_name}`")
+                
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.markdown("""
+                    **Required RBAC Roles:**
+                    - 🔹 **Search Index Data Contributor** - Allows reading, writing, and deleting search index data
+                    - 🔹 **Search Service Contributor** - Allows managing search services and indexes
+                    
+                    This will enable the Function App's managed identity to access Azure AI Search without API keys.
+                    """)
+                
+                with col2:
+                    if st.button("🔐 Assign RBAC Roles", help="Assign required roles to Function App managed identity"):
+                        with st.spinner("🔄 Configuring RBAC roles for Azure AI Search..."):
+                            success, message = assign_search_rbac_roles(
+                                subscription_id=sub_id,
+                                function_app_name=func_name,
+                                resource_group=func_rg,
+                                search_service_name=search_service_name
+                            )
+                            
+                            if success:
+                                st.success(f"✅ {message}")
+                                st.balloons()
+                                st.info("🔄 **Next Steps**: The Function App can now access Azure AI Search using managed identity!")
+                            else:
+                                st.error(f"❌ Failed to assign RBAC roles: {message}")
+                                
+                                # Provide manual instructions
+                                st.warning("🔧 **Manual RBAC Assignment Required**")
+                                st.markdown(f"""
+                                **Manual Steps via Azure Portal:**
+                                1. Go to [Azure Portal](https://portal.azure.com)
+                                2. Navigate to Azure AI Search service: `{search_service_name}`
+                                3. Go to **Access control (IAM)** → **Add role assignment**
+                                4. Assign these roles to Function App `{func_name}`:
+                                   - **Search Index Data Contributor**
+                                   - **Search Service Contributor**
+                                
+                                **Or use Azure CLI:**
+                                ```bash
+                                # Get Function App principal ID
+                                PRINCIPAL_ID=$(az functionapp identity show --name {func_name} --resource-group {func_rg} --query principalId -o tsv)
+                                
+                                # Get Search service resource ID
+                                SEARCH_ID=$(az search service show --name {search_service_name} --resource-group {func_rg} --query id -o tsv)
+                                
+                                # Assign roles
+                                az role assignment create --assignee $PRINCIPAL_ID --role "Search Index Data Contributor" --scope $SEARCH_ID
+                                az role assignment create --assignee $PRINCIPAL_ID --role "Search Service Contributor" --scope $SEARCH_ID
+                                ```
+                                """)
+            else:
+                st.warning("⚠️ Could not determine Azure AI Search service name from configuration.")
+        else:
+            st.warning("⚠️ Azure AI Search endpoint not configured. Please set AZURE_SEARCH_ENDPOINT environment variable.")
 
         # Test URL Generation Section
         st.divider()

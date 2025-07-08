@@ -483,3 +483,155 @@ def _try_alternative_deployment(
         
     except Exception as ex:
         return False, f"Alternative deployment also failed: {ex}", None
+
+
+def assign_search_rbac_roles(
+    subscription_id: str,
+    function_app_name: str,
+    resource_group: str,
+    search_service_name: str
+) -> Tuple[bool, str]:
+    """
+    Assign required RBAC roles to Function App managed identity for Azure AI Search access.
+    
+    Args:
+        subscription_id: Azure subscription ID
+        function_app_name: Name of the Function App
+        resource_group: Resource group name
+        search_service_name: Name of the Azure AI Search service
+    
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    try:
+        # Step 1: Enable managed identity if not already enabled
+        enable_identity_cmd = [
+            "az", "functionapp", "identity", "assign",
+            "--name", function_app_name,
+            "--resource-group", resource_group,
+            "--subscription", subscription_id
+        ]
+        
+        identity_result = subprocess.run(
+            enable_identity_cmd, 
+            capture_output=True, 
+            text=True, 
+            timeout=30
+        )
+        
+        if identity_result.returncode != 0:
+            return False, f"Failed to enable managed identity: {identity_result.stderr}"
+        
+        # Step 2: Get the principal ID of the Function App
+        get_principal_cmd = [
+            "az", "functionapp", "identity", "show",
+            "--name", function_app_name,
+            "--resource-group", resource_group,
+            "--subscription", subscription_id,
+            "--query", "principalId",
+            "-o", "tsv"
+        ]
+        
+        principal_result = subprocess.run(
+            get_principal_cmd, 
+            capture_output=True, 
+            text=True, 
+            timeout=30
+        )
+        
+        if principal_result.returncode != 0:
+            return False, f"Failed to get principal ID: {principal_result.stderr}"
+        
+        principal_id = principal_result.stdout.strip()
+        if not principal_id:
+            return False, "Could not retrieve Function App principal ID"
+        
+        # Step 3: Get the Azure AI Search service resource ID
+        get_search_id_cmd = [
+            "az", "search", "service", "show",
+            "--name", search_service_name,
+            "--resource-group", resource_group,
+            "--subscription", subscription_id,
+            "--query", "id",
+            "-o", "tsv"
+        ]
+        
+        search_result = subprocess.run(
+            get_search_id_cmd, 
+            capture_output=True, 
+            text=True, 
+            timeout=30
+        )
+        
+        if search_result.returncode != 0:
+            return False, f"Failed to get Azure AI Search service ID: {search_result.stderr}"
+        
+        search_resource_id = search_result.stdout.strip()
+        if not search_resource_id:
+            return False, f"Could not find Azure AI Search service: {search_service_name}"
+        
+        # Step 4: Assign Search Index Data Contributor role
+        assign_index_role_cmd = [
+            "az", "role", "assignment", "create",
+            "--assignee", principal_id,
+            "--role", "Search Index Data Contributor",
+            "--scope", search_resource_id,
+            "--subscription", subscription_id
+        ]
+        
+        index_role_result = subprocess.run(
+            assign_index_role_cmd, 
+            capture_output=True, 
+            text=True, 
+            timeout=30
+        )
+        
+        # Step 5: Assign Search Service Contributor role
+        assign_service_role_cmd = [
+            "az", "role", "assignment", "create",
+            "--assignee", principal_id,
+            "--role", "Search Service Contributor",
+            "--scope", search_resource_id,
+            "--subscription", subscription_id
+        ]
+        
+        service_role_result = subprocess.run(
+            assign_service_role_cmd, 
+            capture_output=True, 
+            text=True, 
+            timeout=30
+        )
+        
+        # Check results
+        roles_assigned = []
+        errors = []
+        
+        if index_role_result.returncode == 0:
+            roles_assigned.append("Search Index Data Contributor")
+        else:
+            # Check if role already exists (this is not necessarily an error)
+            if "already exists" in index_role_result.stderr.lower():
+                roles_assigned.append("Search Index Data Contributor (already assigned)")
+            else:
+                errors.append(f"Index role assignment failed: {index_role_result.stderr}")
+        
+        if service_role_result.returncode == 0:
+            roles_assigned.append("Search Service Contributor")
+        else:
+            # Check if role already exists (this is not necessarily an error)
+            if "already exists" in service_role_result.stderr.lower():
+                roles_assigned.append("Search Service Contributor (already assigned)")
+            else:
+                errors.append(f"Service role assignment failed: {service_role_result.stderr}")
+        
+        if roles_assigned and not errors:
+            return True, f"Successfully assigned RBAC roles: {', '.join(roles_assigned)}"
+        elif roles_assigned and errors:
+            return True, f"Partially successful - Assigned: {', '.join(roles_assigned)}. Errors: {'; '.join(errors)}"
+        else:
+            return False, f"Failed to assign roles: {'; '.join(errors)}"
+            
+    except subprocess.TimeoutExpired:
+        return False, "Operation timed out. Please try again or assign roles manually."
+    except Exception as ex:
+        return False, f"Unexpected error during RBAC assignment: {ex}"
