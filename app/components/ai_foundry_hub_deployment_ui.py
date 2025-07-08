@@ -79,6 +79,7 @@ class AIFoundryHubDeploymentUI:
             use_last_config = st.checkbox(
                 "🔄 Use Last Configuration",
                 value=False,
+                key="config_mgmt_use_last_config",
                 help="Load the last saved configuration to avoid re-entering all parameters"
             )
         
@@ -88,10 +89,11 @@ class AIFoundryHubDeploymentUI:
                 selected_config = st.selectbox(
                     "📁 Saved Configs",
                     options=[""] + saved_configs,
+                    key="config_mgmt_saved_configs",
                     help="Select a previously saved configuration"
                 )
                 
-                if selected_config and st.button("📂 Load Config"):
+                if selected_config and st.button("📂 Load Config", key="config_mgmt_load_button"):
                     loaded_config = self.service.load_deployment_config(selected_config)
                     if loaded_config:
                         st.session_state.deployment_config = loaded_config
@@ -104,10 +106,11 @@ class AIFoundryHubDeploymentUI:
             config_name = st.text_input(
                 "💾 Save As",
                 value="my_deployment",
+                key="config_mgmt_save_name",
                 help="Enter a name to save the current configuration"
             )
             
-            if st.button("💾 Save Config"):
+            if st.button("💾 Save Config", key="config_mgmt_save_button"):
                 if config_name.strip():
                     if hasattr(st.session_state, 'deployment_config'):
                         if self.service.save_deployment_config(st.session_state.deployment_config, config_name.strip()):
@@ -142,21 +145,40 @@ class AIFoundryHubDeploymentUI:
             col1, col2 = st.columns(2)
             
             with col1:
-                config.location = st.selectbox(
+                # Location selection with proper session state management
+                available_locations = self.service.get_available_locations()
+                
+                # Find current location index safely
+                try:
+                    current_location_index = available_locations.index(config.location)
+                except ValueError:
+                    # If location not found, default to first location
+                    current_location_index = 0
+                    config.location = available_locations[0] if available_locations else "eastus"
+                
+                selected_location = st.selectbox(
                     "🌍 Location",
-                    self.service.get_available_locations(),
-                    index=self.service.get_available_locations().index(config.location)
+                    available_locations,
+                    index=current_location_index,
+                    key="basic_settings_location",
+                    help="Azure region where resources will be deployed"
                 )
+                
+                # Update config only if changed
+                if selected_location != config.location:
+                    config.location = selected_location
                 
                 config.ai_services_name = st.text_input(
                     "🤖 AI Services Name",
                     value=config.ai_services_name,
+                    key="basic_settings_ai_services_name",
                     help="Base name for AI services (unique suffix will be added)"
                 )
                 
                 config.project_name = st.text_input(
                     "📁 Project Name",
                     value=config.project_name,
+                    key="basic_settings_project_name",
                     help="Name for the initial project"
                 )
             
@@ -164,12 +186,14 @@ class AIFoundryHubDeploymentUI:
                 config.project_description = st.text_area(
                     "📝 Project Description",
                     value=config.project_description,
-                    height=100
+                    height=100,
+                    key="basic_settings_project_description"
                 )
                 
                 config.display_name = st.text_input(
                     "🏷️ Display Name",
-                    value=config.display_name
+                    value=config.display_name,
+                    key="basic_settings_display_name"
                 )
         
         # Model Configuration
@@ -178,6 +202,7 @@ class AIFoundryHubDeploymentUI:
             config.skip_openai_deployment = st.checkbox(
                 "⚠️ Skip OpenAI Model Deployment", 
                 value=config.skip_openai_deployment,
+                key="model_config_skip_openai",
                 help="Check this to skip Azure OpenAI deployment (faster deployment, no models). By default, OpenAI models will be deployed."
             )
             
@@ -195,6 +220,7 @@ class AIFoundryHubDeploymentUI:
                         "Model Name",
                         value="gpt-4.1",
                         disabled=True,
+                        key="model_config_model_name",
                         help="Fixed model configuration for this deployment"
                     )
                     
@@ -203,6 +229,7 @@ class AIFoundryHubDeploymentUI:
                         "Model Format",
                         value="OpenAI",
                         disabled=True,
+                        key="model_config_model_format",
                         help="Fixed model format"
                     )
                     
@@ -211,6 +238,7 @@ class AIFoundryHubDeploymentUI:
                         "Model Version",
                         value="2025-04-14",
                         disabled=True,
+                        key="model_config_model_version",
                         help="Fixed model version"
                     )
                 
@@ -220,6 +248,7 @@ class AIFoundryHubDeploymentUI:
                         "Model SKU",
                         value="GlobalStandard",
                         disabled=True,
+                        key="model_config_model_sku",
                         help="Fixed SKU configuration"
                     )
                     
@@ -228,6 +257,7 @@ class AIFoundryHubDeploymentUI:
                         "Model Capacity (TPM)",
                         value=30,
                         disabled=True,
+                        key="model_config_model_capacity",
                         help="Fixed capacity: 30 tokens per minute"
                     )
                 
@@ -250,30 +280,229 @@ class AIFoundryHubDeploymentUI:
     
     def _render_dns_zone_config(self, config: AIFoundryHubDeploymentConfig) -> None:
         """Render DNS zone configuration section."""
-        with st.expander("🔗 Private DNS Zone Configuration", expanded=False):
+        with st.expander("🔗 Private DNS Zone Configuration", expanded=True):
             st.markdown("Configure where your private DNS zones are located. These zones are required for private endpoint connectivity.")
             
-            # DNS zone location option
+            # Add enterprise context and common scenarios
+            with st.expander("📚 Common DNS Zone Configuration Scenarios", expanded=False):
+                st.markdown("""
+                **🏢 Enterprise Hub-Spoke Model**:
+                - **Network Hub Subscription**: Contains centrally managed Private DNS zones
+                - **Application Spoke Subscriptions**: Contains AI Foundry Account and related resources  
+                - **Benefit**: Centralized DNS management, consistent naming resolution across all spokes
+                
+                **🏠 Single Subscription Model**:
+                - **Same Subscription**: DNS zones and AI Foundry resources in same subscription
+                - **private-rg Resource Group**: Standard location for DNS zones
+                - **Benefit**: Simpler management, good for smaller environments
+                
+                **🆕 Greenfield Development**:
+                - **New DNS Zones**: Create fresh DNS zones alongside your AI Foundry deployment
+                - **Same Resource Group**: DNS zones created in deployment resource group
+                - **Benefit**: Self-contained, no dependencies on existing infrastructure
+                """)
+            
+            st.info("""
+            **🏢 Enterprise Scenario**: In most enterprise environments, Private DNS zones are managed centrally in a "Network Hub" subscription, 
+            while applications are deployed to separate "Spoke" subscriptions. Select the appropriate configuration below.
+            """)
+            
+            # DNS zone location option - restructured for enterprise scenarios
+            # Use session state to maintain radio selection
+            if 'dns_zone_option' not in st.session_state:
+                st.session_state.dns_zone_option = "🏠 Simple: Use existing DNS zones in private-rg (same subscription)"
+            
             dns_zone_option = st.radio(
-                "DNS Zone Location",
-                options=["Use existing DNS zones in private-rg", "Specify custom location", "Create new zones in deployment location"],
-                help="Choose whether to use existing DNS zones in private-rg, specify a different location, or create new zones"
+                "🎯 DNS Zone Location Strategy",
+                options=[
+                    "🏢 Enterprise: DNS zones in different subscription (Hub-Spoke)", 
+                    "🏠 Simple: Use existing DNS zones in private-rg (same subscription)",
+                    "🆕 Development: Create new zones in deployment location"
+                ],
+                index=["🏢 Enterprise: DNS zones in different subscription (Hub-Spoke)", 
+                       "🏠 Simple: Use existing DNS zones in private-rg (same subscription)",
+                       "🆕 Development: Create new zones in deployment location"].index(st.session_state.dns_zone_option),
+                help="Choose the DNS zone strategy that matches your environment",
+                key="dns_zone_strategy_selector"
             )
             
-            if dns_zone_option == "Use existing DNS zones in private-rg":
+            # Update session state
+            st.session_state.dns_zone_option = dns_zone_option
+            
+            if dns_zone_option == "🏢 Enterprise: DNS zones in different subscription (Hub-Spoke)":
+                st.markdown("### 🏢 Enterprise Hub-Spoke Configuration")
+                st.info("**Scenario**: DNS zones are managed in a central 'Network Hub' subscription, while resources are deployed to 'Application Spoke' subscriptions.")
+                
+                # Get available subscriptions with current subscription prioritized
+                subscriptions = self.service.get_prioritized_subscriptions()
+                
+                if subscriptions:
+                    # Subscription selection with better labeling and current subscription highlighted
+                    subscription_options = {}
+                    current_sub_info = self.service.get_current_subscription_info()
+                    current_sub_id = current_sub_info['subscription_id'] if current_sub_info else None
+                    
+                    for sub in subscriptions:
+                        if sub['state'] == 'Enabled':
+                            label = f"{sub['display_name']} ({sub['subscription_id']})"
+                            if sub['subscription_id'] == current_sub_id:
+                                label = f"🌟 {label} (Current)"
+                            subscription_options[label] = sub['subscription_id']
+                    
+                    if subscription_options:
+                        st.markdown("#### 🎯 DNS Zone Subscription Selection")
+                        
+                        # Initialize DNS zone subscription session state
+                        if 'dns_zone_subscription_id' not in st.session_state:
+                            st.session_state.dns_zone_subscription_id = current_sub_id or list(subscription_options.values())[0]
+                        
+                        # Find current selection index
+                        dns_sub_index = 0
+                        subscription_list = list(subscription_options.items())
+                        for i, (label, sub_id) in enumerate(subscription_list):
+                            if sub_id == st.session_state.dns_zone_subscription_id:
+                                dns_sub_index = i
+                                break
+                        
+                        def on_dns_subscription_change():
+                            """Handle DNS subscription selection change."""
+                            selected_key = st.session_state.dns_zone_subscription_selector
+                            if selected_key in subscription_options:
+                                st.session_state.dns_zone_subscription_id = subscription_options[selected_key]
+                                # Clear resource group selection when subscription changes
+                                if 'dns_zone_resource_group' in st.session_state:
+                                    del st.session_state['dns_zone_resource_group']
+                        
+                        selected_subscription_display = st.selectbox(
+                            "Select the subscription containing your Private DNS zones",
+                            options=list(subscription_options.keys()),
+                            index=dns_sub_index,
+                            help="🌟 = Current subscription. Typically select your 'Network Hub' or 'Shared Services' subscription where DNS zones are centrally managed",
+                            key="dns_zone_subscription_selector",
+                            on_change=on_dns_subscription_change
+                        )
+                        
+                        # Update config with session state value
+                        config.dns_zone_subscription_id = st.session_state.dns_zone_subscription_id
+                        
+                        # Show selected subscription info
+                        selected_sub_id = config.dns_zone_subscription_id
+                        is_current = selected_sub_id == current_sub_id
+                        if is_current:
+                            st.success(f"✅ **DNS Zone Subscription**: {selected_subscription_display} (Same as deployment subscription)")
+                        else:
+                            st.info(f"🔄 **DNS Zone Subscription**: {selected_subscription_display} (Cross-subscription configuration)")
+                        
+                        # Resource group selection with intelligent suggestions
+                        if config.dns_zone_subscription_id:
+                            st.markdown("#### 📁 DNS Zone Resource Group Selection")
+                            resource_groups = self.service.suggest_dns_zone_resource_groups(config.dns_zone_subscription_id)
+                            
+                            if resource_groups:
+                                # Format resource group options with hints
+                                rg_options = []
+                                for rg in resource_groups:
+                                    rg_lower = rg.lower()
+                                    if any(pattern in rg_lower for pattern in ['private', 'dns', 'network', 'hub', 'connectivity']):
+                                        rg_options.append(f"⭐ {rg}")
+                                    else:
+                                        rg_options.append(rg)
+                                
+                                # Initialize DNS zone resource group session state
+                                dns_rg_key = f"dns_zone_rg_{config.dns_zone_subscription_id}"
+                                if dns_rg_key not in st.session_state and rg_options:
+                                    # Prefer a likely DNS resource group as default
+                                    default_rg = next((rg for rg in rg_options if rg.startswith("⭐")), rg_options[0])
+                                    st.session_state[dns_rg_key] = default_rg
+                                
+                                # Find current selection index
+                                dns_rg_index = 0
+                                if dns_rg_key in st.session_state and st.session_state[dns_rg_key] in rg_options:
+                                    dns_rg_index = rg_options.index(st.session_state[dns_rg_key])
+                                
+                                def on_dns_rg_change():
+                                    """Handle DNS resource group selection change."""
+                                    st.session_state[dns_rg_key] = st.session_state.dns_zone_rg_selector
+                                
+                                selected_rg = st.selectbox(
+                                    "Select the resource group containing your Private DNS zones",
+                                    options=rg_options,
+                                    index=dns_rg_index,
+                                    help="⭐ = Likely DNS resource group. This is typically a resource group dedicated to network resources and DNS zones",
+                                    key="dns_zone_rg_selector",
+                                    on_change=on_dns_rg_change
+                                )
+                                
+                                # Update session state and config
+                                st.session_state[dns_rg_key] = selected_rg
+                                config.dns_zone_resource_group_name = selected_rg.replace("⭐ ", "")
+                                st.success(f"✅ **DNS Zone Resource Group**: {config.dns_zone_resource_group_name}")
+                                
+                                # Validate DNS zones
+                                if config.dns_zone_resource_group_name:
+                                    st.markdown("#### 🔍 DNS Zone Validation")
+                                    with st.spinner("Validating DNS zones in the selected location..."):
+                                        zone_status = self.service.validate_dns_zones_exist(
+                                            config.dns_zone_subscription_id, 
+                                            config.dns_zone_resource_group_name
+                                        )
+                                    
+                                    if zone_status:
+                                        all_zones_exist = all(zone_status.values())
+                                        
+                                        col1, col2 = st.columns([2, 1])
+                                        with col1:
+                                            st.markdown("**Required DNS Zones Status:**")
+                                            for zone_name, exists in zone_status.items():
+                                                if exists:
+                                                    st.success(f"✅ {zone_name}")
+                                                else:
+                                                    st.error(f"❌ {zone_name}")
+                                        
+                                        with col2:
+                                            if all_zones_exist:
+                                                st.markdown("**🎉 Status**")
+                                                st.success("All zones found!")
+                                                config.create_dns_zones_if_not_exist = False
+                                            else:
+                                                st.markdown("**⚠️ Action Required**")
+                                                config.create_dns_zones_if_not_exist = st.checkbox(
+                                                    "Create missing zones",
+                                                    value=config.create_dns_zones_if_not_exist,
+                                                    help="Create missing DNS zones in the selected subscription/resource group"
+                                                )
+                                        
+                                        # Summary box
+                                        if all_zones_exist:
+                                            st.success("🎯 **Configuration Ready**: All required DNS zones found in the selected location!")
+                                        elif config.create_dns_zones_if_not_exist:
+                                            st.info("💡 **Auto-Creation Enabled**: Missing DNS zones will be created during deployment")
+                                        else:
+                                            st.warning("⚠️ **Action Required**: Please create the missing DNS zones or enable auto-creation")
+                            else:
+                                st.error("❌ No resource groups found in selected subscription")
+                    else:
+                        st.error("❌ No enabled subscriptions found")
+                else:
+                    st.error("❌ Unable to load subscriptions")
+                    
+            elif dns_zone_option == "🏠 Simple: Use existing DNS zones in private-rg (same subscription)":
+                st.markdown("### � Simple Configuration")
+                st.info("**Scenario**: DNS zones are in the same subscription as your deployment, in the 'private-rg' resource group.")
+                
                 # Default to private-rg resource group
                 config.dns_zone_subscription_id = ""  # Current subscription
                 config.dns_zone_resource_group_name = "private-rg"
                 config.create_dns_zones_if_not_exist = False
                 
-                st.info("ℹ️ Using existing DNS zones in the 'private-rg' resource group")
+                st.success("✅ **Configuration**: Using DNS zones in current subscription → private-rg resource group")
                 
                 # Validate DNS zones exist in private-rg
                 with st.spinner("Validating DNS zones in private-rg..."):
                     zone_status = self.service.validate_dns_zones_exist("", "private-rg")
                 
                 if zone_status:
-                    st.subheader("🔍 DNS Zone Validation")
+                    st.markdown("#### 🔍 DNS Zone Validation")
                     all_zones_exist = all(zone_status.values())
                     
                     for zone_name, exists in zone_status.items():
@@ -283,84 +512,21 @@ class AIFoundryHubDeploymentUI:
                             st.error(f"❌ {zone_name}")
                     
                     if not all_zones_exist:
-                        st.error("⚠️ Some required DNS zones are missing in private-rg. Please create them or use a different option.")
+                        st.error("⚠️ Some required DNS zones are missing in private-rg. Please create them or use a different configuration.")
                     else:
                         st.success("🎉 All required DNS zones found in private-rg!")
-                
-            elif dns_zone_option == "Specify custom location":
-                # Get available subscriptions
-                subscriptions = self.service.get_available_subscriptions()
-                
-                if subscriptions:
-                    # Subscription selection
-                    subscription_options = {f"{sub['display_name']} ({sub['subscription_id']})": sub['subscription_id'] 
-                                          for sub in subscriptions if sub['state'] == 'Enabled'}
-                    
-                    if subscription_options:
-                        selected_subscription_display = st.selectbox(
-                            "🎯 DNS Zone Subscription",
-                            options=list(subscription_options.keys()),
-                            help="Select the subscription containing your private DNS zones"
-                        )
-                        config.dns_zone_subscription_id = subscription_options[selected_subscription_display]
                         
-                        # Resource group selection
-                        if config.dns_zone_subscription_id:
-                            resource_groups = self.service.get_resource_groups_for_subscription(config.dns_zone_subscription_id)
-                            
-                            if resource_groups:
-                                config.dns_zone_resource_group_name = st.selectbox(
-                                    "📁 DNS Zone Resource Group",
-                                    options=resource_groups,
-                                    help="Select the resource group containing your private DNS zones"
-                                )
-                                
-                                # Validate DNS zones
-                                if config.dns_zone_resource_group_name:
-                                    with st.spinner("Validating DNS zones..."):
-                                        zone_status = self.service.validate_dns_zones_exist(
-                                            config.dns_zone_subscription_id, 
-                                            config.dns_zone_resource_group_name
-                                        )
-                                    
-                                    if zone_status:
-                                        st.subheader("🔍 DNS Zone Validation")
-                                        all_zones_exist = all(zone_status.values())
-                                        
-                                        for zone_name, exists in zone_status.items():
-                                            if exists:
-                                                st.success(f"✅ {zone_name}")
-                                            else:
-                                                st.error(f"❌ {zone_name}")
-                                        
-                                        if not all_zones_exist:
-                                            config.create_dns_zones_if_not_exist = st.checkbox(
-                                                "🆕 Create missing DNS zones automatically",
-                                                value=config.create_dns_zones_if_not_exist,
-                                                help="When checked, missing DNS zones will be created during deployment"
-                                            )
-                                            
-                                            if config.create_dns_zones_if_not_exist:
-                                                st.info("💡 Missing DNS zones will be created with VNet links during deployment")
-                                            else:
-                                                st.warning("⚠️ Deployment may fail if required DNS zones are missing")
-                                        else:
-                                            st.success("🎉 All required DNS zones found!")
-                                            config.create_dns_zones_if_not_exist = False
-                            else:
-                                st.error("❌ No resource groups found in selected subscription")
-                    else:
-                        st.error("❌ No enabled subscriptions found")
-                else:
-                    st.error("❌ Unable to load subscriptions")
-            else:
+            else:  # Development: Create new zones
+                st.markdown("### 🆕 Development Configuration")
+                st.info("**Scenario**: New DNS zones will be created in the same resource group as your deployment.")
+                
                 # Create new zones in deployment location
                 config.dns_zone_subscription_id = ""
                 config.dns_zone_resource_group_name = ""
                 config.create_dns_zones_if_not_exist = True
                 
-                st.warning("⚠️ New DNS zones will be created in the deployment resource group")
-                st.info("ℹ️ DNS zones will be created in the same subscription and resource group as your deployment")
+                st.warning("⚠️ **Note**: DNS zones will be created in your deployment resource group")
+                st.info("ℹ️ This is suitable for development environments or when you want self-contained deployments")
 
     def _render_network_config(self, config: AIFoundryHubDeploymentConfig) -> None:
         """Render network configuration section."""
@@ -1098,27 +1264,275 @@ class AIFoundryHubDeploymentUI:
             st.warning("Please fix the issues in the Configuration tab before deploying.")
             return
         
-        # Resource Group Selection
-        st.markdown("### 🎯 Target Resource Group")
+        # Deployment Target Selection
+        st.markdown("### 🎯 Deployment Target")
+        st.info("Select the subscription and resource group where the AI Foundry Account and related resources will be deployed.")
         
-        resource_groups = self.service.get_subscription_resource_groups()
+        # Subscription Selection
+        st.markdown("#### 🎯 Target Subscription")
         
-        if resource_groups:
-            col1, col2 = st.columns([3, 1])
+        # Add enterprise context
+        with st.expander("📚 Subscription Selection Guide", expanded=False):
+            st.markdown("""
+            **🏢 Enterprise Deployment Patterns**:
+            - **Hub Subscription**: Central networking and shared services (DNS zones, connectivity)
+            - **Spoke Subscription**: Application workloads and AI Foundry resources
+            - **Production Subscription**: Production AI workloads and foundry instances
+            - **Development Subscription**: Development and testing environments
             
-            with col1:
-                target_rg = st.selectbox(
-                    "Select Resource Group",
-                    resource_groups,
-                    help="Select the resource group where resources will be deployed"
-                )
+            **🔒 Required Permissions**:
+            - **Contributor** or **Owner** role in the target subscription
+            - **Network Contributor** for VNet and subnet operations
+            - **DNS Zone Contributor** for DNS zone operations (if cross-subscription)
+            """)
+        
+        # Get available subscriptions with current subscription prioritized
+        subscriptions = self.service.get_prioritized_subscriptions()
+        
+        if subscriptions:
+            # Subscription selection with better labeling and current subscription highlighted
+            subscription_options = {}
+            current_sub_info = self.service.get_current_subscription_info()
+            current_sub_id = current_sub_info['subscription_id'] if current_sub_info else None
             
-            with col2:
-                if st.button("🔄 Refresh RGs"):
-                    st.rerun()
+            for sub in subscriptions:
+                if sub['state'] == 'Enabled':
+                    label = f"{sub['display_name']} ({sub['subscription_id']})"
+                    if sub['subscription_id'] == current_sub_id:
+                        label = f"🌟 {label} (Current)"
+                    subscription_options[label] = sub['subscription_id']
+            
+            if subscription_options:
+                col1, col2 = st.columns([4, 1])
+                
+                with col1:
+                    # Initialize session state for deployment subscription if not exists
+                    if 'deployment_subscription_id' not in st.session_state:
+                        st.session_state.deployment_subscription_id = current_sub_id or list(subscription_options.values())[0]
+                    
+                    # Find current selection index based on saved subscription ID
+                    current_selection_index = 0
+                    subscription_list = list(subscription_options.items())
+                    
+                    for i, (label, sub_id) in enumerate(subscription_list):
+                        if sub_id == st.session_state.deployment_subscription_id:
+                            current_selection_index = i
+                            break
+                    
+                    # Use a callback to handle subscription changes
+                    def on_subscription_change():
+                        """Handle subscription selection change."""
+                        selected_key = st.session_state.deploy_subscription_selector
+                        if selected_key in subscription_options:
+                            st.session_state.deployment_subscription_id = subscription_options[selected_key]
+                            # Clear resource group selection when subscription changes
+                            if 'deployment_resource_group' in st.session_state:
+                                del st.session_state['deployment_resource_group']
+                    
+                    selected_subscription_display = st.selectbox(
+                        "Select the subscription for deployment",
+                        options=list(subscription_options.keys()),
+                        index=current_selection_index,
+                        help="🌟 = Current subscription. Choose where to deploy the AI Foundry Account and resources",
+                        key="deploy_subscription_selector",
+                        on_change=on_subscription_change
+                    )
+                    
+                    # Ensure session state is updated (fallback)
+                    if selected_subscription_display in subscription_options:
+                        st.session_state.deployment_subscription_id = subscription_options[selected_subscription_display]
+                    
+                    # Show selection confirmation with enhanced information
+                    is_current = st.session_state.deployment_subscription_id == current_sub_id
+                    selected_sub_info = next((sub for sub in subscriptions if sub['subscription_id'] == st.session_state.deployment_subscription_id), None)
+                    
+                    if is_current:
+                        st.success(f"✅ **Deployment Subscription**: {selected_subscription_display} (Same as current)")
+                        st.info("ℹ️ **Configuration**: Single subscription deployment (recommended for development)")
+                    else:
+                        st.info(f"🔄 **Deployment Subscription**: {selected_subscription_display} (Cross-subscription deployment)")
+                        st.warning("⚠️ **Cross-subscription deployment**: Ensure you have proper permissions in the target subscription")
+                        st.info("ℹ️ **Configuration**: Multi-subscription deployment (common in enterprise environments)")
+                    
+                    # Show additional subscription information
+                    if selected_sub_info:
+                        st.caption(f"📋 **Subscription State**: {selected_sub_info.get('state', 'Unknown')}")
+                        if selected_sub_info.get('tenantId'):
+                            st.caption(f"🏢 **Tenant ID**: {selected_sub_info['tenantId']}")
+                
+                with col2:
+                    if st.button("🔄 Refresh", help="Refresh subscription list", key="refresh_subscriptions_deploy"):
+                        # Clear cached services to force refresh
+                        if 'ai_foundry_deployment_service' in st.session_state:
+                            del st.session_state['ai_foundry_deployment_service']
+                        st.rerun()
+                    
+                    # Add validation button for cross-subscription scenarios
+                    if not is_current:
+                        if st.button("🔍 Validate", help="Validate permissions in target subscription", key="validate_target_subscription"):
+                            with st.spinner("Validating permissions..."):
+                                try:
+                                    # Try to list resource groups as a basic permission test
+                                    test_rgs = self.service.get_subscription_resource_groups(st.session_state.deployment_subscription_id)
+                                    if test_rgs is not None:
+                                        st.success(f"✅ Access validated ({len(test_rgs)} resource groups found)")
+                                    else:
+                                        st.error("❌ Unable to access target subscription")
+                                except Exception as e:
+                                    st.error(f"❌ Permission error: {str(e)}")
+                                    st.warning("Please ensure you have Contributor role in the target subscription")
+            else:
+                st.error("❌ No enabled subscriptions found")
+                return
         else:
-            st.error("No resource groups found. Please check your Azure CLI login.")
+            st.error("❌ Unable to load subscriptions. Please check your Azure CLI login and permissions.")
             return
+        
+        # Resource Group Selection
+        st.markdown("#### 📁 Target Resource Group")
+        
+        # Get resource groups for the selected subscription
+        selected_subscription_id = st.session_state.deployment_subscription_id
+        
+        # Get resource groups from the selected subscription
+        try:
+            resource_groups = self.service.get_subscription_resource_groups(selected_subscription_id)
+            
+            if resource_groups:
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    # Initialize resource group session state
+                    rg_key = f"deployment_resource_group_{selected_subscription_id}"
+                    if rg_key not in st.session_state and resource_groups:
+                        st.session_state[rg_key] = resource_groups[0]
+                    
+                    # Find current selection index
+                    rg_index = 0
+                    if rg_key in st.session_state and st.session_state[rg_key] in resource_groups:
+                        rg_index = resource_groups.index(st.session_state[rg_key])
+                    
+                    def on_rg_change():
+                        """Handle resource group selection change."""
+                        st.session_state[rg_key] = st.session_state[f"deploy_rg_selector_{selected_subscription_id}"]
+                    
+                    target_rg = st.selectbox(
+                        f"Select Resource Group (in subscription {selected_subscription_id[:8]}...)",
+                        resource_groups,
+                        index=rg_index,
+                        help=f"Select the resource group where resources will be deployed in subscription {selected_subscription_id[:8]}...",
+                        key=f"deploy_rg_selector_{selected_subscription_id}",
+                        on_change=on_rg_change
+                    )
+                    
+                    # Update session state
+                    st.session_state[rg_key] = target_rg
+                
+                with col2:
+                    if st.button("🔄 Refresh RGs", key=f"refresh_rgs_deploy_{selected_subscription_id}"):
+                        # Clear the cached resource group selection when refreshing
+                        if rg_key in st.session_state:
+                            del st.session_state[rg_key]
+                        st.rerun()
+                        
+                if selected_subscription_id == current_sub_id:
+                    st.success(f"✅ **Target Resource Group**: {target_rg} (in current subscription)")
+                else:
+                    st.success(f"✅ **Target Resource Group**: {target_rg} (in target subscription {selected_subscription_id[:8]}...)")
+            else:
+                st.warning(f"⚠️ No resource groups found in subscription {selected_subscription_id[:8]}...")
+                
+                # Manual input for empty subscription or error scenarios
+                manual_rg_key = f"manual_rg_{selected_subscription_id}"
+                target_rg = st.text_input(
+                    "Resource Group Name",
+                    value=st.session_state.get(manual_rg_key, ""),
+                    help="Enter the name of the resource group (it will be created if it doesn't exist)",
+                    placeholder="e.g., rg-ai-foundry-prod",
+                    key=manual_rg_key
+                )
+                
+                if target_rg:
+                    st.info(f"📝 **Target Resource Group**: {target_rg} (will be created if it doesn't exist)")
+                else:
+                    st.info("📝 Please enter the resource group name")
+                
+        except Exception as e:
+            st.error(f"❌ Error accessing subscription {selected_subscription_id[:8]}...: {str(e)}")
+            st.warning("Please ensure you have proper permissions in the target subscription.")
+            
+            # Fallback to manual input
+            target_rg = st.text_input(
+                "Resource Group Name (Manual Entry)",
+                value="",
+                help="Enter the name of the resource group in the target subscription",
+                placeholder="e.g., rg-ai-foundry-prod"
+            )
+            
+            if target_rg:
+                st.info(f"📝 **Target Resource Group**: {target_rg} (manual entry - ensure it exists or will be created)")
+            else:
+                st.warning("📝 Please enter the resource group name")
+        
+        # Deployment Configuration Summary
+        if target_rg and st.session_state.deployment_subscription_id:
+            st.markdown("### 📋 Deployment Summary")
+            
+            with st.expander("🔍 Review Deployment Configuration", expanded=False):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**🎯 Deployment Target:**")
+                    st.write(f"• **Subscription**: {st.session_state.deployment_subscription_id[:8]}...")
+                    st.write(f"• **Resource Group**: {target_rg}")
+                    st.write(f"• **Location**: {config.location}")
+                    st.write(f"• **AI Services Name**: {config.ai_services_name}")
+                    
+                    st.markdown("**🌐 Network Configuration:**")
+                    if config.network_config.create_new_vnet:
+                        st.write(f"• **VNet**: Create new ({config.network_config.vnet_name})")
+                        st.write(f"• **VNet CIDR**: {config.network_config.vnet_address_prefix}")
+                    else:
+                        st.write(f"• **VNet**: Use existing")
+                        if config.network_config.existing_vnet_resource_id:
+                            vnet_name = config.network_config.existing_vnet_resource_id.split('/')[-1]
+                            st.write(f"• **VNet Name**: {vnet_name}")
+                
+                with col2:
+                    st.markdown("**🔗 DNS Configuration:**")
+                    if config.dns_zone_subscription_id:
+                        st.write(f"• **DNS Subscription**: {config.dns_zone_subscription_id[:8]}...")
+                    else:
+                        st.write(f"• **DNS Subscription**: Same as deployment")
+                    
+                    if config.dns_zone_resource_group_name:
+                        st.write(f"• **DNS Resource Group**: {config.dns_zone_resource_group_name}")
+                    else:
+                        st.write(f"• **DNS Resource Group**: Same as deployment")
+                    
+                    st.write(f"• **Create DNS Zones**: {'Yes' if config.create_dns_zones_if_not_exist else 'No'}")
+                    
+                    st.markdown("**🧠 Model Configuration:**")
+                    if config.skip_openai_deployment:
+                        st.write("• **OpenAI Models**: Skipped")
+                    else:
+                        st.write(f"• **OpenAI Models**: {config.model_name}")
+                        st.write(f"• **Model Capacity**: {config.model_capacity} TPM")
+                    
+                    st.markdown("**📦 Resources:**")
+                    resources_status = []
+                    if not config.cosmos_db.skip_deployment:
+                        status = "Create New" if config.cosmos_db.create_new else "Use Existing"
+                        resources_status.append(f"• **Cosmos DB**: {status}")
+                    if not config.ai_search.skip_deployment:
+                        status = "Create New" if config.ai_search.create_new else "Use Existing"
+                        resources_status.append(f"• **AI Search**: {status}")
+                    if not config.storage_account.skip_deployment:
+                        status = "Create New" if config.storage_account.create_new else "Use Existing"
+                        resources_status.append(f"• **Storage Account**: {status}")
+                    
+                    for status in resources_status:
+                        st.write(status)
         
         # Deployment Name
         deployment_name = st.text_input(
@@ -1127,34 +1541,68 @@ class AIFoundryHubDeploymentUI:
             help="Name for this deployment (must be unique within the resource group)"
         )
         
+        # Important deployment notes
+        if st.session_state.deployment_subscription_id != current_sub_id:
+            st.warning("""
+            ⚠️ **Cross-Subscription Deployment Notes:**
+            - Ensure you have **Contributor** or **Owner** permissions in the target subscription
+            - DNS zone configuration should point to accessible DNS zones
+            - Network resources should be properly configured for cross-subscription access
+            - Deployment may take longer due to cross-subscription operations
+            """)
+        
         # Deployment Button
         st.markdown("### 🎬 Start Deployment")
         
-        if st.button("🚀 Deploy AI Foundry Account", type="primary"):
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            deploy_button_text = "🚀 Deploy AI Foundry Account"
+            if st.session_state.deployment_subscription_id != current_sub_id:
+                deploy_button_text += " (Cross-Subscription)"
+        
+        if st.button(deploy_button_text, type="primary"):
             if not target_rg:
-                st.error("Please select a resource group.")
+                st.error("Please select or enter a resource group.")
                 return
             
             if not deployment_name:
                 st.error("Please enter a deployment name.")
                 return
             
+            # Validation for cross-subscription deployment
+            if st.session_state.deployment_subscription_id != current_sub_id:
+                if not target_rg.strip():
+                    st.error("Please enter a valid resource group name for cross-subscription deployment.")
+                    return
+                
+                st.info("🔄 **Cross-subscription deployment initiated**. Please ensure proper permissions are configured.")
+            
             # Auto-save configuration before deployment
             if hasattr(st.session_state, 'deployment_config'):
                 self.service.save_deployment_config(st.session_state.deployment_config, "last_deployment")
                 st.info("💾 Configuration auto-saved as 'last_deployment'")
             
-            # Store deployment info in session state
+            # Store deployment info in session state including subscription
             st.session_state.current_deployment = {
+                'subscription_id': st.session_state.deployment_subscription_id,
                 'resource_group': target_rg,
                 'deployment_name': deployment_name,
-                'status': 'starting'
+                'status': 'starting',
+                'cross_subscription': st.session_state.deployment_subscription_id != current_sub_id
             }
             
-            # Start deployment
-            with st.spinner("🚀 Starting deployment... This may take 20-30 minutes."):
+            # Start deployment with subscription context
+            deployment_message = "🚀 Starting deployment..."
+            if st.session_state.deployment_subscription_id != current_sub_id:
+                deployment_message += f" (Target subscription: {st.session_state.deployment_subscription_id[:8]}...)"
+            deployment_message += " This may take 20-30 minutes."
+            
+            with st.spinner(deployment_message):
                 success, message, output = self.service.deploy_ai_foundry_hub(
-                    config, target_rg, deployment_name
+                    config, 
+                    target_rg, 
+                    deployment_name,
+                    subscription_id=st.session_state.deployment_subscription_id
                 )
                 
                 if success:

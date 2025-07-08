@@ -145,6 +145,63 @@ class AIFoundryHubDeploymentService:
             logger.error(f"Failed to get subscriptions: {e}")
             return []
     
+    def get_current_subscription_info(self) -> Optional[Dict[str, str]]:
+        """Get information about the current default subscription."""
+        try:
+            from azure.identity import DefaultAzureCredential
+            from azure.mgmt.subscription import SubscriptionClient
+            import os
+            
+            # Try to get from environment first
+            current_sub_id = os.getenv('AZURE_SUBSCRIPTION_ID')
+            if not current_sub_id:
+                # Try Azure CLI
+                try:
+                    import subprocess
+                    result = subprocess.run(
+                        ['az', 'account', 'show', '--query', 'id', '-o', 'tsv'],
+                        capture_output=True, text=True, check=True
+                    )
+                    current_sub_id = result.stdout.strip()
+                except:
+                    return None
+            
+            if current_sub_id:
+                credential = DefaultAzureCredential()
+                subscription_client = SubscriptionClient(credential)
+                
+                try:
+                    sub = subscription_client.subscriptions.get(current_sub_id)
+                    return {
+                        "subscription_id": sub.subscription_id,
+                        "display_name": sub.display_name,
+                        "state": sub.state
+                    }
+                except:
+                    return None
+            
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get current subscription info: {e}")
+            return None
+    
+    def get_prioritized_subscriptions(self) -> List[Dict[str, str]]:
+        """Get subscriptions with current subscription prioritized at the top."""
+        try:
+            all_subs = self.get_available_subscriptions()
+            current_sub = self.get_current_subscription_info()
+            
+            if not current_sub:
+                return all_subs
+            
+            # Remove current subscription from list and add it at the top
+            other_subs = [sub for sub in all_subs if sub['subscription_id'] != current_sub['subscription_id']]
+            return [current_sub] + other_subs
+            
+        except Exception as e:
+            logger.error(f"Failed to get prioritized subscriptions: {e}")
+            return self.get_available_subscriptions()
+    
     def get_resource_groups_for_subscription(self, subscription_id: str) -> List[str]:
         """Get list of resource groups for a specific subscription."""
         try:
@@ -163,6 +220,43 @@ class AIFoundryHubDeploymentService:
             logger.error(f"Failed to get resource groups for subscription {subscription_id}: {e}")
             return []
     
+    def suggest_dns_zone_resource_groups(self, subscription_id: str) -> List[str]:
+        """Get resource groups with common DNS zone naming patterns prioritized."""
+        try:
+            all_rgs = self.get_resource_groups_for_subscription(subscription_id)
+            
+            # Common patterns for DNS zone resource groups
+            dns_patterns = [
+                'private-rg', 'network-rg', 'dns-zones-rg', 'shared-network-rg',
+                'hub-network-rg', 'connectivity-rg', 'network-hub-rg'
+            ]
+            
+            prioritized_rgs = []
+            remaining_rgs = []
+            
+            for rg in all_rgs:
+                rg_lower = rg.lower()
+                if any(pattern in rg_lower for pattern in ['private', 'dns', 'network', 'hub', 'connectivity']):
+                    prioritized_rgs.append(rg)
+                else:
+                    remaining_rgs.append(rg)
+            
+            # Sort prioritized by common patterns
+            def sort_key(rg):
+                rg_lower = rg.lower()
+                for i, pattern in enumerate(dns_patterns):
+                    if pattern in rg_lower:
+                        return i
+                return len(dns_patterns)
+            
+            prioritized_rgs.sort(key=sort_key)
+            
+            return prioritized_rgs + remaining_rgs
+            
+        except Exception as e:
+            logger.error(f"Failed to suggest DNS zone resource groups: {e}")
+            return self.get_resource_groups_for_subscription(subscription_id)
+
     def validate_dns_zones_exist(self, subscription_id: str, resource_group_name: str) -> Dict[str, bool]:
         """Validate that required private DNS zones exist in the specified location."""
         try:
@@ -247,8 +341,12 @@ class AIFoundryHubDeploymentService:
             'westus2'
         ]
     
-    def get_subscription_resource_groups(self) -> List[str]:
-        """Get available resource groups in the subscription."""
+    def get_subscription_resource_groups(self, subscription_id: Optional[str] = None) -> List[str]:
+        """Get available resource groups in the subscription.
+        
+        Args:
+            subscription_id: Optional subscription ID. If not provided, uses current subscription.
+        """
         try:
             # Check if Azure CLI is logged in
             logged_in, error = check_azure_cli_login()
@@ -256,9 +354,14 @@ class AIFoundryHubDeploymentService:
                 logger.error(f"Azure CLI not logged in: {error}")
                 return []
             
+            # Build command with optional subscription parameter
+            cmd = ["az", "group", "list", "--query", "[].name", "--output", "json"]
+            if subscription_id:
+                cmd.extend(["--subscription", subscription_id])
+            
             # Get resource groups using Azure CLI
             result = subprocess.run(
-                ["az", "group", "list", "--query", "[].name", "--output", "json"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=30
@@ -504,7 +607,7 @@ class AIFoundryHubDeploymentService:
             logger.error(f"Error creating parameters file: {str(e)}")
             return False
     
-    def _validate_template(self, template_file: str, params_file: str, resource_group: str, template_type: str) -> Tuple[bool, str]:
+    def _validate_template(self, template_file: str, params_file: str, resource_group: str, template_type: str, subscription_id: Optional[str] = None) -> Tuple[bool, str]:
         """Validate ARM or Bicep template and parameters before deployment."""
         try:
             print(f"🔍 DEBUG: Validating {template_type} template: {template_file}")
@@ -516,6 +619,11 @@ class AIFoundryHubDeploymentService:
                 "--parameters", f"@{params_file}",
                 "--output", "json"
             ]
+            
+            # Add subscription parameter if specified
+            if subscription_id:
+                validate_cmd.extend(["--subscription", subscription_id])
+                print(f"🎯 DEBUG: Adding subscription to validation: {subscription_id}")
             
             print(f"🔍 DEBUG: Template validation command: {' '.join(validate_cmd)}")
             
@@ -658,13 +766,15 @@ class AIFoundryHubDeploymentService:
             print(f"⚠️ DEBUG: Template validation exception: {e}")
             return False, f"Template validation error: {str(e)}"
     
-    def deploy_ai_foundry_hub(self, config: AIFoundryHubDeploymentConfig, resource_group: str, deployment_name: str) -> Tuple[bool, str, Optional[str]]:
+    def deploy_ai_foundry_hub(self, config: AIFoundryHubDeploymentConfig, resource_group: str, deployment_name: str, subscription_id: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
         """Deploy AI Foundry Hub using ARM or Bicep template (prefers ARM to avoid BCP177 issues)."""
         try:
             print(f"🔍 DEBUG: Starting AI Foundry Hub deployment")
             print(f"📋 DEBUG: Deployment Name: {deployment_name}")
             print(f"🏢 DEBUG: Resource Group: {resource_group}")
             print(f"📍 DEBUG: Location: {config.location}")
+            if subscription_id:
+                print(f"🎯 DEBUG: Target Subscription: {subscription_id}")
             
             # Validate template
             valid, msg = self.validate_template_path()
@@ -687,21 +797,47 @@ class AIFoundryHubDeploymentService:
                 
                 if account_result.returncode == 0:
                     account_info = json.loads(account_result.stdout)
+                    current_subscription = account_info.get('id', 'Unknown')
                     print(f"✅ DEBUG: Azure CLI logged in successfully")
                     print(f"📧 DEBUG: Account: {account_info.get('user', {}).get('name', 'Unknown')}")
-                    print(f"🔑 DEBUG: Subscription ID: {account_info.get('id', 'Unknown')}")
+                    print(f"🔑 DEBUG: Current Subscription ID: {current_subscription}")
                     print(f"🏠 DEBUG: Tenant ID: {account_info.get('tenantId', 'Unknown')}")
                     print(f"☁️ DEBUG: Cloud: {account_info.get('environmentName', 'Unknown')}")
+                    
+                    # Handle cross-subscription deployment
+                    if subscription_id and subscription_id != current_subscription:
+                        print(f"🔄 DEBUG: Cross-subscription deployment detected")
+                        print(f"🎯 DEBUG: Switching to target subscription: {subscription_id}")
+                        
+                        # Switch to target subscription
+                        switch_result = subprocess.run([
+                            "az", "account", "set", "--subscription", subscription_id
+                        ], capture_output=True, text=True, timeout=30)
+                        
+                        if switch_result.returncode != 0:
+                            error_msg = f"Failed to switch to target subscription {subscription_id}: {switch_result.stderr}"
+                            print(f"❌ DEBUG: {error_msg}")
+                            return False, error_msg, None
+                        
+                        print(f"✅ DEBUG: Successfully switched to target subscription")
+                    elif subscription_id:
+                        print(f"✅ DEBUG: Target subscription matches current subscription")
                 else:
                     print(f"⚠️ DEBUG: Could not get account info: {account_result.stderr}")
             except Exception as e:
                 print(f"⚠️ DEBUG: Account info check failed: {e}")
             
-            # Check if resource group exists
+            # Use target subscription ID in resource group check
+            target_subscription = subscription_id if subscription_id else "current"
+            print(f"🔍 DEBUG: Checking resource group in subscription: {target_subscription}")
+            
+            # Check if resource group exists (in target subscription)
             try:
-                rg_result = subprocess.run([
-                    "az", "group", "show", "--name", resource_group, "--output", "json"
-                ], capture_output=True, text=True, timeout=30)
+                rg_check_cmd = ["az", "group", "show", "--name", resource_group, "--output", "json"]
+                if subscription_id:
+                    rg_check_cmd.extend(["--subscription", subscription_id])
+                
+                rg_result = subprocess.run(rg_check_cmd, capture_output=True, text=True, timeout=30)
                 
                 if rg_result.returncode == 0:
                     rg_info = json.loads(rg_result.stdout)
@@ -798,7 +934,7 @@ class AIFoundryHubDeploymentService:
             
             # Validate template before deployment
             print(f"🔍 DEBUG: Validating {template_type} template...")
-            validation_success, validation_message = self._validate_template(template_file, params_file, resource_group, template_type)
+            validation_success, validation_message = self._validate_template(template_file, params_file, resource_group, template_type, subscription_id)
             
             if not validation_success:
                 # Clean up parameters file
@@ -819,6 +955,11 @@ class AIFoundryHubDeploymentService:
                 "--no-wait",  # Don't wait for completion to avoid response consumption
                 "--output", "json"  # Structured output
             ]
+            
+            # Add subscription parameter if specified (for cross-subscription deployments)
+            if subscription_id:
+                cmd.extend(["--subscription", subscription_id])
+                print(f"🎯 DEBUG: Adding subscription parameter: {subscription_id}")
             
             print(f"🚀 DEBUG: Deployment command: {' '.join(cmd)}")
             print(f"📁 DEBUG: Working directory: {os.getcwd()}")
