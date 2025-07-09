@@ -25,47 +25,40 @@ def render_function_config_tab(
     """Render the Function Config tab."""
     st.header("⚙️ Azure Function Configuration")
     
-    # Load environment variables (updated for managed identity)
-    # Map local .env variables to Function App settings
-    local_to_function_mapping = {
-        # INDEX_NAME will be set from UI selection below - not from .env
-        "AGENT_NAME": "AGENT_NAME", 
-        "AZURE_SEARCH_ENDPOINT": "SERVICE_NAME",  # Extract service name from endpoint
-        "AZURE_OPENAI_ENDPOINT": "OPENAI_ENDPOINT",
-        "AZURE_OPENAI_ENDPOINT_41": "OPENAI_ENDPOINT",  # Support _41 suffix (preferred)
-        "AZURE_OPENAI_DEPLOYMENT": "OPENAI_DEPLOYMENT", 
-        "AZURE_OPENAI_DEPLOYMENT_41": "OPENAI_DEPLOYMENT",  # Support _41 suffix (preferred)
-        "AZURE_OPENAI_CHATGPT_DEPLOYMENT": "OPENAI_DEPLOYMENT",  # Alternative deployment name
-        # API_VERSION removed - should be empty when loading settings
-        "MAX_OUTPUT_SIZE": "MAX_OUTPUT_SIZE",
-        "RERANKER_THRESHOLD": "RERANKER_THRESHOLD", 
-        "TOP_K": "TOP_K",
-        "debug": "debug",
-        "includesrc": "includesrc",
-        # Legacy keys (optional for development/fallback compatibility)
-        "AZURE_OPENAI_KEY": "OPENAI_KEY",
-        "AZURE_OPENAI_KEY_41": "OPENAI_KEY",  # Support _41 suffix
-        "AZURE_SEARCH_KEY": "SEARCH_API_KEY"
-    }
-    
+    # Load environment variables (raw values - let azure_function_helper.py handle the mapping)
     env_vars = {}
-    for local_key, function_key in local_to_function_mapping.items():
-        local_value = os.getenv(local_key, "")
-        
-        # Special handling for SERVICE_NAME - extract from AZURE_SEARCH_ENDPOINT
-        if function_key == "SERVICE_NAME" and local_value:
-            # Extract service name from https://service-name.search.windows.net
-            import re
-            match = re.search(r'https://([^.]+)\.search\.windows\.net', local_value)
-            if match:
-                env_vars[function_key] = match.group(1)
-            else:
-                env_vars[function_key] = ""
-        else:
-            # Only update if we don't have this function_key already, or if this is a _41 variant (preferred)
-            if function_key not in env_vars or local_key.endswith('_41'):
-                if local_value:  # Only set if there's a value
-                    env_vars[function_key] = local_value
+    
+    # Get raw environment values and pass them directly to azure_function_helper.py
+    raw_env_keys = [
+        "AZURE_SEARCH_ENDPOINT",
+        "AZURE_OPENAI_ENDPOINT", 
+        "AZURE_OPENAI_ENDPOINT_41",
+        "AZURE_OPENAI_DEPLOYMENT",
+        "AZURE_OPENAI_DEPLOYMENT_41", 
+        "AZURE_OPENAI_CHATGPT_DEPLOYMENT",
+        "MAX_OUTPUT_SIZE",
+        "RERANKER_THRESHOLD",
+        "TOP_K", 
+        "debug",
+        "includesrc",
+        # Legacy keys for fallback
+        "AZURE_OPENAI_KEY",
+        "AZURE_OPENAI_KEY_41",
+        "AZURE_SEARCH_KEY"
+    ]
+    
+    # Load raw environment variables
+    for key in raw_env_keys:
+        value = os.getenv(key, "")
+        if value:  # Only include non-empty values
+            env_vars[key] = value
+    
+    # Debug: Show what environment variables we loaded
+    print(f"DEBUG Function Config Tab: Loaded {len(env_vars)} environment variables:")
+    for key, value in env_vars.items():
+        # Mask sensitive values for logging
+        display_value = "••••••" if "key" in key.lower() else value[:30] + "..." if len(value) > 30 else value
+        print(f"DEBUG Function Config Tab:   {key}: {display_value}")
 
     st.markdown("Configure environment variables for Azure Function deployment.")
     

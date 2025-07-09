@@ -182,19 +182,22 @@ def load_function_settings(
         # Apply .env values to function settings (prioritize _41 variants and override empty values)
         for env_key, func_key in env_to_function_mapping.items():
             if env_key in env_vars and env_vars[env_key]:
+                current_value = param_vals.get(func_key, "")
+                
                 if func_key == "SERVICE_NAME" and env_vars[env_key]:
                     # Extract service name from AZURE_SEARCH_ENDPOINT
                     import re
                     match = re.search(r'https://([^.]+)\.search\.windows\.net', env_vars[env_key])
                     if match:
                         param_vals[func_key] = match.group(1)
-                        print(f"DEBUG: Mapped {env_key} -> {func_key}: {match.group(1)}")
+                        print(f"DEBUG: Mapped {env_key} -> {func_key}: {match.group(1)} (was: '{current_value}')")
+                    else:
+                        print(f"DEBUG: Failed to extract service name from: {env_vars[env_key]}")
                 else:
                     # Update if:
                     # 1. Key doesn't exist in function app
-                    # 2. Key exists but is empty/None in function app
-                    # 3. This is a _41 variant (preferred)
-                    current_value = param_vals.get(func_key, "")
+                    # 2. Key exists but is empty/None in function app  
+                    # 3. This is a _41 variant (preferred - these always override)
                     should_update = (
                         func_key not in param_vals or 
                         not current_value or 
@@ -205,6 +208,8 @@ def load_function_settings(
                     if should_update:
                         param_vals[func_key] = env_vars[env_key]
                         print(f"DEBUG: Mapped {env_key} -> {func_key}: {env_vars[env_key][:20]}... (was: '{current_value}')")
+                    else:
+                        print(f"DEBUG: Skipped {env_key} -> {func_key}: Function App has existing value '{current_value}'")
         
         # Apply direct env_vars that are already in function format (passed from UI)
         for key, value in env_vars.items():
