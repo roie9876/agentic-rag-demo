@@ -608,7 +608,7 @@
                     },
                     "virtualNetworkName": {
                       "type": "string",
-                      "value": "[parameters('vnetName')]"
+                      "value": "[toLower(parameters('vnetName'))]"
                     },
                     "virtualNetworkId": {
                       "type": "string",
@@ -616,7 +616,7 @@
                     },
                     "virtualNetworkResourceGroup": {
                       "type": "string",
-                      "value": "[resourceGroup().name]"
+                      "value": "[toLower(resourceGroup().name)]"
                     },
                     "virtualNetworkSubscriptionId": {
                       "type": "string",
