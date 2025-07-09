@@ -658,3 +658,350 @@ def assign_search_rbac_roles(
         return False, "Operation timed out. Please try again or assign roles manually."
     except Exception as ex:
         return False, f"Unexpected error during RBAC assignment: {ex}"
+
+
+def assign_openai_rbac_roles(
+    subscription_id: str,
+    function_app_name: str,
+    resource_group: str,
+    openai_service_name: str,
+    openai_resource_group: str = None
+) -> Tuple[bool, str]:
+    """
+    Assign required RBAC roles to Function App managed identity for Azure OpenAI access.
+    
+    Args:
+        subscription_id: Azure subscription ID
+        function_app_name: Name of the Function App
+        resource_group: Function App resource group name
+        openai_service_name: Name of the Azure OpenAI service
+        openai_resource_group: OpenAI service resource group (defaults to function_app resource_group)
+    
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    if openai_resource_group is None:
+        openai_resource_group = resource_group
+        
+    try:
+        # Step 1: Enable managed identity if not already enabled
+        enable_identity_cmd = [
+            "az", "functionapp", "identity", "assign",
+            "--name", function_app_name,
+            "--resource-group", resource_group,
+            "--subscription", subscription_id
+        ]
+        
+        identity_result = subprocess.run(
+            enable_identity_cmd, 
+            capture_output=True, 
+            text=True, 
+            timeout=30
+        )
+        
+        if identity_result.returncode != 0:
+            return False, f"Failed to enable managed identity: {identity_result.stderr}"
+        
+        # Step 2: Get the principal ID of the Function App
+        get_principal_cmd = [
+            "az", "functionapp", "identity", "show",
+            "--name", function_app_name,
+            "--resource-group", resource_group,
+            "--subscription", subscription_id,
+            "--query", "principalId",
+            "-o", "tsv"
+        ]
+        
+        principal_result = subprocess.run(
+            get_principal_cmd, 
+            capture_output=True, 
+            text=True, 
+            timeout=30
+        )
+        
+        if principal_result.returncode != 0:
+            return False, f"Failed to get principal ID: {principal_result.stderr}"
+        
+        principal_id = principal_result.stdout.strip()
+        if not principal_id:
+            return False, "Could not retrieve Function App principal ID"
+        
+        # Step 3: Get the Azure OpenAI service resource ID
+        get_openai_id_cmd = [
+            "az", "cognitiveservices", "account", "show",
+            "--name", openai_service_name,
+            "--resource-group", openai_resource_group,
+            "--subscription", subscription_id,
+            "--query", "id",
+            "-o", "tsv"
+        ]
+        
+        openai_result = subprocess.run(
+            get_openai_id_cmd, 
+            capture_output=True, 
+            text=True, 
+            timeout=30
+        )
+        
+        if openai_result.returncode != 0:
+            return False, f"Failed to get Azure OpenAI service ID: {openai_result.stderr}"
+        
+        openai_resource_id = openai_result.stdout.strip()
+        if not openai_resource_id:
+            return False, f"Could not find Azure OpenAI service: {openai_service_name}"
+        
+        # Step 4: Assign Cognitive Services OpenAI User role
+        assign_openai_role_cmd = [
+            "az", "role", "assignment", "create",
+            "--assignee", principal_id,
+            "--role", "Cognitive Services OpenAI User",
+            "--scope", openai_resource_id,
+            "--subscription", subscription_id
+        ]
+        
+        openai_role_result = subprocess.run(
+            assign_openai_role_cmd, 
+            capture_output=True, 
+            text=True, 
+            timeout=30
+        )
+        
+        # Check results
+        roles_assigned = []
+        errors = []
+        
+        if openai_role_result.returncode == 0:
+            roles_assigned.append("Cognitive Services OpenAI User")
+        else:
+            # Check if role already exists (this is not necessarily an error)
+            if "already exists" in openai_role_result.stderr.lower():
+                roles_assigned.append("Cognitive Services OpenAI User (already assigned)")
+            else:
+                errors.append(f"OpenAI role assignment failed: {openai_role_result.stderr}")
+        
+        if roles_assigned and not errors:
+            return True, f"Successfully assigned Azure OpenAI RBAC role: {', '.join(roles_assigned)}"
+        elif roles_assigned and errors:
+            return True, f"Partially successful - Assigned: {', '.join(roles_assigned)}. Errors: {'; '.join(errors)}"
+        else:
+            return False, f"Failed to assign Azure OpenAI role: {'; '.join(errors)}"
+            
+    except subprocess.TimeoutExpired:
+        return False, "Operation timed out. Please try again or assign roles manually."
+    except Exception as ex:
+        return False, f"Unexpected error during Azure OpenAI RBAC assignment: {ex}"
+
+
+def assign_all_rbac_roles(
+    subscription_id: str,
+    function_app_name: str,
+    resource_group: str,
+    search_service_name: str,
+    openai_service_name: str,
+    openai_resource_group: str = None
+) -> Tuple[bool, str]:
+    """
+    Assign all required RBAC roles for both Azure AI Search and Azure OpenAI.
+    
+    Args:
+        subscription_id: Azure subscription ID
+        function_app_name: Name of the Function App
+        resource_group: Function App resource group name
+        search_service_name: Name of the Azure AI Search service
+        openai_service_name: Name of the Azure OpenAI service  
+        openai_resource_group: OpenAI service resource group (defaults to function_app resource_group)
+    
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    messages = []
+    overall_success = True
+    
+    # Assign Azure AI Search roles
+    search_success, search_message = assign_search_rbac_roles(
+        subscription_id=subscription_id,
+        function_app_name=function_app_name,
+        resource_group=resource_group,
+        search_service_name=search_service_name
+    )
+    
+    messages.append(f"🔍 Azure AI Search: {search_message}")
+    if not search_success:
+        overall_success = False
+    
+    # Assign Azure OpenAI roles
+    openai_success, openai_message = assign_openai_rbac_roles(
+        subscription_id=subscription_id,
+        function_app_name=function_app_name,
+        resource_group=resource_group,
+        openai_service_name=openai_service_name,
+        openai_resource_group=openai_resource_group
+    )
+    
+    messages.append(f"🤖 Azure OpenAI: {openai_message}")
+    if not openai_success:
+        overall_success = False
+    
+    combined_message = "\n".join(messages)
+    
+    if overall_success:
+        return True, f"✅ Successfully configured all RBAC roles:\n{combined_message}"
+    else:
+        return False, f"⚠️ Partial success or failure:\n{combined_message}"
+
+
+def get_function_url_and_key(
+    subscription_id: str,
+    resource_group: str,
+    function_app_name: str,
+    function_name: str = "AgentFunction"
+) -> Tuple[bool, str, str, str]:
+    """
+    Get the actual Function URL and key from Azure.
+    
+    Args:
+        subscription_id: Azure subscription ID
+        resource_group: Resource group name
+        function_app_name: Function App name
+        function_name: Function name (default: "AgentFunction")
+    
+    Returns:
+        Tuple of (success: bool, function_url: str, function_key: str, error_msg: str)
+    """
+    if not all((subscription_id, resource_group, function_app_name)):
+        return False, "", "", "Missing required parameters"
+    
+    try:
+        wcli = WebSiteManagementClient(DefaultAzureCredential(), subscription_id)
+        
+        # Step 1: Get the Function App details to get the correct hostname
+        try:
+            site = wcli.web_apps.get(resource_group, function_app_name)
+            if not site:
+                return False, "", "", f"Function App {function_app_name} not found"
+            
+            # Get the actual hostname from Azure
+            hostname = getattr(site, 'default_host_name', f"{function_app_name}.azurewebsites.net")
+            print(f"DEBUG: Found Function App hostname: {hostname}")
+            
+        except Exception as e:
+            print(f"DEBUG: Failed to get Function App details: {e}")
+            # Fallback to simple hostname
+            hostname = f"{function_app_name}.azurewebsites.net"
+        
+        # Step 2: Try to get function keys using Azure CLI (more reliable)
+        function_key = ""
+        try:
+            # Get function keys using Azure CLI
+            get_keys_cmd = [
+                "az", "functionapp", "function", "keys", "list",
+                "--function-name", function_name,
+                "--name", function_app_name,
+                "--resource-group", resource_group,
+                "--subscription", subscription_id,
+                "--query", "default",
+                "-o", "tsv"
+            ]
+            
+            keys_result = subprocess.run(
+                get_keys_cmd, 
+                capture_output=True, 
+                text=True, 
+                timeout=30
+            )
+            
+            if keys_result.returncode == 0 and keys_result.stdout.strip():
+                function_key = keys_result.stdout.strip()
+                print(f"DEBUG: Retrieved function key from Azure CLI")
+            else:
+                print(f"DEBUG: Failed to get function key via Azure CLI: {keys_result.stderr}")
+                
+        except Exception as e:
+            print(f"DEBUG: Azure CLI function key retrieval failed: {e}")
+        
+        # Step 3: If Azure CLI failed, try using Management API
+        if not function_key:
+            try:
+                # Try to get function keys via Management API
+                # Note: This requires elevated permissions
+                function_keys = wcli.web_apps.list_function_keys(
+                    resource_group, function_app_name, function_name
+                )
+                if function_keys and hasattr(function_keys, 'default'):
+                    function_key = function_keys.default
+                    print(f"DEBUG: Retrieved function key from Management API")
+                    
+            except Exception as e:
+                print(f"DEBUG: Management API function key retrieval failed: {e}")
+        
+        # Step 4: Build the function URL
+        function_url = f"https://{hostname}/api/{function_name}"
+        
+        return True, function_url, function_key, ""
+        
+    except Exception as ex:
+        return False, "", "", f"Failed to get function details: {ex}"
+
+
+def generate_test_function_url(
+    subscription_id: str,
+    resource_group: str,
+    function_app_name: str,
+    test_message: str,
+    function_name: str = "AgentFunction",
+    fallback_function_key: str = ""
+) -> Tuple[bool, str, str]:
+    """
+    Generate a complete test URL for the Azure Function with proper hostname and function key.
+    
+    Args:
+        subscription_id: Azure subscription ID
+        resource_group: Resource group name
+        function_app_name: Function App name
+        test_message: Message to encode in the URL
+        function_name: Function name (default: "AgentFunction")
+        fallback_function_key: Function key from .env file as fallback
+    
+    Returns:
+        Tuple of (success: bool, test_url: str, error_msg: str)
+    """
+    import urllib.parse
+    
+    # Get the actual function URL and key from Azure
+    success, function_url, function_key, error_msg = get_function_url_and_key(
+        subscription_id, resource_group, function_app_name, function_name
+    )
+    
+    if not success:
+        return False, "", f"Failed to get function details: {error_msg}"
+    
+    # Use Azure-retrieved key, or fallback to provided key
+    if not function_key and fallback_function_key:
+        function_key = fallback_function_key
+        print(f"DEBUG: Using fallback function key from .env")
+    elif function_key:
+        print(f"DEBUG: Using function key retrieved from Azure")
+    else:
+        print(f"DEBUG: No function key available - URL may not work without authentication")
+    
+    # Encode the test message for URL
+    encoded_message = urllib.parse.quote(test_message, safe="")
+    
+    # Build the complete URL
+    test_url = f"{function_url}/{encoded_message}"
+    
+    # Add query parameters
+    query_params = []
+    
+    # Add function key if available
+    if function_key:
+        query_params.append(f"code={function_key}")
+    
+    # Always add includesrc=true
+    query_params.append("includesrc=true")
+    
+    # Combine query parameters
+    if query_params:
+        test_url += "?" + "&".join(query_params)
+    
+    return True, test_url, ""

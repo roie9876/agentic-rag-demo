@@ -13,7 +13,10 @@ from azure_function_helper import (
     load_function_settings,
     push_function_settings,
     deploy_function_code,
-    assign_search_rbac_roles
+    assign_search_rbac_roles,
+    assign_openai_rbac_roles,
+    assign_all_rbac_roles,
+    generate_test_function_url
 )
 from utils.file_utils import _st_data_editor
 
@@ -431,6 +434,122 @@ def render_function_config_tab(
         else:
             st.warning("⚠️ Azure AI Search endpoint not configured. Please set AZURE_SEARCH_ENDPOINT environment variable.")
 
+        # RBAC Configuration for Azure OpenAI
+        st.divider()
+        st.subheader("🤖 Azure OpenAI RBAC Configuration")
+        st.markdown("Configure managed identity permissions for Azure OpenAI access.")
+        
+        # Get Azure OpenAI service name from environment variables (use env_vars dict instead of os.getenv)
+        openai_endpoint = (
+            env_vars.get("AZURE_OPENAI_ENDPOINT_41", "") or 
+            env_vars.get("AZURE_OPENAI_ENDPOINT", "") or
+            os.getenv("AZURE_OPENAI_ENDPOINT_41", "") or 
+            os.getenv("AZURE_OPENAI_ENDPOINT", "")
+        )
+        openai_service_name = ""
+        
+        if openai_endpoint:
+            # Extract service name from endpoint
+            import re
+            match = re.search(r'https://([^.]+)\.openai\.azure\.com', openai_endpoint)
+            if match:
+                openai_service_name = match.group(1)
+        
+        if openai_service_name:
+            st.info(f"🤖 **Target Azure OpenAI Service**: `{openai_service_name}`")
+            
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                st.markdown("""
+                **Required RBAC Role:**
+                - 🔹 **Cognitive Services OpenAI User** - Allows reading and using Azure OpenAI models
+                
+                This will enable the Function App's managed identity to access Azure OpenAI without API keys.
+                """)
+            
+            with col2:
+                if st.button("🤖 Assign OpenAI RBAC", help="Assign required role to Function App managed identity", key="openai_rbac"):
+                    with st.spinner("🔄 Configuring RBAC roles for Azure OpenAI..."):
+                        success, message = assign_openai_rbac_roles(
+                            subscription_id=sub_id,
+                            function_app_name=func_name,
+                            resource_group=func_rg,
+                            openai_service_name=openai_service_name
+                        )
+                        
+                        if success:
+                            st.success(f"✅ {message}")
+                            st.balloons()
+                            st.info("🔄 **Next Steps**: The Function App can now access Azure OpenAI using managed identity!")
+                        else:
+                            st.error(f"❌ Failed to assign Azure OpenAI RBAC role: {message}")
+                            
+                            # Provide manual instructions
+                            st.warning("🔧 **Manual RBAC Assignment Required**")
+                            st.markdown(f"""
+                            **Manual Steps via Azure Portal:**
+                            1. Go to [Azure Portal](https://portal.azure.com)
+                            2. Navigate to Azure OpenAI service: `{openai_service_name}`
+                            3. Go to **Access control (IAM)** → **Add role assignment**
+                            4. Assign this role to Function App `{func_name}`:
+                               - **Cognitive Services OpenAI User**
+                            
+                            **Or use Azure CLI:**
+                            ```bash
+                            # Get Function App principal ID
+                            PRINCIPAL_ID=$(az functionapp identity show --name {func_name} --resource-group {func_rg} --query principalId -o tsv)
+                            
+                            # Get OpenAI service resource ID
+                            OPENAI_ID=$(az cognitiveservices account show --name {openai_service_name} --resource-group {func_rg} --query id -o tsv)
+                            
+                            # Assign role
+                            az role assignment create --assignee $PRINCIPAL_ID --role "Cognitive Services OpenAI User" --scope $OPENAI_ID
+                            ```
+                            """)
+        else:
+            # Show debug information to help understand why OpenAI section is not showing
+            st.warning("⚠️ Azure OpenAI endpoint not configured or could not extract service name.")
+            
+            with st.expander("🔍 Debug: OpenAI Configuration", expanded=False):
+                st.write("**Environment Variables Checked:**")
+                st.write(f"- `AZURE_OPENAI_ENDPOINT`: `{env_vars.get('AZURE_OPENAI_ENDPOINT', 'Not found')}`")
+                st.write(f"- `AZURE_OPENAI_ENDPOINT_41`: `{env_vars.get('AZURE_OPENAI_ENDPOINT_41', 'Not found')}`")
+                st.write(f"- OS env `AZURE_OPENAI_ENDPOINT`: `{os.getenv('AZURE_OPENAI_ENDPOINT', 'Not found')}`")
+                st.write(f"- OS env `AZURE_OPENAI_ENDPOINT_41`: `{os.getenv('AZURE_OPENAI_ENDPOINT_41', 'Not found')}`")
+                st.write(f"**Detected endpoint**: `{openai_endpoint}`")
+                st.write(f"**Extracted service name**: `{openai_service_name}`")
+                
+                st.markdown("""
+                **To fix this:**
+                1. Set `AZURE_OPENAI_ENDPOINT` or `AZURE_OPENAI_ENDPOINT_41` in your `.env` file
+                2. Format should be: `https://your-service-name.openai.azure.com/`
+                3. Reload the settings after updating the `.env` file
+                """)
+        
+        # Combined RBAC Configuration
+        if search_service_name and openai_service_name:
+            st.divider()
+            st.subheader("⚡ Quick Setup: Assign All RBAC Roles")
+            st.markdown("Configure both Azure AI Search and Azure OpenAI permissions at once.")
+            
+            if st.button("🚀 Assign All RBAC Roles", help="Assign all required roles for both services", key="all_rbac"):
+                with st.spinner("🔄 Configuring all RBAC roles..."):
+                    success, message = assign_all_rbac_roles(
+                        subscription_id=sub_id,
+                        function_app_name=func_name,
+                        resource_group=func_rg,
+                        search_service_name=search_service_name,
+                        openai_service_name=openai_service_name
+                    )
+                    
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.balloons()
+                        st.info("🎉 **All Done!** Your Function App is now configured for managed identity access to both services!")
+                    else:
+                        st.error(f"⚠️ {message}")
+
         # Test URL Generation Section
         st.divider()
         st.subheader("🧪 Test Function URL Generator")
@@ -439,10 +558,16 @@ def render_function_config_tab(
         if not all((sub_id, rg, app)):
             st.info("ℹ️ Configure Function App details above to generate test URLs")
         else:
-            # Get function key from settings if available
-            func_key = ""
+            # Get function key from .env file as fallback
+            env_func_key = os.getenv("AGENT_FUNC_KEY", "")
+            
+            # Get function key from loaded settings if available
+            loaded_func_key = ""
             if "func_raw" in st.session_state and st.session_state.func_raw:
-                func_key = st.session_state.func_raw.get("AGENT_FUNC_KEY", "")
+                loaded_func_key = st.session_state.func_raw.get("AGENT_FUNC_KEY", "")
+            
+            # Prefer loaded key over env key
+            default_key = loaded_func_key if loaded_func_key else env_func_key
             
             col1, col2 = st.columns([2, 1])
             
@@ -450,56 +575,115 @@ def render_function_config_tab(
                 # Test message input (used as path param)
                 test_message = st.text_area(
                     "Test Message (Path Parameter)",
-                    value="Hello, can you help me find information about Azure services?",
+                    value="מי הם חברי ועדת התמיכות",  # Hebrew test message like in your example
                     height=100,
                     help="Enter a message to test your function with (will be used as the path parameter)"
                 )
-                # Function endpoint name (legacy, for backward compatibility)
-                endpoint_name = st.text_input(
-                    "Function Endpoint (Legacy, optional)",
-                    value="agent_chat",
-                    help="(Optional) The name of your function endpoint (for legacy format)"
+                # Function name
+                function_name = st.text_input(
+                    "Function Name",
+                    value="AgentFunction",
+                    help="The name of your Azure Function"
                 )
             
             with col2:
-                # Function key input
+                # Function key input with better default
                 test_func_key = st.text_input(
-                    "Function Key (Optional)",
-                    value=func_key,
+                    "Function Key",
+                    value=default_key,
                     type="password",
-                    help="Function key for authentication (if required)"
+                    help="Function key for authentication. Will attempt to retrieve from Azure if empty."
                 )
-                # URL format selection (disabled, always Path Parameter)
-                url_format = st.selectbox(
-                    "URL Format",
-                    ["Path Parameter"],
-                    help="How to send the message to the function",
-                    disabled=True
-                )
+                
+                # Add option to retrieve key from Azure
+                if st.button("🔑 Get Key from Azure", help="Retrieve function key from Azure", key="get_key"):
+                    with st.spinner("🔄 Retrieving function key from Azure..."):
+                        from azure_function_helper import get_function_url_and_key
+                        success, _, azure_key, error_msg = get_function_url_and_key(
+                            sub_id, rg, app, function_name
+                        )
+                        if success and azure_key:
+                            st.session_state["retrieved_func_key"] = azure_key
+                            st.success("✅ Function key retrieved from Azure!")
+                            st.rerun()
+                        else:
+                            st.warning(f"⚠️ Could not retrieve function key: {error_msg}")
+                
+                # Use retrieved key if available
+                if "retrieved_func_key" in st.session_state:
+                    test_func_key = st.session_state["retrieved_func_key"]
             
-            if st.button("🔗 Generate Test URL"):
-                if test_message.strip():
-                    # Always use AgentFunction as function name
-                    base_url = f"https://{app}.azurewebsites.net/api/AgentFunction"
-                    encoded_message = urllib.parse.quote(test_message, safe="")
-                    test_url = f"{base_url}/{encoded_message}"
-                    # Always append &includesrc=true, with correct ?/& logic
-                    if test_func_key:
-                        test_url = f"{test_url}?code={test_func_key}&includesrc=true"
+            col1_gen, col2_gen = st.columns([1, 1])
+            
+            with col1_gen:
+                if st.button("🔗 Generate Smart URL", help="Generate URL using actual Azure Function details"):
+                    if test_message.strip():
+                        with st.spinner("🔄 Getting actual Function URL from Azure..."):
+                            success, test_url, error_msg = generate_test_function_url(
+                                subscription_id=sub_id,
+                                resource_group=rg,
+                                function_app_name=app,
+                                test_message=test_message,
+                                function_name=function_name,
+                                fallback_function_key=test_func_key
+                            )
+                            
+                            if success:
+                                st.success("✅ Smart Test URL Generated!")
+                                st.markdown("**Copy this URL to test your function:**")
+                                st.code(test_url, language="text")
+                                st.markdown("**Or use this curl command:**")
+                                st.code(f'curl "{test_url}"', language="bash")
+                                
+                                # Show URL breakdown
+                                with st.expander("🔍 URL Breakdown", expanded=False):
+                                    import urllib.parse
+                                    parsed = urllib.parse.urlparse(test_url)
+                                    st.write(f"**Host**: {parsed.netloc}")
+                                    st.write(f"**Path**: {parsed.path}")
+                                    if parsed.query:
+                                        params = urllib.parse.parse_qs(parsed.query)
+                                        st.write("**Query Parameters**:")
+                                        for key, values in params.items():
+                                            if key == "code":
+                                                st.write(f"  - {key}: ••••••")
+                                            else:
+                                                st.write(f"  - {key}: {values[0]}")
+                            else:
+                                st.error(f"❌ Failed to generate URL: {error_msg}")
                     else:
-                        test_url = f"{test_url}?includesrc=true"
-                    st.success("✅ Test URL Generated!")
-                    st.markdown("**Copy this URL to test your function:**")
-                    st.code(test_url, language="text")
-                    st.markdown("**Or use this curl command:**")
-                    st.code(f'curl "{test_url}"', language="bash")
-                    # Additional testing information
-                    st.info("""
-                    **💡 Testing Tips:**
-                    - Copy the URL/command and run it in a browser or terminal
-                    - Check that your function returns a proper response
-                    - Monitor Azure Function logs for any errors
-                    - Verify that managed identity and search index are configured correctly
-                    """)
-                else:
-                    st.warning("⚠️ Please enter a test message first")
+                        st.warning("⚠️ Please enter a test message first")
+            
+            with col2_gen:
+                if st.button("📋 Generate Simple URL", help="Generate URL using simple pattern (may not work)"):
+                    if test_message.strip():
+                        # Fallback to simple URL generation
+                        encoded_message = urllib.parse.quote(test_message, safe="")
+                        simple_url = f"https://{app}.azurewebsites.net/api/{function_name}/{encoded_message}"
+                        
+                        # Add query parameters
+                        query_params = []
+                        if test_func_key:
+                            query_params.append(f"code={test_func_key}")
+                        query_params.append("includesrc=true")
+                        
+                        if query_params:
+                            simple_url += "?" + "&".join(query_params)
+                        
+                        st.warning("⚠️ Simple URL Generated (may not work with complex hostnames)")
+                        st.markdown("**Simple URL:**")
+                        st.code(simple_url, language="text")
+                        st.info("💡 **Note**: This uses a simple hostname pattern. Use 'Generate Smart URL' for the actual Azure Function URL.")
+                    else:
+                        st.warning("⚠️ Please enter a test message first")
+            
+            # Additional testing information
+            st.info("""
+            **💡 Testing Tips:**
+            - **Smart URL**: Retrieves the actual Function URL and key from Azure (recommended)
+            - **Simple URL**: Uses basic pattern (may not work if your Function App has complex hostname)
+            - Copy the URL/command and run it in a browser or terminal
+            - Check that your function returns a proper response
+            - Monitor Azure Function logs for any errors
+            - Verify that managed identity and search index are configured correctly
+            """)
