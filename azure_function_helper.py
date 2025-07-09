@@ -124,14 +124,25 @@ def load_function_settings(
     resource_group: str, 
     function_name: str, 
     subscription_id: str,
-    env_vars: Dict[str, str]
+    env_vars: Dict[str, str],
+    ui_overrides: Dict[str, str] = None
 ) -> Tuple[bool, Optional[pd.DataFrame], Dict, str]:
     """
     Load Function App settings and merge with .env values.
     
+    Args:
+        resource_group: Azure resource group name
+        function_name: Azure Function App name
+        subscription_id: Azure subscription ID
+        env_vars: Environment variables from .env file
+        ui_overrides: Dict of values from UI that should always override Function App settings
+        
     Returns:
         Tuple of (success: bool, dataframe: Optional[pd.DataFrame], raw_settings: Dict, error_msg: str)
     """
+    if ui_overrides is None:
+        ui_overrides = {}
+        
     if not all((subscription_id, resource_group, function_name)):
         return False, None, {}, "Missing required parameters"
         
@@ -203,6 +214,13 @@ def load_function_settings(
                 if not current_value or current_value.strip() == "":
                     param_vals[key] = value
                     print(f"DEBUG: Direct mapping: {key}: {value[:20]}... (was: '{current_value}')")
+        
+        # Apply UI overrides - these ALWAYS take precedence over Function App settings
+        for key, value in ui_overrides.items():
+            if value:  # Only apply if value is not empty
+                current_value = param_vals.get(key, "")
+                param_vals[key] = value
+                print(f"DEBUG: UI Override: {key}: {value[:20]}... (was: '{current_value}')")
         
         # Debug: Show final merged values
         print(f"DEBUG: Final merged settings count: {len(param_vals)}")

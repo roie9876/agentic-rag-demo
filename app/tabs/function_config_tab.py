@@ -251,7 +251,13 @@ def render_function_config_tab(
 
         if st.button("🔄 Load settings"):
             with st.spinner("Loading Function App settings..."):
-                success, df, raw, error_msg = load_function_settings(rg, app, sub_id, env_vars)
+                # Create UI overrides dict with user selections that should always take precedence
+                ui_overrides = {
+                    "INDEX_NAME": idx_selected.strip() if idx_selected else "",
+                    "AGENT_NAME": f"{idx_selected.strip()}-agent" if idx_selected else ""
+                }
+                
+                success, df, raw, error_msg = load_function_settings(rg, app, sub_id, env_vars, ui_overrides)
                 if success:
                     st.session_state.func_raw = raw
                     st.session_state.func_df = df
@@ -259,6 +265,11 @@ def render_function_config_tab(
                     
                     # Debug information
                     with st.expander("🔍 Debug: Loaded Settings", expanded=False):
+                        st.write("**UI Overrides (always applied):**")
+                        for key, value in ui_overrides.items():
+                            if value:
+                                st.write(f"- `{key}`: {value}")
+                        
                         st.write("**Environment variables mapped:**")
                         for key, value in env_vars.items():
                             if value:
