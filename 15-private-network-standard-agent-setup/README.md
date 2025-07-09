@@ -12,8 +12,15 @@ languages:
 
 # Azure AI Agent Service: Standard Agent Setup with E2E Network Isolation
 
-> **Note:** Class A subnet support is only available in a limited number of regions and requires your subscription id be allowlisted. Please reach out to fosteramanda@microsoft.com if you are interested in getting access. Regions with class A support: westus, eastus us, eastus 2, and central us
-
+> **⚠️ IMPORTANT SUBNET RESTRICTIONS:**
+> 
+> **Class A Subnet (10.0.0.0/8) Limitation**: Azure AI Foundry private agent subnets do **NOT support Class A IP ranges (10.0.0.0/8)**. If you attempt to use Class A subnets (e.g., 10.10.0.0/16, 10.0.1.0/24), the deployment will fail with private endpoint reference errors.
+>
+> **Supported IP Ranges for Agent Subnets:**
+> - **Class B**: 172.16.0.0/12 - 172.31.255.255/12 (e.g., 172.16.0.0/16)
+> - **Class C**: 192.168.0.0/16 (e.g., 192.168.0.0/16, 192.168.1.0/24)
+>
+> **Class A Support (Limited)**: Class A subnet support is only available in a limited number of regions and requires your subscription ID to be allowlisted. Please reach out to fosteramanda@microsoft.com if you are interested in getting access. Regions with class A support: westus, eastus, eastus2, and centralus.
 
 This infrastructure-as-code (IaC) solution deploys a network-secured Azure AI agent environment with private networking and role-based access control (RBAC).
 
@@ -49,18 +56,25 @@ This infrastructure-as-code (IaC) solution deploys a network-secured Azure AI ag
 
 ## Pre-Deployment Steps
 
-1. Review network requirements and plan Virtual Network address space (e.g., 192.168.0.0/16 or an alternative non-overlapping address space)
+1. Review network requirements and plan Virtual Network address space (e.g., 192.168.0.0/16 or 172.16.0.0/16 - **avoid 10.0.0.0/8 Class A ranges**)
 
 2. Two subnets are needed as well:  
-  - **Agent Subnet** (e.g., 192.168.0.0/24): Hosts Agent client for Agent workloads 
-  - **Private endpoint Subnet** (e.g. 192.168.1.0/24): Hosts private endpoints 
+  - **Agent Subnet** (e.g., 192.168.0.0/24 or 172.16.0.0/24): Hosts Agent client for Agent workloads 
+  - **Private endpoint Subnet** (e.g. 192.168.1.0/24 or 172.16.1.0/24): Hosts private endpoints 
     - Ensure that the address spaces for these subnets do not overlap with any existing networks in your Azure environment 
   
   > **Note:** If you do not provide an existing virtual network, the template will create a new virtual network with the address spaces and subnets described above. If you use an existing virtual network, make sure it already contains two subnets (Agent and Private Endpoint) before deploying the template.
 
-  **Limitations:**
-  - Class A subnet support is only available in a limited number of regions and requires your subscription id be allowlisted. Please reach out to fosteramanda@microsoft.com if you are interested in getting access.
-    - Regions with class A support: westus, eastus us, eastus 2, and central us
+  **⚠️ Critical Subnet Limitations:**
+  
+  **Class A Subnets (10.0.0.0/8) are NOT supported**: Azure AI Foundry private agent subnets do not support Class A IP ranges (10.0.0.0/8). Using Class A subnets will result in deployment failures.
+  
+  **Supported subnet ranges:**
+  - **Class B**: 172.16.0.0/12 - 172.31.255.255/12 (Recommended: 172.16.0.0/16)
+  - **Class C**: 192.168.0.0/16 (Default: 192.168.0.0/16)
+  
+  **Class A allowlist requirement**: Class A subnet support is only available in a limited number of regions and requires your subscription ID to be allowlisted. Please reach out to fosteramanda@microsoft.com if you are interested in getting access.
+    - Regions with class A support: westus, eastus, eastus2, and centralus
 
 ---
 
@@ -301,6 +315,24 @@ modules-network-secured/
 4. Update configurations as needed
 
 ### Troubleshooting
+
+#### Common Issues
+
+**1. Private Endpoint Reference Errors with Class A Subnets**
+
+If you encounter errors like:
+```
+Resource /subscriptions/.../resourceGroups/myRG/providers/Microsoft.Network/virtualNetworks/MY-VNET referenced by resource /subscriptions/.../resourceGroups/myRG/providers/Microsoft.Network/privateEndpoints/my-private-endpoint was not found.
+```
+
+**Cause**: You are likely using Class A subnet ranges (10.0.0.0/8) which are not supported for Azure AI Foundry private agent subnets.
+
+**Solution**: 
+- Change your VNet and subnet address ranges to Class B (172.16.0.0/12) or Class C (192.168.0.0/16)
+- Example: Replace `10.10.0.0/16` with `192.168.0.0/16`
+- Replace `10.10.1.0/24` with `192.168.1.0/24`
+
+**2. General Troubleshooting Steps**
 
 1. Verify private endpoint connectivity
 2. Check DNS resolution
