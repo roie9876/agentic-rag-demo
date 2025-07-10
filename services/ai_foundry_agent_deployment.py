@@ -74,7 +74,7 @@ class AIFoundryAgentDeploymentService:
                 return None
         return self._project_client
     
-    def create_openapi_tool(self, tool_name: str, base_url: str, function_key: str) -> 'OpenApiTool':
+    def create_openapi_tool(self, tool_name: str, base_url: str, function_key: str) -> Dict[str, Any]:
         """Create an OpenAPI tool definition for the Azure Function using advanced schema."""
         if not OPENAPI_TOOLS_AVAILABLE:
             raise RuntimeError("OpenAPI tools not available in current Azure AI SDK version")
@@ -139,13 +139,35 @@ class AIFoundryAgentDeploymentService:
             }
         }
 
-        auth = OpenApiAnonymousAuthDetails()  # public endpoint – no key required
-        return OpenApiTool(
-            name=tool_name,
-            spec=tool_schema,
-            description="Invoke the Azure Function via HTTP POST for factual questions",
-            auth=auth,
-        )
+        # Try using the actual OpenApiTool class from Azure AI SDK
+        try:
+            from azure.ai.agents.models import OpenApiTool, OpenApiAnonymousAuthDetails
+            
+            # Create the OpenApiTool object directly with authentication
+            openapi_tool = OpenApiTool(
+                name=tool_name,
+                spec=tool_schema,
+                auth=OpenApiAnonymousAuthDetails()
+            )
+            
+            print(f"✅ Created OpenApiTool object successfully with auth")
+            return openapi_tool
+            
+        except Exception as sdk_error:
+            print(f"⚠️ Failed to create OpenApiTool object: {sdk_error}")
+            print("🔄 Falling back to dictionary format")
+            
+            # Fallback to dictionary format with auth
+            return {
+                "type": "openapi",
+                "openapi": {
+                    "name": tool_name,
+                    "spec": tool_schema,
+                    "auth": {
+                        "type": "anonymous"
+                    }
+                }
+            }
 
     def get_agent_system_message(self, base_url: str, function_key: str) -> str:
         """Generate the comprehensive system message for the agent."""
@@ -217,17 +239,88 @@ class AIFoundryAgentDeploymentService:
             
             # Create tool and instructions based on available capabilities
             if OPENAPI_TOOLS_AVAILABLE:
-                # Use advanced OpenAPI tool for the Azure Function
-                TOOL_NAME = "Test_askAgentFunction"
-                openapi_tool = self.create_openapi_tool(TOOL_NAME, base_url, function_key)
-                system_message = self.get_agent_system_message(base_url, function_key)
-                tools = openapi_tool.definitions
-                
-                print(f"✅ Using OpenAPI tool: {TOOL_NAME}")
-                print(f"📝 Advanced system message length: {len(system_message)} characters")
-                
+                try:
+                    # Use the proper OpenAPI tool with the schema you expect
+                    TOOL_NAME = "Test_askAgentFunction"
+                    openapi_tool_dict = self.create_openapi_tool(TOOL_NAME, base_url, function_key)
+                    system_message = self.get_agent_system_message(base_url, function_key)
+                    
+                    # Debug: Print the complete tool structure
+                    print(f"🔍 DEBUG: Complete OpenAPI tool structure:")
+                    try:
+                        import json
+                        if hasattr(openapi_tool_dict, 'model_dump'):
+                            # It's an OpenApiTool object
+                            print("📦 Using OpenApiTool object")
+                            tool_dict = openapi_tool_dict.model_dump()
+                            print(json.dumps(tool_dict, indent=2))
+                        else:
+                            # It's a dictionary
+                            print("📄 Using dictionary format")
+                            print(json.dumps(openapi_tool_dict, indent=2))
+                    except Exception as debug_error:
+                        print(f"⚠️ Could not serialize tool for debug: {debug_error}")
+                        print(f"🔧 Tool type: {type(openapi_tool_dict)}")
+                    
+                    tools = [openapi_tool_dict]
+                    
+                    print(f"✅ Using OpenAPI tool with proper schema: {TOOL_NAME}")
+                    print(f"📝 Advanced system message length: {len(system_message)} characters")
+                    
+                    # Handle both OpenApiTool objects and dictionaries for schema version
+                    try:
+                        if hasattr(openapi_tool_dict, 'spec'):
+                            schema_version = openapi_tool_dict.spec.get('openapi', 'Unknown')
+                        elif isinstance(openapi_tool_dict, dict) and 'openapi' in openapi_tool_dict:
+                            schema_version = openapi_tool_dict['openapi']['spec']['openapi']
+                        else:
+                            schema_version = 'Unknown'
+                        print(f"🔧 OpenAPI schema version: {schema_version}")
+                    except Exception:
+                        print(f"🔧 OpenAPI schema version: Unable to determine")
+                    
+                    print(f"🔧 Tool object type: {type(openapi_tool_dict)}")
+                    print(f"🔧 Tool is OpenApiTool: {hasattr(openapi_tool_dict, 'model_dump')}")
+                    print(f"🔧 Tool is dict: {isinstance(openapi_tool_dict, dict)}")
+                    
+                except Exception as openapi_error:
+                    print(f"⚠️ OpenAPI tool creation failed: {openapi_error}")
+                    print("🔄 Falling back to basic function tool")
+                    
+                    # Fallback to basic function tool
+                    function_tool = {
+                        "type": "function",
+                        "function": {
+                            "name": "call_azure_function",
+                            "description": f"Call the Azure Function at {base_url}",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {
+                                        "type": "string",
+                                        "description": "The user's query or request to process"
+                                    }
+                                },
+                                "required": ["query"]
+                            }
+                        }
+                    }
+                    
+                    system_message = f"""You are an AI assistant agent that can call Azure Functions to help users.
+
+Your primary tool is an Azure Function deployed at: {base_url}
+
+When users ask questions or need assistance:
+1. Use the call_azure_function tool to invoke the function with their query
+2. Process and explain the results to the user
+3. Provide helpful context and guidance
+
+Always be helpful, accurate, and provide clear explanations of any function results."""
+                    
+                    tools = [function_tool]
+                    print(f"✅ Using fallback function tool")
             else:
-                # Fallback to basic function tool
+                # Basic function tool when OpenAPI is not available
                 function_tool = {
                     "type": "function",
                     "function": {
@@ -239,6 +332,10 @@ class AIFoundryAgentDeploymentService:
                                 "query": {
                                     "type": "string",
                                     "description": "The user's query or request to process"
+                                },
+                                "parameters": {
+                                    "type": "object",
+                                    "description": "Additional parameters for the function call"
                                 }
                             },
                             "required": ["query"]
@@ -250,22 +347,28 @@ class AIFoundryAgentDeploymentService:
 
 Your primary tool is an Azure Function deployed at: {base_url}
 
-When users ask questions or need assistance:
+When users ask questions or need assistance, you can:
 1. Use the call_azure_function tool to invoke the function with their query
 2. Process and explain the results to the user
 3. Provide helpful context and guidance
 
+Function Details:
+- Base URL: {base_url}
+- Authentication: Function key protected
+- Purpose: Process user queries and provide intelligent responses
+
 Always be helpful, accurate, and provide clear explanations of any function results."""
                 
                 tools = [function_tool]
-                
-                print(f"⚠️ Using basic function tool (OpenAPI not available)")
+                print(f"⚠️ OpenAPI tools not available, using basic function tool")
+            
+            print(f"📝 System message length: {len(system_message)} characters")
             
             # Create the agent using the Azure AI SDK
             agent = client.agents.create_agent(
                 model=model_deployment_name,
                 name=agent_name,
-                description=f"AI Agent powered by Azure Function at {base_url} - Created from Streamlit UI",
+                description=f"AI Agent powered by Azure Function at {base_url}",
                 instructions=system_message,
                 tools=tools,
                 tool_resources=None,  # No file-based tools for now
@@ -273,21 +376,47 @@ Always be helpful, accurate, and provide clear explanations of any function resu
                     "created_by": "agentic_rag_demo",
                     "function_url": base_url,
                     "creation_time": datetime.now().isoformat(),
-                    "agent_type": "azure_function_agent_openapi" if OPENAPI_TOOLS_AVAILABLE else "azure_function_agent_basic",
-                    "tool_type": "openapi" if OPENAPI_TOOLS_AVAILABLE else "basic_function"
+                    "agent_type": "azure_function_agent_openapi" if (OPENAPI_TOOLS_AVAILABLE and len(tools) > 0 and tools[0].get("type") == "openapi") else "azure_function_agent_basic",
+                    "tool_type": "openapi" if (OPENAPI_TOOLS_AVAILABLE and len(tools) > 0 and tools[0].get("type") == "openapi") else "function"
                 }
             )
             
             print(f"✅ Successfully created agent: {agent.id}")
             
             # Convert agent to dictionary for return
+            # Handle tools serialization carefully to avoid JSON serialization errors
+            tools_data = []
+            if agent.tools:
+                for tool in agent.tools:
+                    try:
+                        if hasattr(tool, 'model_dump'):
+                            # Use model_dump if available (Pydantic models)
+                            tools_data.append(tool.model_dump())
+                        elif hasattr(tool, '__dict__'):
+                            # Try to extract basic info from tool object
+                            tool_info = {
+                                "type": getattr(tool, 'type', type(tool).__name__),
+                                "name": getattr(tool, 'name', 'unknown'),
+                                "description": getattr(tool, 'description', '')
+                            }
+                            tools_data.append(tool_info)
+                        else:
+                            # Fallback to string representation
+                            tools_data.append({"type": "tool", "description": str(tool)})
+                    except Exception as tool_error:
+                        # If individual tool serialization fails, add basic info
+                        tools_data.append({
+                            "type": type(tool).__name__,
+                            "serialization_error": str(tool_error)
+                        })
+            
             agent_data = {
                 "id": agent.id,
                 "name": agent.name,
                 "description": agent.description,
                 "model": agent.model,
                 "instructions": agent.instructions,
-                "tools": [tool.model_dump() if hasattr(tool, 'model_dump') else str(tool) for tool in agent.tools] if agent.tools else [],
+                "tools": tools_data,
                 "created_at": agent.created_at.isoformat() if agent.created_at else None,
                 "metadata": agent.metadata
             }
@@ -346,13 +475,32 @@ Always be helpful, accurate, and provide clear explanations of any function resu
         try:
             agent = client.agents.get_agent(agent_id)
             
+            # Handle tools serialization carefully
+            tools_data = []
+            if agent.tools:
+                for tool in agent.tools:
+                    try:
+                        if hasattr(tool, 'model_dump'):
+                            tools_data.append(tool.model_dump())
+                        elif hasattr(tool, '__dict__'):
+                            tool_info = {
+                                "type": getattr(tool, 'type', type(tool).__name__),
+                                "name": getattr(tool, 'name', 'unknown'),
+                                "description": getattr(tool, 'description', '')
+                            }
+                            tools_data.append(tool_info)
+                        else:
+                            tools_data.append({"type": "tool", "description": str(tool)})
+                    except Exception:
+                        tools_data.append({"type": type(tool).__name__, "serialization_error": "Failed to serialize"})
+            
             return {
                 "id": agent.id,
                 "name": agent.name,
                 "description": agent.description,
                 "model": agent.model,
                 "instructions": agent.instructions,
-                "tools": [tool.model_dump() if hasattr(tool, 'model_dump') else str(tool) for tool in agent.tools] if agent.tools else [],
+                "tools": tools_data,
                 "created_at": agent.created_at.isoformat() if agent.created_at else None,
                 "metadata": agent.metadata
             }
@@ -379,6 +527,78 @@ Always be helpful, accurate, and provide clear explanations of any function resu
             logger.error(error_msg)
             return False, error_msg
             
+    def test_openapi_tool_serialization(self, tool_name: str, base_url: str, function_key: str) -> tuple[bool, str, dict]:
+        """
+        Test OpenAPI tool creation and serialization.
+        
+        Returns:
+            Tuple of (success: bool, message: str, tool_data: dict)
+        """
+        if not OPENAPI_TOOLS_AVAILABLE:
+            return False, "OpenAPI tools not available", {}
+        
+        try:
+            # Create the OpenAPI tool dictionary
+            openapi_tool_dict = self.create_openapi_tool(tool_name, base_url, function_key)
+            
+            # Test different serialization methods
+            serialization_results = {}
+            
+            # Method 1: Test the tool dictionary format
+            try:
+                import json
+                json.dumps(openapi_tool_dict, indent=2)
+                serialization_results['tool_dict_format'] = "✅ Success"
+            except Exception as e:
+                serialization_results['tool_dict_format'] = f"❌ Error: {str(e)}"
+            
+            # Method 2: Test the OpenAPI spec directly
+            try:
+                json.dumps(openapi_tool_dict['openapi'], indent=2)
+                serialization_results['spec_serializable'] = "✅ Success"
+            except Exception as e:
+                serialization_results['spec_serializable'] = f"❌ Error: {str(e)}"
+            
+            # Method 3: Verify OpenAPI spec structure
+            try:
+                openapi_obj = openapi_tool_dict.get('openapi', {})
+                spec = openapi_obj.get('spec', {})
+                required_keys = ['openapi', 'info', 'paths']
+                if all(key in spec for key in required_keys):
+                    serialization_results['openapi_structure'] = "✅ Valid OpenAPI 3.0 structure"
+                else:
+                    missing = [key for key in required_keys if key not in spec]
+                    serialization_results['openapi_structure'] = f"❌ Missing OpenAPI keys: {missing}"
+            except Exception as e:
+                serialization_results['openapi_structure'] = f"❌ Error: {str(e)}"
+            
+            # Get tool properties
+            openapi_obj = openapi_tool_dict.get('openapi', {})
+            spec = openapi_obj.get('spec', {})
+            tool_properties = {
+                "tool_type": openapi_tool_dict.get("type", "Unknown"),
+                "tool_name": openapi_obj.get("name", "Unknown"),  # Name is now at openapi level
+                "spec_version": spec.get("openapi", "Unknown"),
+                "api_title": spec.get("info", {}).get("title", "Unknown"),
+                "base_url": spec.get("servers", [{}])[0].get("url", "Unknown"),
+                "operations_count": len(spec.get("paths", {})),
+                "has_proper_structure": (
+                    openapi_tool_dict.get("type") == "openapi" and 
+                    "openapi" in openapi_tool_dict and 
+                    "name" in openapi_obj and 
+                    "spec" in openapi_obj
+                )
+            }
+            
+            return True, "OpenAPI tool test completed", {
+                "tool_properties": tool_properties,
+                "serialization_results": serialization_results,
+                "sample_spec": spec  # Include the actual spec for verification
+            }
+            
+        except Exception as e:
+            return False, f"OpenAPI tool test failed: {str(e)}", {}
+
 # Global instance for the service
 _agent_deployment_service = None
 

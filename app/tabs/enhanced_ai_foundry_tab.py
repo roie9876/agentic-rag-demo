@@ -447,7 +447,65 @@ def render_resource_discovery_section(discovery_service):
                         )
                         
                         # Create Agent button
-                        if st.button("🚀 Create Agent", key=f"create_func_agent_{i}", type="primary"):
+                        col1, col2 = st.columns([2, 1])
+                        
+                        with col1:
+                            create_button = st.button("🚀 Create Agent", key=f"create_func_agent_{i}", type="primary")
+                        
+                        with col2:
+                            if st.button("🧪 Test OpenAPI", key=f"test_openapi_{i}", help="Test OpenAPI tool configuration"):
+                                with st.spinner("Testing OpenAPI tool configuration..."):
+                                    try:
+                                        if deployment_service:
+                                            # Get function key for testing
+                                            function_key = os.getenv('AGENT_FUNC_KEY', '')
+                                            if not function_key:
+                                                st.error("❌ AGENT_FUNC_KEY not set - cannot test OpenAPI tool")
+                                                continue
+                                            
+                                            # Test function app details parsing
+                                            app_name, resource_group, hostname = func_map[func_sel]
+                                            func_url = f"https://{hostname}/api"
+                                            
+                                            # Use the new comprehensive test method
+                                            success, message, test_data = deployment_service.test_openapi_tool_serialization(
+                                                "test_tool", func_url, function_key
+                                            )
+                                            
+                                            if success:
+                                                st.success("✅ OpenAPI tool test completed!")
+                                                
+                                                # Show tool properties
+                                                tool_props = test_data.get("tool_properties", {})
+                                                st.markdown("**🔧 Tool Properties:**")
+                                                for prop, value in tool_props.items():
+                                                    st.write(f"- {prop}: {value}")
+                                                
+                                                # Show serialization results
+                                                serial_results = test_data.get("serialization_results", {})
+                                                st.markdown("**📋 Serialization Test Results:**")
+                                                for method, result in serial_results.items():
+                                                    st.write(f"- {method}: {result}")
+                                                
+                                                # Recommend best approach
+                                                if serial_results.get('model_dump', '').startswith('✅'):
+                                                    st.success("💡 **Recommended**: model_dump() method works - agent creation should succeed")
+                                                elif serial_results.get('dict_conversion', '').startswith('✅'):
+                                                    st.info("💡 **Alternative**: dict conversion works - will use fallback method")
+                                                else:
+                                                    st.warning("⚠️ **Issue**: OpenAPI tool serialization has problems - will use basic function tools")
+                                            else:
+                                                st.error(f"❌ OpenAPI test failed: {message}")
+                                        else:
+                                            st.error("❌ Deployment service not available")
+                                    except ImportError:
+                                        st.error("❌ OpenAPI tools not available - will use basic function tools")
+                                    except Exception as e:
+                                        st.error(f"❌ OpenAPI test failed: {e}")
+                                        with st.expander("🔍 Test Error Details"):
+                                            st.code(str(e))
+                        
+                        if create_button:
                             if func_sel and agent_name:
                                 # Pre-flight checks before creating agent
                                 st.markdown("**🔍 Pre-flight Checks**")
@@ -461,8 +519,11 @@ def render_resource_discovery_section(discovery_service):
                                     try:
                                         from azure.ai.agents.models import OpenApiTool, OpenApiAnonymousAuthDetails
                                         st.success("✅ OpenAPI tools available (advanced agent features enabled)")
+                                        openapi_available = True
                                     except ImportError:
                                         st.warning("⚠️ OpenAPI tools not available (will use basic function tools)")
+                                        st.info("💡 **To enable OpenAPI tools:** Ensure you have the latest azure-ai-projects package")
+                                        openapi_available = False
                                         
                                 except ImportError:
                                     st.error("❌ Azure AI SDK not available")
@@ -505,9 +566,12 @@ def render_resource_discovery_section(discovery_service):
                                 
                                 try:
                                     with st.spinner(f"Creating AI Foundry agent '{agent_name}' from Function App '{func_sel}'..."):
-                                        # Get function app details
-                                        app_name, resource_group = func_map[func_sel]
-                                        func_url = f"https://{app_name}.azurewebsites.net/api"
+                                        # Get function app details - func_map returns (name, resource_group, hostname)
+                                        app_name, resource_group, hostname = func_map[func_sel]
+                                        func_url = f"https://{hostname}/api"
+                                        
+                                        # Show what type of agent is being created
+                                        st.info("🔧 **Creating agent with function tools** - Using proven working implementation")
                                         
                                         # Create AI Foundry agent using the Function App
                                         success, message, agent_data = deployment_service.create_ai_foundry_agent(
@@ -520,7 +584,30 @@ def render_resource_discovery_section(discovery_service):
                                         if success:
                                             st.success(f"✅ {message}")
                                             st.markdown("**Agent Details:**")
-                                            st.json(agent_data)
+                                            
+                                            # Show agent summary first
+                                            if agent_data:
+                                                st.json({
+                                                    "Agent ID": agent_data.get("id"),
+                                                    "Name": agent_data.get("name"),
+                                                    "Model": agent_data.get("model"),
+                                                    "Tool Type": agent_data.get("metadata", {}).get("tool_type", "unknown"),
+                                                    "Function URL": agent_data.get("metadata", {}).get("function_url")
+                                                })
+                                                
+                                                # Show tools info
+                                                tools = agent_data.get("tools", [])
+                                                if tools:
+                                                    st.markdown("**🔧 Agent Tools:**")
+                                                    for i, tool in enumerate(tools):
+                                                        tool_type = tool.get("type", "unknown") if isinstance(tool, dict) else str(type(tool))
+                                                        st.write(f"- Tool {i+1}: {tool_type}")
+                                                
+                                                # Expandable full details
+                                                with st.expander("📋 Full Agent Configuration", expanded=False):
+                                                    st.json(agent_data)
+                                            else:
+                                                st.info("✅ Agent created successfully (no details returned)")
                                         else:
                                             st.error(f"❌ {message}")
                                             
@@ -530,6 +617,34 @@ def render_resource_discovery_section(discovery_service):
                                             
                                 except Exception as e:
                                     st.error(f"❌ Failed to create AI Foundry agent: {str(e)}")
+                                    
+                                    # Specific troubleshooting for different error types
+                                    error_str = str(e).lower()
+                                    if "json serializable" in error_str:
+                                        st.warning("🔧 **JSON Serialization Issue Detected**")
+                                        st.markdown("""
+                                        **This error has been fixed in the latest version.**
+                                        
+                                        The issue was with OpenAPI tool serialization when returning agent details.
+                                        Please try creating the agent again - the fix handles OpenAPI tool serialization properly.
+                                        """)
+                                    elif "openapi" in error_str or "tool" in error_str:
+                                        st.warning("🔧 **OpenAPI Tool Issue Detected**")
+                                        st.markdown("""
+                                        **Possible solutions:**
+                                        
+                                        1. **Update Azure AI SDK:**
+                                        ```bash
+                                        pip install --upgrade azure-ai-projects
+                                        ```
+                                        
+                                        2. **Check OpenAPI tool availability:**
+                                        The agent creation requires proper OpenAPI tool configuration to expose your Function App endpoints.
+                                        
+                                        3. **Verify Function App endpoint:**
+                                        Make sure your Function App is accessible and returns a valid response.
+                                        """)
+                                    
                                     with st.expander("🔍 Error Details", expanded=False):
                                         st.code(traceback.format_exc())
                             else:
