@@ -2023,3 +2023,293 @@ class AIFoundryHubDeploymentService:
         except Exception as e:
             logger.error(f"Error suggesting private endpoints: {str(e)}")
             return {'ai_search': [], 'storage': [], 'cosmos_db': [], 'other': []}
+    
+    def switch_subscription_context(self, subscription_id: str) -> Tuple[bool, str]:
+        """
+        Switch the Azure CLI context to the specified subscription.
+        
+        Args:
+            subscription_id: The subscription ID to switch to
+            
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        try:
+            import subprocess
+            
+            logger.info(f"Switching Azure CLI context to subscription: {subscription_id}")
+            
+            # Run az account set command
+            result = subprocess.run(
+                ['az', 'account', 'set', '--subscription', subscription_id],
+                capture_output=True, text=True, check=True
+            )
+            
+            # Verify the switch was successful
+            verify_result = subprocess.run(
+                ['az', 'account', 'show', '--query', 'id', '-o', 'tsv'],
+                capture_output=True, text=True, check=True
+            )
+            
+            current_sub = verify_result.stdout.strip()
+            if current_sub == subscription_id:
+                logger.info(f"✅ Successfully switched to subscription: {subscription_id}")
+                return True, f"✅ Successfully switched to subscription: {subscription_id}"
+            else:
+                error_msg = f"❌ Switch failed: Expected {subscription_id}, but current is {current_sub}"
+                logger.error(error_msg)
+                return False, error_msg
+                
+        except subprocess.CalledProcessError as e:
+            error_msg = f"❌ Azure CLI command failed: {e.stderr if e.stderr else str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"❌ Failed to switch subscription: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+
+    def get_current_subscription_id(self) -> str:
+        """
+        Get the current Azure CLI subscription ID.
+        
+        Returns:
+            Current subscription ID
+            
+        Raises:
+            Exception: If unable to get current subscription
+        """
+        try:
+            import subprocess
+            
+            result = subprocess.run(
+                ['az', 'account', 'show', '--query', 'id', '-o', 'tsv'],
+                capture_output=True, text=True, check=True
+            )
+            
+            current_sub = result.stdout.strip()
+            logger.info(f"Current subscription: {current_sub}")
+            return current_sub
+            
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to get current subscription: {e.stderr if e.stderr else str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except Exception as e:
+            error_msg = f"Error getting current subscription: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+
+    def get_available_resource_groups(self, subscription_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get available resource groups in the current or specified subscription.
+        
+        Args:
+            subscription_id: Optional subscription ID. If not provided, uses current subscription.
+            
+        Returns:
+            List of resource group dictionaries
+        """
+        try:
+            import subprocess
+            
+            cmd = ['az', 'group', 'list', '--output', 'json']
+            
+            # Add subscription parameter if specified
+            if subscription_id:
+                cmd.extend(['--subscription', subscription_id])
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
+            
+            import json
+            resource_groups = json.loads(result.stdout)
+            
+            # Format for consistency
+            formatted_rgs = []
+            for rg in resource_groups:
+                formatted_rgs.append({
+                    'name': rg['name'],
+                    'location': rg['location'],
+                    'id': rg['id'],
+                    'managedBy': rg.get('managedBy'),
+                    'tags': rg.get('tags', {}),
+                    'properties': rg.get('properties', {})
+                })
+            
+            logger.info(f"Found {len(formatted_rgs)} resource groups")
+            return formatted_rgs
+            
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Failed to list resource groups: {e.stderr if e.stderr else str(e)}"
+            logger.error(error_msg)
+            return []
+        except Exception as e:
+            error_msg = f"Error listing resource groups: {str(e)}"
+            logger.error(error_msg)
+            return []
+    
+    def authenticate_and_switch_subscription(self, subscription_id: str) -> Tuple[bool, str]:
+        """
+        Authenticate to Azure and switch to the specified subscription.
+        
+        Args:
+            subscription_id: The subscription ID to authenticate and switch to
+            
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        try:
+            import subprocess
+            
+            logger.info(f"Authenticating and switching to subscription: {subscription_id}")
+            
+            # Step 1: Check if already logged in to this subscription
+            try:
+                current_sub = self.get_current_subscription_id()
+                if current_sub == subscription_id:
+                    return True, f"✅ Already authenticated and using subscription: {subscription_id}"
+            except Exception:
+                # Not logged in or different subscription, continue with login
+                pass
+            
+            # Step 2: Try to switch to the subscription first (in case already logged in)
+            try:
+                result = subprocess.run(
+                    ['az', 'account', 'set', '--subscription', subscription_id],
+                    capture_output=True, text=True, timeout=30
+                )
+                
+                if result.returncode == 0:
+                    # Successfully switched - verify
+                    verify_result = subprocess.run(
+                        ['az', 'account', 'show', '--query', 'id', '-o', 'tsv'],
+                        capture_output=True, text=True, timeout=30
+                    )
+                    
+                    if verify_result.returncode == 0:
+                        current_sub = verify_result.stdout.strip()
+                        if current_sub == subscription_id:
+                            logger.info(f"✅ Successfully switched to subscription: {subscription_id}")
+                            return True, f"✅ Successfully switched to subscription: {subscription_id}"
+                
+            except subprocess.TimeoutExpired:
+                return False, "❌ Timeout while switching subscription"
+            except Exception as e:
+                logger.warning(f"Could not switch to subscription directly: {e}")
+            
+            # Step 3: If switching failed, try login (this will open browser)
+            logger.info("Attempting Azure CLI login...")
+            
+            try:
+                # Interactive login
+                login_result = subprocess.run(
+                    ['az', 'login'],
+                    capture_output=True, text=True, timeout=300  # 5 minutes for user interaction
+                )
+                
+                if login_result.returncode != 0:
+                    error_msg = f"❌ Login failed: {login_result.stderr}"
+                    logger.error(error_msg)
+                    return False, error_msg
+                
+                logger.info("✅ Login successful")
+                
+            except subprocess.TimeoutExpired:
+                return False, "❌ Login timed out (5 minutes). Please try again."
+            except Exception as e:
+                return False, f"❌ Login error: {str(e)}"
+            
+            # Step 4: Now try to switch to the target subscription
+            try:
+                switch_result = subprocess.run(
+                    ['az', 'account', 'set', '--subscription', subscription_id],
+                    capture_output=True, text=True, timeout=30
+                )
+                
+                if switch_result.returncode != 0:
+                    error_msg = f"❌ Failed to switch to subscription {subscription_id}: {switch_result.stderr}"
+                    logger.error(error_msg)
+                    return False, error_msg
+                
+                # Step 5: Verify the switch was successful
+                verify_result = subprocess.run(
+                    ['az', 'account', 'show', '--query', 'id', '-o', 'tsv'],
+                    capture_output=True, text=True, timeout=30
+                )
+                
+                if verify_result.returncode == 0:
+                    current_sub = verify_result.stdout.strip()
+                    if current_sub == subscription_id:
+                        success_msg = f"✅ Successfully authenticated and switched to subscription: {subscription_id}"
+                        logger.info(success_msg)
+                        return True, success_msg
+                    else:
+                        error_msg = f"❌ Switch verification failed: Expected {subscription_id}, but current is {current_sub}"
+                        logger.error(error_msg)
+                        return False, error_msg
+                else:
+                    error_msg = f"❌ Could not verify subscription switch: {verify_result.stderr}"
+                    logger.error(error_msg)
+                    return False, error_msg
+                    
+            except subprocess.TimeoutExpired:
+                return False, "❌ Timeout while switching subscription after login"
+            except Exception as e:
+                return False, f"❌ Error switching subscription after login: {str(e)}"
+                
+        except Exception as e:
+            error_msg = f"❌ Authentication and subscription switch failed: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+
+    def get_subscription_context_info(self) -> Dict[str, str]:
+        """
+        Get detailed information about the current Azure CLI context.
+        
+        Returns:
+            Dictionary with context information
+        """
+        try:
+            import subprocess
+            import json
+            
+            # Get current account details
+            result = subprocess.run(
+                ['az', 'account', 'show', '--output', 'json'],
+                capture_output=True, text=True, timeout=30
+            )
+            
+            if result.returncode == 0:
+                account_info = json.loads(result.stdout)
+                
+                return {
+                    'subscription_id': account_info.get('id', 'Unknown'),
+                    'subscription_name': account_info.get('name', 'Unknown'),
+                    'tenant_id': account_info.get('tenantId', 'Unknown'),
+                    'user_name': account_info.get('user', {}).get('name', 'Unknown'),
+                    'user_type': account_info.get('user', {}).get('type', 'Unknown'),
+                    'state': account_info.get('state', 'Unknown'),
+                    'is_default': account_info.get('isDefault', False)
+                }
+            else:
+                return {
+                    'subscription_id': 'Not logged in',
+                    'subscription_name': 'Not logged in',
+                    'tenant_id': 'Not logged in',
+                    'user_name': 'Not logged in',
+                    'user_type': 'Not logged in',
+                    'state': 'Not logged in',
+                    'is_default': False
+                }
+                
+        except Exception as e:
+            logger.error(f"Error getting subscription context: {e}")
+            return {
+                'subscription_id': 'Error',
+                'subscription_name': 'Error',
+                'tenant_id': 'Error',
+                'user_name': 'Error',
+                'user_type': 'Error',
+                'state': 'Error',
+                'is_default': False
+            }

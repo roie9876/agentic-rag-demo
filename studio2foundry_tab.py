@@ -526,20 +526,109 @@ def render_studio2foundry_tab():
     # Azure Function App Selection (same as Function Config tab)
     st.subheader("🎯 Select Target Function App")
     
-    # Get Azure subscription with session state
-    sub_id = st.text_input(
-        "Subscription ID", 
-        value=st.session_state.studio2foundry_subscription_id, 
-        help="Azure subscription ID for your Function Apps",
-        key="studio2foundry_sub_id_input"
-    )
-    
-    # Update session state when subscription changes
-    if sub_id != st.session_state.studio2foundry_subscription_id:
-        st.session_state.studio2foundry_subscription_id = sub_id
-        # Reset selections when subscription changes
-        st.session_state.studio2foundry_selected_function_app = "-- Select Function App --"
-        st.session_state.studio2foundry_selected_resource_group = "-- Select Resource Group --"
+    # Get available subscriptions
+    try:
+        from services.ai_foundry_hub_deployment import AIFoundryHubDeploymentService
+        deployment_service = AIFoundryHubDeploymentService()
+        subscriptions = deployment_service.get_available_subscriptions()
+        
+        if subscriptions:
+            # Create subscription options dictionary
+            subscription_options = {}
+            current_sub_id = None
+            
+            try:
+                current_sub_id = deployment_service.get_current_subscription_id()
+            except:
+                pass
+            
+            for sub in subscriptions:
+                display_name = sub['display_name']
+                sub_id = sub['subscription_id']
+                
+                # Mark current subscription
+                if sub_id == current_sub_id:
+                    label = f"🌟 {display_name} (Current)"
+                else:
+                    label = display_name
+                
+                subscription_options[label] = sub_id
+            
+            # Find current selection index
+            current_selection_index = 0
+            if hasattr(st.session_state, 'studio2foundry_subscription_id') and st.session_state.studio2foundry_subscription_id:
+                for i, (label, sub_id) in enumerate(subscription_options.items()):
+                    if sub_id == st.session_state.studio2foundry_subscription_id:
+                        current_selection_index = i
+                        break
+            
+            # Subscription change handler
+            def on_studio2foundry_subscription_change():
+                """Handle subscription selection change."""
+                selected_key = st.session_state.studio2foundry_subscription_selector
+                if selected_key in subscription_options:
+                    new_subscription_id = subscription_options[selected_key]
+                    old_subscription_id = st.session_state.get('studio2foundry_subscription_id')
+                    
+                    # Only switch if the subscription actually changed
+                    if new_subscription_id != old_subscription_id:
+                        st.session_state.studio2foundry_subscription_id = new_subscription_id
+                        
+                        # Switch Azure CLI context
+                        with st.spinner(f"Switching to subscription {new_subscription_id}..."):
+                            success, message = deployment_service.switch_subscription_context(new_subscription_id)
+                            if success:
+                                st.success(message)
+                            else:
+                                st.error(message)
+                                # Revert to previous subscription on failure
+                                if old_subscription_id:
+                                    st.session_state.studio2foundry_subscription_id = old_subscription_id
+                        
+                        # Reset selections when subscription changes
+                        st.session_state.studio2foundry_selected_function_app = "-- Select Function App --"
+                        st.session_state.studio2foundry_selected_resource_group = "-- Select Resource Group --"
+                        
+                        # Clear cached function app lists
+                        keys_to_remove = [key for key in st.session_state.keys() if key.startswith('studio2foundry_func_')]
+                        for key in keys_to_remove:
+                            del st.session_state[key]
+            
+            # Subscription selector
+            selected_subscription_display = st.selectbox(
+                "Select subscription for Function App deployment",
+                options=list(subscription_options.keys()),
+                index=current_selection_index,
+                help="🌟 = Current subscription. Choose where your Function App is located",
+                key="studio2foundry_subscription_selector",
+                on_change=on_studio2foundry_subscription_change
+            )
+            
+            # Ensure session state is updated (fallback)
+            if selected_subscription_display in subscription_options:
+                sub_id = subscription_options[selected_subscription_display]
+                st.session_state.studio2foundry_subscription_id = sub_id
+            else:
+                sub_id = None
+        else:
+            st.error("❌ No subscriptions found. Please ensure you're logged in to Azure CLI.")
+            sub_id = None
+    except Exception as e:
+        st.warning(f"⚠️ Could not load subscriptions: {e}")
+        # Fallback to text input
+        sub_id = st.text_input(
+            "Subscription ID", 
+            value=st.session_state.get('studio2foundry_subscription_id', ''), 
+            help="Azure subscription ID for your Function Apps",
+            key="studio2foundry_sub_id_input_fallback"
+        )
+        
+        # Update session state when subscription changes
+        if sub_id != st.session_state.get('studio2foundry_subscription_id'):
+            st.session_state.studio2foundry_subscription_id = sub_id
+            # Reset selections when subscription changes
+            st.session_state.studio2foundry_selected_function_app = "-- Select Function App --"
+            st.session_state.studio2foundry_selected_resource_group = "-- Select Resource Group --"
     
     if not sub_id:
         st.warning("⚠️ Please enter your Azure subscription ID to continue")

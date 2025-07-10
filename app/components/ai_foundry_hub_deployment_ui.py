@@ -47,6 +47,51 @@ class AIFoundryHubDeploymentUI:
         else:
             st.success("✅ Bicep template validated successfully")
         
+        # Show current Azure CLI context with detailed information
+        try:
+            context_info = self.service.get_subscription_context_info()
+            
+            if context_info['subscription_id'] != 'Not logged in' and context_info['subscription_id'] != 'Error':
+                # Create a nice context display
+                col1, col2, col3 = st.columns([2, 1, 1])
+                
+                with col1:
+                    st.success(f"🌟 **Azure CLI Context**: {context_info['subscription_name']}")
+                    st.caption(f"📋 Subscription ID: `{context_info['subscription_id']}`")
+                
+                with col2:
+                    st.info(f"👤 **User**: {context_info['user_name']}")
+                    st.caption(f"🔐 Type: {context_info['user_type']}")
+                
+                with col3:
+                    st.info(f"� **Tenant**: {context_info['tenant_id'][:8]}...")
+                    st.caption(f"📊 State: {context_info['state']}")
+                    
+                # Add a refresh context button
+                if st.button("🔄 Refresh Context", help="Refresh Azure CLI context information", key="refresh_context_top"):
+                    st.rerun()
+                    
+            else:
+                st.error("❌ **Not logged in to Azure CLI**")
+                st.warning("Please run `az login` or use the subscription switcher below to authenticate.")
+                
+                if st.button("🔐 Login to Azure CLI", help="Open Azure CLI login", key="azure_cli_login_top"):
+                    with st.spinner("Opening Azure CLI login..."):
+                        try:
+                            import subprocess
+                            result = subprocess.run(['az', 'login'], capture_output=True, text=True, timeout=300)
+                            if result.returncode == 0:
+                                st.success("✅ Login successful! Please refresh the page.")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Login failed: {result.stderr}")
+                        except Exception as e:
+                            st.error(f"❌ Login error: {e}")
+                            
+        except Exception as e:
+            st.warning(f"⚠️ Could not determine current Azure CLI context: {e}")
+            st.info("💡 **Tip**: Ensure Azure CLI is installed and you have network connectivity.")
+        
         # Create deployment tabs
         config_tab, preview_tab, deploy_tab, status_tab = st.tabs([
             "⚙️ Configuration",
@@ -368,10 +413,27 @@ class AIFoundryHubDeploymentUI:
                             """Handle DNS subscription selection change."""
                             selected_key = st.session_state.dns_zone_subscription_selector
                             if selected_key in subscription_options:
-                                st.session_state.dns_zone_subscription_id = subscription_options[selected_key]
-                                # Clear resource group selection when subscription changes
-                                if 'dns_zone_resource_group' in st.session_state:
-                                    del st.session_state['dns_zone_resource_group']
+                                new_subscription_id = subscription_options[selected_key]
+                                old_subscription_id = st.session_state.get('dns_zone_subscription_id')
+                                
+                                # Only switch if the subscription actually changed
+                                if new_subscription_id != old_subscription_id:
+                                    st.session_state.dns_zone_subscription_id = new_subscription_id
+                                    
+                                    # Switch Azure CLI context for DNS zone operations
+                                    with st.spinner(f"Switching to DNS subscription {new_subscription_id}..."):
+                                        success, message = self.service.switch_subscription_context(new_subscription_id)
+                                        if success:
+                                            st.success(message)
+                                        else:
+                                            st.error(message)
+                                            # Revert to previous subscription on failure
+                                            if old_subscription_id:
+                                                st.session_state.dns_zone_subscription_id = old_subscription_id
+                                    
+                                    # Clear resource group selection when subscription changes
+                                    if 'dns_zone_resource_group' in st.session_state:
+                                        del st.session_state['dns_zone_resource_group']
                         
                         selected_subscription_display = st.selectbox(
                             "Select the subscription containing your Private DNS zones",
@@ -392,6 +454,34 @@ class AIFoundryHubDeploymentUI:
                             st.success(f"✅ **DNS Zone Subscription**: {selected_subscription_display} (Same as deployment subscription)")
                         else:
                             st.info(f"🔄 **DNS Zone Subscription**: {selected_subscription_display} (Cross-subscription configuration)")
+                            
+                            # Add DNS subscription authentication section
+                            st.markdown("---")
+                            st.markdown("#### 🔐 DNS Subscription Authentication")
+                            
+                            col_dns_auth1, col_dns_auth2 = st.columns([2, 1])
+                            
+                            with col_dns_auth1:
+                                st.info(f"🔄 **Action Required**: Switch to DNS subscription for zone management")
+                                st.markdown(f"**DNS Target**: `{config.dns_zone_subscription_id}`")
+                            
+                            with col_dns_auth2:
+                                if st.button(
+                                    "🔐 Switch to DNS Sub",
+                                    help="Sign in and switch to the DNS subscription",
+                                    key="auth_and_switch_dns_subscription",
+                                    type="secondary"
+                                ):
+                                    with st.spinner(f"🔐 Switching to DNS subscription {config.dns_zone_subscription_id}..."):
+                                        success, message = self.service.authenticate_and_switch_subscription(
+                                            config.dns_zone_subscription_id
+                                        )
+                                        
+                                        if success:
+                                            st.success(message)
+                                            st.rerun()
+                                        else:
+                                            st.error(message)
                         
                         # Resource group selection with intelligent suggestions
                         if config.dns_zone_subscription_id:
@@ -1324,10 +1414,27 @@ class AIFoundryHubDeploymentUI:
                         """Handle subscription selection change."""
                         selected_key = st.session_state.deploy_subscription_selector
                         if selected_key in subscription_options:
-                            st.session_state.deployment_subscription_id = subscription_options[selected_key]
-                            # Clear resource group selection when subscription changes
-                            if 'deployment_resource_group' in st.session_state:
-                                del st.session_state['deployment_resource_group']
+                            new_subscription_id = subscription_options[selected_key]
+                            old_subscription_id = st.session_state.get('deployment_subscription_id')
+                            
+                            # Only switch if the subscription actually changed
+                            if new_subscription_id != old_subscription_id:
+                                st.session_state.deployment_subscription_id = new_subscription_id
+                                
+                                # Switch Azure CLI context
+                                with st.spinner(f"Switching to subscription {new_subscription_id}..."):
+                                    success, message = self.service.switch_subscription_context(new_subscription_id)
+                                    if success:
+                                        st.success(message)
+                                    else:
+                                        st.error(message)
+                                        # Revert to previous subscription on failure
+                                        if old_subscription_id:
+                                            st.session_state.deployment_subscription_id = old_subscription_id
+                                
+                                # Clear resource group selection when subscription changes
+                                if 'deployment_resource_group' in st.session_state:
+                                    del st.session_state['deployment_resource_group']
                     
                     selected_subscription_display = st.selectbox(
                         "Select the subscription for deployment",
@@ -1359,6 +1466,65 @@ class AIFoundryHubDeploymentUI:
                         st.caption(f"📋 **Subscription State**: {selected_sub_info.get('state', 'Unknown')}")
                         if selected_sub_info.get('tenantId'):
                             st.caption(f"🏢 **Tenant ID**: {selected_sub_info['tenantId']}")
+                    
+                    # Add subscription context switching section
+                    if not is_current and st.session_state.deployment_subscription_id:
+                        st.markdown("---")
+                        st.markdown("#### 🔐 Subscription Authentication")
+                        
+                        col_auth1, col_auth2 = st.columns([2, 1])
+                        
+                        with col_auth1:
+                            st.info(f"🔄 **Action Required**: Switch Azure CLI context to target subscription")
+                            st.markdown(f"**Target**: `{st.session_state.deployment_subscription_id}`")
+                            
+                            # Show current context
+                            try:
+                                context_info = self.service.get_subscription_context_info()
+                                st.markdown("**Current Azure CLI Context:**")
+                                st.code(f"""
+Subscription: {context_info['subscription_name']} ({context_info['subscription_id']})
+User: {context_info['user_name']} ({context_info['user_type']})
+Tenant: {context_info['tenant_id']}
+State: {context_info['state']}
+""")
+                            except Exception as e:
+                                st.warning(f"Could not get current context: {e}")
+                        
+                        with col_auth2:
+                            if st.button(
+                                "🔐 Sign In & Switch",
+                                help="Sign in to Azure and switch to the selected subscription",
+                                key="auth_and_switch_subscription",
+                                type="primary"
+                            ):
+                                with st.spinner(f"🔐 Authenticating to subscription {st.session_state.deployment_subscription_id}..."):
+                                    success, message = self.service.authenticate_and_switch_subscription(
+                                        st.session_state.deployment_subscription_id
+                                    )
+                                    
+                                    if success:
+                                        st.success(message)
+                                        st.balloons()
+                                        
+                                        # Update context display
+                                        try:
+                                            new_context = self.service.get_subscription_context_info()
+                                            st.success("🎉 **Authentication Successful!**")
+                                            st.info(f"**New Context**: {new_context['subscription_name']} ({new_context['subscription_id']})")
+                                        except Exception as e:
+                                            st.warning(f"Context updated but could not retrieve details: {e}")
+                                        
+                                        # Trigger a rerun to update the UI
+                                        st.rerun()
+                                    else:
+                                        st.error(message)
+                                        st.info("💡 **Tip**: If login failed, you may need to:")
+                                        st.markdown("""
+                                        - Check your internet connection
+                                        - Ensure you have access to the target subscription
+                                        - Contact your Azure administrator for permissions
+                                        """)
                 
                 with col2:
                     if st.button("🔄 Refresh", help="Refresh subscription list", key="refresh_subscriptions_deploy"):
