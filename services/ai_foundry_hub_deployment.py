@@ -124,26 +124,58 @@ class AIFoundryHubDeploymentService:
                 logger.error(f"Failed to initialize credentials: {e}")
     
     def get_available_subscriptions(self) -> List[Dict[str, str]]:
-        """Get list of available Azure subscriptions."""
+        """Get list of available Azure subscriptions using Azure CLI."""
         try:
-            from azure.identity import DefaultAzureCredential
-            from azure.mgmt.subscription import SubscriptionClient
+            import subprocess
+            import json
             
-            credential = DefaultAzureCredential()
-            subscription_client = SubscriptionClient(credential)
+            logger.info("Getting available subscriptions using Azure CLI...")
             
-            subscriptions = []
-            for sub in subscription_client.subscriptions.list():
-                subscriptions.append({
-                    "subscription_id": sub.subscription_id,
-                    "display_name": sub.display_name,
-                    "state": sub.state
-                })
+            # Use Azure CLI to get all accessible subscriptions
+            result = subprocess.run([
+                "az", "account", "list", 
+                "--all", 
+                "--output", "json"
+            ], capture_output=True, text=True, timeout=60)
             
-            return subscriptions
-        except Exception as e:
-            logger.error(f"Failed to get subscriptions: {e}")
+            if result.returncode != 0:
+                logger.error(f"Azure CLI command failed: {result.stderr}")
+                return []
+            
+            try:
+                subscriptions_data = json.loads(result.stdout)
+                logger.info(f"Found {len(subscriptions_data)} subscriptions via Azure CLI")
+                
+                subscriptions = []
+                for sub in subscriptions_data:
+                    subscription_info = {
+                        "subscription_id": sub.get("id", ""),
+                        "display_name": sub.get("name", "Unknown"),
+                        "state": sub.get("state", "Unknown"),
+                        "tenantId": sub.get("tenantId", ""),
+                        "isDefault": sub.get("isDefault", False),
+                        "user": sub.get("user", {})
+                    }
+                    subscriptions.append(subscription_info)
+                    logger.debug(f"Subscription: {subscription_info['display_name']} ({subscription_info['subscription_id']})")
+                
+                # Sort subscriptions: default first, then alphabetically
+                subscriptions.sort(key=lambda x: (not x.get("isDefault", False), x.get("display_name", "")))
+                
+                return subscriptions
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse Azure CLI output: {e}")
+                logger.error(f"Raw output: {result.stdout}")
+                return []
+            
+        except subprocess.TimeoutExpired:
+            logger.error("Azure CLI command timed out")
             return []
+        except Exception as e:
+            logger.error(f"Failed to get subscriptions via Azure CLI: {e}")
+            # Fallback to Azure SDK method
+            return self._get_subscriptions_via_sdk()
     
     def get_current_subscription_info(self) -> Optional[Dict[str, str]]:
         """Get information about the current default subscription."""
@@ -2313,3 +2345,32 @@ class AIFoundryHubDeploymentService:
                 'state': 'Error',
                 'is_default': False
             }
+    
+    def _get_subscriptions_via_sdk(self) -> List[Dict[str, str]]:
+        """Fallback method to get subscriptions using Azure SDK."""
+        try:
+            from azure.identity import DefaultAzureCredential
+            from azure.mgmt.subscription import SubscriptionClient
+            
+            logger.info("Falling back to Azure SDK for subscription list...")
+            
+            credential = DefaultAzureCredential()
+            subscription_client = SubscriptionClient(credential)
+            
+            subscriptions = []
+            for sub in subscription_client.subscriptions.list():
+                subscriptions.append({
+                    "subscription_id": sub.subscription_id,
+                    "display_name": sub.display_name,
+                    "state": sub.state,
+                    "tenantId": getattr(sub, 'tenant_id', ''),
+                    "isDefault": False,  # SDK doesn't provide default info
+                    "user": {}
+                })
+            
+            logger.info(f"Found {len(subscriptions)} subscriptions via Azure SDK")
+            return subscriptions
+            
+        except Exception as e:
+            logger.error(f"Azure SDK fallback also failed: {e}")
+            return []
