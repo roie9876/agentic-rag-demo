@@ -38,6 +38,102 @@ Comprehensive documentation is now organized in the `/docs/` folder:
 - **[🌐 AI Foundry Implementation](docs/AI_FOUNDRY_FINAL_IMPLEMENTATION_SUMMARY.md)** - AI Foundry Account deployment guide
 - **[🔧 Modular Development](docs/MODULAR_DEVELOPMENT_WORKFLOW.md)** - Development guidelines and architecture
 
+## 🌐 Agentic RAG Deployment Guide - A to Z
+
+This section provides a comprehensive step-by-step visual guide for deploying the complete Agentic RAG Demo from start to finish, including private endpoints, network security, and AI Foundry integration.
+
+### 🏗️ High-Level Deployment Architecture
+
+![Agentic RAG Architecture Overview](media/HLD.png)
+
+*Complete architecture overview showing the Agentic RAG ingest pipeline with Azure AI Foundry, Copilot Studio, private networks, and M365 integration*
+
+### 📋 Complete Deployment Process
+
+#### Step 1: Deploy AI Foundry Account
+![Step 1 - Deploy AI Account](media/step%20(1)%20Deploy%20AI%20Account%20.png)
+
+*Deploy Azure AI Foundry Account with all required services including Azure OpenAI, AI Search, Document Intelligence, and network security*
+
+#### Step 2: Run Private Health Check
+![Step 2 - Private Health Check](media/step(2)%20run%20Private%20Health%20Check%20.png)
+
+*Verify all Azure services are properly deployed and accessible within the private network configuration*
+
+#### Step 3: Create Search Index
+![Step 3 - Create Index](media/step%20%20(3)%20Create%20Index.png)
+
+*Set up Azure AI Search index with proper schema, vector fields, and document processing configuration*
+
+#### Step 4: Manage Index and Documents
+![Step 4 - Manage Index](media/step%20(4)%20Manage%20Index.png)
+
+*Upload and process documents, manage index content, and configure document chunking strategies*
+
+#### Step 5: Run Test Retrieval
+![Step 5 - Test Retrieval](media/steo%20(5)%20Run%20Test%20Retrieval.png)
+
+*Test the retrieval system with sample queries and validate search results and knowledge agent responses*
+
+#### Step 6: Configure Function 1 (Document Processing)
+![Step 6 - Function 1 Config](media/step%20(6)%20Function%201%20Config.png)
+
+*Deploy and configure Azure Functions for automated document processing and SharePoint integration*
+
+#### Step 7: Create AI Foundry Agent
+![Step 7 - Create AI Foundry Agent](media/step%20(7)%20Create%20AI%20Foundry%20Agent.png)
+
+*Set up knowledge agents in Azure AI Foundry with proper grounding data and conversation flows*
+
+#### Step 8: Configure Function 2 (Studio2Foundry)
+![Step 8 - Function 2 Config](media/Step%20(8)%20Function%202%20config%20(Studio2Foundry).png)
+
+*Configure the Studio2Foundry integration for seamless agent deployment and management*
+
+#### Step 9: Set up Virtual Network Support for Power Platform
+![Step 9 - Power Platform VNet](media/Step9%20Set%20up%20Virtual%20Network%20support%20for%20Power%20Platform.png)
+
+*Enable Power Platform integration with virtual network support for enterprise-grade security and compliance*
+
+### 🚀 Quick Deployment Commands
+
+```bash
+# Clone and setup the project
+git clone https://github.com/your-org/agentic-rag-demo.git
+cd agentic-rag-demo
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your Azure service credentials
+
+# Deploy with private endpoints (one-click)
+cd 15-private-network-standard-agent-setup
+az deployment group create \
+  --resource-group your-rg \
+  --template-file main.json \
+  --parameters @main.json.parameters
+
+# Start the application
+cd ..
+streamlit run agentic-rag-demo.py
+```
+
+### ✨ Deployment Features
+
+- ✅ **Complete AI Foundry Setup**: Automated deployment of Azure AI Foundry Account with all required services
+- ✅ **Private Network Security**: Full VNet integration with private endpoints for all Azure services
+- ✅ **Document Processing Pipeline**: Automated ingestion from SharePoint, OneDrive, and file uploads
+- ✅ **Knowledge Agent Integration**: Seamless connection between search index and AI Foundry agents
+- ✅ **Power Platform Support**: Enterprise-grade integration with virtual network security
+- ✅ **Health Monitoring**: Comprehensive health checks and real-time status monitoring
+- ✅ **Function Automation**: Automated document processing and agent management workflows
+- ✅ **Multi-modal Support**: Advanced document intelligence with image and text processing
+
+---
+
 ## 🛠️ Quick Start
 
 ### Prerequisites
