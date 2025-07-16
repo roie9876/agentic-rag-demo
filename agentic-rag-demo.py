@@ -45,8 +45,7 @@ from tools.aoai import AzureOpenAIClient
 # Import the test_retrieval module
 from test_retrieval import render_test_retrieval_tab
 
-# Import the Studio2Foundry module
-from studio2foundry_tab import render_studio2foundry_tab
+# Studio2Foundry module will be imported dynamically in the tab
 from app.ui.sharepoint_reports_tab import render_sharepoint_reports_tab, render_sharepoint_purge_section
 
 # Import enhanced AI Foundry components
@@ -1830,7 +1829,11 @@ def run_streamlit_ui() -> None:
 
     # ── Studio2Foundry Tab ────────────────────────────────────────────────
     with tab_studio2foundry:
-        render_studio2foundry_tab()
+        # Use the enhanced Studio2Foundry tab with AI Foundry integration
+        from app.tabs.enhanced_studio2foundry_tab import render_enhanced_studio2foundry_tab
+        render_enhanced_studio2foundry_tab(
+            session_state=st.session_state
+        )
 
 ##############################################################################
 # Main entry point
