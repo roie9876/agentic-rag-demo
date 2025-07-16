@@ -153,6 +153,9 @@ var vnetResourceGroupName = existingVnetPassedIn ? vnetParts[4] : resourceGroup(
 var existingVnetName = existingVnetPassedIn ? last(vnetParts) : vnetName
 var trimVnetName = trim(existingVnetName)
 
+@description('Automatically add Microsoft.App/environments delegation to existing agent subnet if missing')
+param autoAddDelegationToExistingSubnet bool = true
+
 @description('The name of the project capability host to be created')
 param projectCapHost string = 'caphostproj'
 
@@ -173,6 +176,7 @@ module vnet 'modules-network-secured/network-agent-vnet.bicep' = {
     agentSubnetPrefix: agentSubnetPrefix
     peSubnetPrefix: peSubnetPrefix
     existingVnetSubscriptionId: vnetSubscriptionId
+    autoAddDelegationToExistingSubnet: autoAddDelegationToExistingSubnet
   }
 }
 

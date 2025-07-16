@@ -37,6 +37,9 @@ param agentSubnetPrefix string = ''
 @description('Address prefix for the private endpoint subnet')
 param peSubnetPrefix string = ''
 
+@description('Automatically add Microsoft.App/environments delegation to existing agent subnet if missing')
+param autoAddDelegationToExistingSubnet bool = true
+
 // Create new VNet if needed
 module newVNet 'vnet.bicep' = if (!useExistingVnet) {
   name: 'vnet-deployment'
@@ -52,7 +55,7 @@ module newVNet 'vnet.bicep' = if (!useExistingVnet) {
 }
 
 // Use existing VNet with existing subnets
-module existingVNet 'existing-vnet.bicep' = if (useExistingVnet && !createSubnetsInExistingVnet) {
+module existingVNet 'existing-vnet-auto-delegate.bicep' = if (useExistingVnet && !createSubnetsInExistingVnet) {
   name: 'existing-vnet-deployment'
   params: {
     vnetName: vnetName
@@ -60,6 +63,7 @@ module existingVNet 'existing-vnet.bicep' = if (useExistingVnet && !createSubnet
     vnetSubscriptionId: existingVnetSubscriptionId
     agentSubnetName: agentSubnetName
     peSubnetName: peSubnetName
+    autoAddDelegation: autoAddDelegationToExistingSubnet
   }
 }
 

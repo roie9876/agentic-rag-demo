@@ -33,6 +33,14 @@ resource existingAgentSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-
   parent: existingVNet
 }
 
+// Validate delegation on existing agent subnet
+var hasDelegation = contains(existingAgentSubnet.properties, 'delegations') && length(existingAgentSubnet.properties.delegations) > 0
+var hasCorrectDelegation = hasDelegation && contains(string(existingAgentSubnet.properties.delegations), 'Microsoft.App/environments')
+
+// WARNING: This will cause deployment to fail if delegation is missing
+// To make it non-breaking, remove this assertion and use the validation outputs instead
+var delegationValidation = hasCorrectDelegation ? 'valid' : error('CRITICAL: Agent subnet "${agentSubnetName}" is missing required delegation to Microsoft.App/environments. Please add this delegation to the subnet before deploying AI Foundry.')
+
 // Reference existing PE subnet
 resource existingPeSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = {
   name: peSubnetName

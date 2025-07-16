@@ -24,6 +24,21 @@ languages:
 
 This infrastructure-as-code (IaC) solution deploys a network-secured Azure AI agent environment with private networking and role-based access control (RBAC).
 
+## 🚀 **What's New: Auto-Delegation Feature**
+
+✨ **No more manual subnet delegation setup!** This template now automatically adds the required `Microsoft.App/environments` delegation to existing agent subnets.
+
+**Quick Start with Existing VNet:**
+```bash
+az deployment group create \
+  --resource-group my-rg \
+  --template-file main.bicep \
+  --parameters \
+    existingVnetResourceId="/subscriptions/.../virtualNetworks/my-vnet" \
+    agentSubnetName="agent-subnet" \
+    autoAddDelegationToExistingSubnet=true
+```
+
 [![Deploy To Azure](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/deploytoazure.svg?sanitize=true)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fazure-ai-foundry%2Ffoundry-samples%2Frefs%2Fheads%2Fmain%2Fsamples%2Fmicrosoft%2Finfrastructure-setup%2F15-private-network-standard-agent-setup%2Fazuredeploy.json)
 
 
@@ -98,6 +113,26 @@ To use an existing VNet and subnets, set the existingVnetResourceId parameter to
 - param peSubnetPrefix string = '192.168.1.0/24' //optional, default is '192.168.1.0/24'
 
 💡 If subnets information is provided then make sure it exist within the specified VNet to avoid deployment errors. If subnet information is not provided, the template will create subnets with the default address space.
+
+💡 **NEW**: If using existing subnets, the template can automatically add the required `Microsoft.App/environments` delegation. Set `autoAddDelegationToExistingSubnet=true` (default) to enable this feature.
+
+### **Key Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `existingVnetResourceId` | string | "" | Full Resource ID of existing VNet |
+| `agentSubnetName` | string | "agent-subnet" | Name of the agent subnet |
+| `peSubnetName` | string | "pe-subnet" | Name of the private endpoint subnet |
+| `createSubnetsInExistingVnet` | bool | true | Create new subnets in existing VNet |
+| `autoAddDelegationToExistingSubnet` | bool | **true** | **🆕 Auto-add delegation if missing** |
+
+### **Subnet Delegation Scenarios:**
+
+| VNet | Subnets | Delegation Handling |
+|------|---------|-------------------|
+| New | New | ✅ Automatic |
+| Existing | New | ✅ Automatic |
+| Existing | Existing | ✅ **Auto-fix available** |
 
 2. **Use an existing Azure Cosmos DB for NoSQL**
    
@@ -294,6 +329,8 @@ modules-network-secured/
 ├── cosmos-container-role-assignments.bicep         # CosmosDB container Account RBAC configuration
 ├── cosmosdb-account-role-assignment.bicep          # CosmosDB Account RBAC configuration
 ├── existing-vnet.bicep                             # Bring your existing virtual network to template deployment
+├── existing-vnet-auto-delegate.bicep               # Enhanced existing VNet with auto-delegation support
+├── existing-vnet-new-subnets.bicep                 # Use existing VNet but create new subnets with delegation
 ├── format-project-workspace-id.bicep               # Formatting the project workspace ID
 ├── network-agent-vnet.bicep                        # Logic for routing virtual network set-up if existing virtual network is selected
 ├── private-endpoint-and-dns.bicep                  # Creating virtual networks and DNS zones. 
@@ -303,7 +340,73 @@ modules-network-secured/
 └── vnet.bicep                                      # Deploying a new virtual network
 ```
 
+### **Diagnostic Tools** (New!)
+
+```text
+tests/diagnostics/
+├── validate_subnet_delegation.bicep                # Standalone subnet delegation validation and auto-fix module
+├── validate_subnet_delegation.sh                   # Shell script for delegation validation with auto-fix
+└── deploy_subnet_delegation_fix.sh                 # Bicep deployment script for delegation fixes
+```
+
 > **Note:** If you bring your own VNET for this template, ensure the subnet for Agents has the correct subnet delegation to `Microsoft.App/environments`. If you have not specified the delegated subnet, the template will complete this for you.
+
+## 🚀 **NEW: Automatic Subnet Delegation Feature**
+
+This template now includes **automatic subnet delegation** capabilities for existing VNets and subnets! No more manual delegation setup required.
+
+### **Auto-Delegation Options:**
+
+#### **1. Built-in Auto-Fix (Recommended)**
+The main deployment template can automatically add the required delegation:
+
+```bash
+az deployment group create \
+  --resource-group <your-resource-group> \
+  --template-file main.bicep \
+  --parameters \
+    existingVnetResourceId="/subscriptions/.../virtualNetworks/my-vnet" \
+    agentSubnetName="agent-subnet" \
+    createSubnetsInExistingVnet=false \
+    autoAddDelegationToExistingSubnet=true
+```
+
+#### **2. Pre-Deployment Validation & Auto-Fix**
+Validate and fix delegation before deployment:
+
+```bash
+# Validate only (no changes)
+./tests/diagnostics/validate_subnet_delegation.sh \
+  --vnet-name my-vnet \
+  --vnet-rg my-rg \
+  --subnet-name agent-subnet
+
+# Auto-fix if delegation is missing
+./tests/diagnostics/validate_subnet_delegation.sh \
+  --vnet-name my-vnet \
+  --vnet-rg my-rg \
+  --subnet-name agent-subnet \
+  --auto-fix
+```
+
+#### **3. Bicep Deployment Auto-Fix**
+Standalone delegation fix using Bicep:
+
+```bash
+./tests/diagnostics/deploy_subnet_delegation_fix.sh \
+  --vnet-name my-vnet \
+  --vnet-rg my-rg \
+  --subnet-name agent-subnet
+```
+
+### **New Parameters:**
+- `autoAddDelegationToExistingSubnet` (bool, default: true) - Automatically add Microsoft.App/environments delegation if missing
+
+### **Benefits:**
+- ✅ **Zero manual setup** for subnet delegation
+- ✅ **Non-destructive** - preserves existing subnet properties  
+- ✅ **Validation** - confirms delegation before proceeding
+- ✅ **Flexible options** - shell script, Bicep, or integrated deployment
 
 ## Maintenance
 
@@ -332,7 +435,37 @@ Resource /subscriptions/.../resourceGroups/myRG/providers/Microsoft.Network/virt
 - Example: Replace `10.10.0.0/16` with `192.168.0.0/16`
 - Replace `10.10.1.0/24` with `192.168.1.0/24`
 
-**2. General Troubleshooting Steps**
+**2. Subnet Delegation Issues**
+
+If you encounter errors related to missing subnet delegation:
+```
+SubnetMissingRequiredDelegation: Subnet requires delegation [Microsoft.App/environments]
+```
+
+**Automatic Solutions** (Recommended):
+1. **Use auto-delegation in deployment**:
+   ```bash
+   az deployment group create \
+     --template-file main.bicep \
+     --parameters autoAddDelegationToExistingSubnet=true
+   ```
+
+2. **Pre-deployment auto-fix**:
+   ```bash
+   ./tests/diagnostics/validate_subnet_delegation.sh \
+     --vnet-name my-vnet --vnet-rg my-rg --subnet-name agent-subnet --auto-fix
+   ```
+
+**Manual Solution**:
+```bash
+az network vnet subnet update \
+  --vnet-name my-vnet \
+  --resource-group my-rg \
+  --name agent-subnet \
+  --delegations Microsoft.App/environments
+```
+
+**3. General Troubleshooting Steps**
 
 1. Verify private endpoint connectivity
 2. Check DNS resolution
