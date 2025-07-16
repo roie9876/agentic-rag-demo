@@ -241,6 +241,115 @@ streamlit run agentic-rag-demo.py
 - **Comprehensive Reporting**: Detailed processing statistics and success/failure tracking
 - **Batch Processing**: Configurable batch sizes and processing schedules
 
+#### 🔄 SharePoint Index Pipeline for Office & PDF Files
+
+The SharePoint index pipeline is a sophisticated multi-stage process that transforms raw documents from SharePoint into intelligently processed, searchable content in Azure AI Search:
+
+**Complete Pipeline Overview:**
+```
+SharePoint Document → Authentication → Discovery → Download → 
+Format Detection → Document Intelligence → Multimodal Processing → 
+Chunking → Embedding Generation → Index Storage → Search Ready
+```
+
+**🏗️ Stage-by-Stage Process:**
+
+**Stage 1: SharePoint Connection & File Discovery**
+- **Authentication**: Certificate-based or client secret authentication via Microsoft Graph API
+- **File Discovery**: Recursively scans SharePoint folders for supported file types (`.pdf`, `.docx`, `.pptx`, `.xlsx`)
+- **Change Detection**: Compares timestamps to process only modified files
+- **Security Preservation**: Maintains original document permissions and access controls
+
+**Stage 2: Document Processing Pipeline**
+- **File Download**: Binary content retrieved from SharePoint via Graph API
+- **Format Detection**: File extension determines processing strategy
+- **Chunker Selection**: ChunkerFactory routes to appropriate processor based on file type
+
+**Stage 3: Azure Document Intelligence Integration**
+
+For **PDF, DOCX, PPTX** files, the system leverages Azure Document Intelligence:
+- **OCR Processing**: Extracts text from scanned documents and images
+- **Layout Analysis**: Identifies document structure (headers, paragraphs, tables)
+- **Table Extraction**: Preserves tabular data structure with relationships
+- **Figure Detection**: Identifies and extracts embedded images and figures
+- **Coordinate Mapping**: Maintains positional information for accurate content extraction
+
+**Stage 4: Multimodal Processing Enhancement**
+
+When `MULTIMODAL=true` is enabled:
+- **Image Extraction**: Extracts embedded images from PDFs and Office documents
+- **Azure Blob Storage**: Stores images with unique identifiers and secure access
+- **OpenAI GPT-4 Vision**: Generates descriptive captions for images using advanced AI
+- **Caption Embedding**: Creates separate embeddings for image descriptions
+- **Content Association**: Links images to their corresponding text chunks for contextual search
+
+**Stage 5: Intelligent Chunking Strategies**
+- **PDF Processing**: Layout-aware chunking that preserves table structures and reading order
+- **Office Documents**: Extracts text while preserving document structure (slides, paragraphs)
+- **Excel Files**: Uses Pandas parser to convert tabular data into natural language summaries
+- **Adaptive Chunking**: Optimizes chunk sizes based on content type and complexity
+
+**Stage 6: Azure OpenAI Embedding Generation**
+- **Model**: `text-embedding-3-large` (3072-dimensional vectors)
+- **Content Preparation**: Filename prefix added to chunks for enhanced context
+- **Dual Vectors**: Separate embeddings for text content and image captions
+- **Batch Processing**: Efficient parallel processing of multiple chunks
+
+**Stage 7: Azure AI Search Index Storage**
+
+Creates a hybrid search index with rich metadata:
+```json
+{
+  "id": "unique_chunk_identifier",
+  "page_chunk": "processed_text_content",
+  "page_embedding_text_3_large": [3072_dimensional_vector],
+  "page_number": 1,
+  "source_file": "document.pdf",
+  "parent_id": "sharepoint_document_id",
+  "url": "sharepoint_document_url",
+  
+  // SharePoint-specific metadata
+  "metadata_storage_path": "sharepoint_web_url",
+  "metadata_storage_name": "filename.pdf", 
+  "metadata_storage_last_modified": "2024-01-15T10:30:00Z",
+  "metadata_security_id": "user_permissions",
+  
+  // Processing metadata
+  "extraction_method": "document_intelligence",
+  "document_type": "PDF Document",
+  "has_figures": true,
+  "processing_timestamp": "2024-01-15T10:30:00Z",
+  
+  // Multimodal fields (when enabled)
+  "imageCaptions": "AI-generated descriptions",
+  "captionVector": [caption_embedding_array],
+  "relatedImages": ["blob_storage_urls"],
+  "isMultimodal": true
+}
+```
+
+**🎯 Advanced Processing Features:**
+- **Smart Retry Logic**: Multiple content-type detection strategies for robust processing
+- **Change Detection**: Only processes modified files for efficiency
+- **Error Handling**: Comprehensive error tracking and graceful fallback mechanisms
+- **Security Preservation**: Maintains SharePoint permissions and access controls
+- **Real-time Monitoring**: Live processing status with detailed success/failure reporting
+
+**📊 Processing Outcomes:**
+```
+✅ Successfully Processed (5 files):
+   • Report_Q1.pdf - 12 chunks (document_intelligence) 🎨
+   • Data_Analysis.xlsx - 3 chunks (pandas_parser)
+   • Meeting_Notes.docx - 8 chunks (document_intelligence)
+   • Presentation.pptx - 15 chunks (document_intelligence) 🎨
+
+⚠️ Skipped Files (2 files):
+   • Empty_File.pdf (0 bytes) - No content
+   • Duplicate_Report.pdf - Already indexed (unchanged)
+```
+
+This comprehensive pipeline ensures that Office files and PDFs from SharePoint are transformed into intelligent, searchable knowledge with full multimodal capabilities for enhanced retrieval and contextual understanding.
+
 ### ⚙️ Configuration Management
 - **Function Deployment**: Automated Azure Function deployment and configuration
 - **Environment Sync**: Push configuration changes to Azure Functions
