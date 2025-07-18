@@ -2,11 +2,139 @@ import logging
 import os
 import asyncio
 import time
+from datetime import datetime
 from connectors import SharePointDataReader
 from tools import KeyVaultClient
 from tools import AISearchClient
 from typing import Any, Dict, List, Optional
 import base64
+import json
+
+
+class PerformanceLogger:
+    """
+    Comprehensive performance logging for SharePoint indexing pipeline.
+    Tracks timing, bottlenecks, and performance metrics for optimization.
+    """
+    
+    def __init__(self, file_name: str):
+        self.file_name = file_name
+        self.stage_times = {}
+        self.start_time = time.time()
+        self.metadata = {}
+        self.api_call_times = {}
+        self.memory_usage = {}
+        
+        # Setup performance logging
+        self.perf_logger = logging.getLogger(f"performance.{file_name}")
+        if not self.perf_logger.handlers:
+            # Create logs directory if it doesn't exist
+            os.makedirs("logs/sharepoint_indexing", exist_ok=True)
+            
+            # Setup performance file handler
+            perf_handler = logging.FileHandler("logs/sharepoint_indexing/pipeline_performance.log")
+            perf_formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            perf_handler.setFormatter(perf_formatter)
+            self.perf_logger.addHandler(perf_handler)
+            self.perf_logger.setLevel(logging.INFO)
+            
+        self.perf_logger.info(f"[PERF][{self.file_name}][PIPELINE] STARTED")
+        
+    def log_stage_start(self, stage: str, metadata: dict = None):
+        """Start timing a processing stage."""
+        self.stage_times[stage] = {'start': time.time()}
+        if metadata:
+            self.metadata[stage] = metadata
+        self.perf_logger.info(f"[PERF][{self.file_name}][{stage}] STARTED")
+        
+    def log_stage_end(self, stage: str, metadata: dict = None):
+        """End timing a processing stage."""
+        if stage in self.stage_times:
+            elapsed = time.time() - self.stage_times[stage]['start']
+            self.stage_times[stage]['duration'] = elapsed
+            
+            # Combine metadata
+            all_metadata = self.metadata.get(stage, {})
+            if metadata:
+                all_metadata.update(metadata)
+                
+            metadata_str = f" | {json.dumps(all_metadata)}" if all_metadata else ""
+            self.perf_logger.info(f"[PERF][{self.file_name}][{stage}] COMPLETED in {elapsed:.2f}s{metadata_str}")
+            
+    def log_api_call(self, service: str, operation: str, duration: float, status: str = "success", metadata: dict = None):
+        """Log API call performance."""
+        if service not in self.api_call_times:
+            self.api_call_times[service] = []
+            
+        call_data = {
+            'operation': operation,
+            'duration': duration,
+            'status': status,
+            'timestamp': time.time()
+        }
+        if metadata:
+            call_data.update(metadata)
+            
+        self.api_call_times[service].append(call_data)
+        
+        metadata_str = f" | {json.dumps(metadata)}" if metadata else ""
+        self.perf_logger.info(f"[API][{self.file_name}][{service}][{operation}] {status.upper()} in {duration:.2f}s{metadata_str}")
+        
+    def log_bottleneck_analysis(self):
+        """Analyze and log performance bottlenecks."""
+        if not self.stage_times:
+            return
+            
+        total_time = time.time() - self.start_time
+        
+        # Calculate stage percentages
+        stage_analysis = {}
+        for stage, timing in self.stage_times.items():
+            if 'duration' in timing:
+                percentage = (timing['duration'] / total_time) * 100
+                stage_analysis[stage] = {
+                    'duration': timing['duration'],
+                    'percentage': percentage
+                }
+                
+        # Find bottleneck (longest stage)
+        bottleneck = max(stage_analysis.items(), key=lambda x: x[1]['duration']) if stage_analysis else None
+        
+        if bottleneck:
+            stage_name, metrics = bottleneck
+            self.perf_logger.warning(
+                f"[BOTTLENECK][{self.file_name}] PRIMARY: {stage_name} "
+                f"({metrics['duration']:.2f}s, {metrics['percentage']:.1f}% of total time)"
+            )
+            
+        # Log all stage timings
+        for stage, metrics in sorted(stage_analysis.items(), key=lambda x: x[1]['duration'], reverse=True):
+            self.perf_logger.info(
+                f"[TIMING][{self.file_name}][{stage}] {metrics['duration']:.2f}s ({metrics['percentage']:.1f}%)"
+            )
+            
+    def finalize(self):
+        """Finalize performance logging and generate summary."""
+        total_duration = time.time() - self.start_time
+        
+        self.log_bottleneck_analysis()
+        
+        # Summary log
+        self.perf_logger.info(
+            f"[PERF][{self.file_name}][PIPELINE] COMPLETED in {total_duration:.2f}s "
+            f"({total_duration/60:.2f} minutes)"
+        )
+        
+        return {
+            'file_name': self.file_name,
+            'total_duration': total_duration,
+            'stage_timings': self.stage_times,
+            'api_calls': self.api_call_times,
+            'metadata': self.metadata
+        }
+
 
 class SharepointFilesIndexer:
     def __init__(self, index_name: Optional[str] = None):
@@ -129,7 +257,7 @@ class SharepointFilesIndexer:
             logging.error(f"[sharepoint_files_indexer] Failed to index file '{data['fileName']}': {e}")
 
     async def process_file(self, file: Dict[str, Any], semaphore: asyncio.Semaphore) -> None:
-        """Process and index a single SharePoint file."""
+        """Process and index a single SharePoint file with comprehensive performance logging."""
         async with semaphore:
             file_name = file.get("name")
             if not file_name:
@@ -137,76 +265,95 @@ class SharepointFilesIndexer:
                 self._track_file_skipped("Unknown", "File name is missing")
                 return
 
-            sharepoint_id = file.get("id")
-            document_bytes = file.get("content")
-            document_url = file.get("source")
-            last_modified_datetime = file.get("last_modified_datetime")
-            read_access_entity = file.get("read_access_entity")
-            file_size = len(document_bytes) if isinstance(document_bytes, (bytes, bytearray)) else 0
-
-            logging.info(f"[sharepoint_files_indexer] Processing File: {file_name}. Last Modified: {last_modified_datetime}")
-
-            # Check if file has content
-            if not document_bytes:
-                self._track_file_skipped(file_name, "No content", file_size)
-                logging.warning(f"[sharepoint_files_indexer] No content for file '{file_name}'. Skipping.")
-                return
-
-            data = {
-                "sharepointId": sharepoint_id,
-                "fileName": file_name,
-                "documentBytes": document_bytes,
-                "documentUrl": document_url
-            }
-
-            # Decide which search filter to use (whole‑doc vs. chunks)
-            filter_str = (
-                f"id eq '{sharepoint_id}' and source eq 'sharepoint'"
-                if self.direct_index
-                else f"parent_id eq '{sharepoint_id}' and source eq 'sharepoint'"
-            )
-
-            # Fetch existing chunks related to the file
+            # Initialize performance logger for this file
+            perf_logger = PerformanceLogger(file_name)
+            
             try:
-                existing_chunks = await self.search_client.search_documents(
-                    index_name=self.index_name,
-                    search_text="*",
-                    filter_str=filter_str,
-                    select_fields=['id', 'metadata_storage_last_modified', 'metadata_storage_name'],
-                    top=1
+                sharepoint_id = file.get("id")
+                document_bytes = file.get("content")
+                document_url = file.get("source")
+                last_modified_datetime = file.get("last_modified_datetime")
+                read_access_entity = file.get("read_access_entity")
+                file_size = len(document_bytes) if isinstance(document_bytes, (bytes, bytearray)) else 0
+
+                # Log file metadata
+                perf_logger.log_stage_start("FILE_SETUP", {
+                    "file_size": file_size,
+                    "sharepoint_id": sharepoint_id,
+                    "last_modified": last_modified_datetime
+                })
+
+                logging.info(f"[sharepoint_files_indexer] Processing File: {file_name}. Last Modified: {last_modified_datetime}")
+
+                # Check if file has content
+                if not document_bytes:
+                    self._track_file_skipped(file_name, "No content", file_size)
+                    logging.warning(f"[sharepoint_files_indexer] No content for file '{file_name}'. Skipping.")
+                    perf_logger.log_stage_end("FILE_SETUP", {"status": "skipped", "reason": "no_content"})
+                    perf_logger.finalize()
+                    return
+
+                perf_logger.log_stage_end("FILE_SETUP", {"status": "success"})
+
+                # Existing chunks check with performance tracking
+                perf_logger.log_stage_start("EXISTING_CHUNKS_CHECK")
+                
+                data = {
+                    "sharepointId": sharepoint_id,
+                    "fileName": file_name,
+                    "documentBytes": document_bytes,
+                    "documentUrl": document_url
+                }
+
+                # Decide which search filter to use (whole‑doc vs. chunks)
+                filter_str = (
+                    f"id eq '{sharepoint_id}' and source eq 'sharepoint'"
+                    if self.direct_index
+                    else f"parent_id eq '{sharepoint_id}' and source eq 'sharepoint'"
                 )
-            except Exception as e:
-                logging.error(f"[sharepoint_files_indexer] Failed to search existing chunks for '{file_name}': {e}")
-                self._track_file_failed(file_name, f"Search failed: {str(e)}", file_size)
-                return
 
-            if existing_chunks.get('count', 0) == 0:
-                logging.debug(f"[sharepoint_files_indexer] No existing chunks found for '{file_name}'. Proceeding to index.")
-            else:
-                indexed_last_modified_str = existing_chunks['documents'][0].get('metadata_storage_last_modified')
-
-                if not indexed_last_modified_str:
-                    logging.warning(
-                        f"[sharepoint_files_indexer] 'metadata_storage_last_modified' not found for existing chunks of '{file_name}'. "
-                        "Deleting existing chunks and proceeding to re-index."
+                # Fetch existing chunks related to the file
+                api_start = time.time()
+                try:
+                    existing_chunks = await self.search_client.search_documents(
+                        index_name=self.index_name,
+                        search_text="*",
+                        filter_str=filter_str,
+                        select_fields=['id', 'metadata_storage_last_modified', 'metadata_storage_name'],
+                        top=1
                     )
-                    if self.direct_index:
-                        await self.search_client.delete_documents(
-                            index_name=self.index_name,
-                            key_field="id",
-                            key_values=[sharepoint_id],
-                        )
-                    else:
-                        await self.delete_existing_chunks(existing_chunks, file_name)
+                    api_duration = time.time() - api_start
+                    perf_logger.log_api_call("ai_search", "search_existing_chunks", api_duration, "success", {
+                        "results_count": existing_chunks.get('count', 0)
+                    })
+                except Exception as e:
+                    api_duration = time.time() - api_start
+                    perf_logger.log_api_call("ai_search", "search_existing_chunks", api_duration, "failed", {
+                        "error": str(e)
+                    })
+                    logging.error(f"[sharepoint_files_indexer] Failed to search existing chunks for '{file_name}': {e}")
+                    self._track_file_failed(file_name, f"Search failed: {str(e)}", file_size)
+                    perf_logger.log_stage_end("EXISTING_CHUNKS_CHECK", {"status": "failed", "error": str(e)})
+                    perf_logger.finalize()
+                    return
+
+                perf_logger.log_stage_end("EXISTING_CHUNKS_CHECK", {
+                    "existing_chunks_found": existing_chunks.get('count', 0)
+                })
+
+                # Handle existing chunks logic with performance tracking
+                if existing_chunks.get('count', 0) == 0:
+                    logging.debug(f"[sharepoint_files_indexer] No existing chunks found for '{file_name}'. Proceeding to index.")
                 else:
-                    # Compare modification times
-                    if last_modified_datetime <= indexed_last_modified_str:
-                        logging.info(f"[sharepoint_files_indexer] '{file_name}' has not been modified since last indexing. Skipping.")
-                        self._track_file_skipped(file_name, "No modifications since last indexing", file_size)
-                        return  # Skip indexing as no changes detected
-                    else:
-                        # If the file has been modified, delete existing chunks and re-index
-                        logging.debug(f"[sharepoint_files_indexer] '{file_name}' has been modified. Deleting existing chunks and re-indexing.")
+                    perf_logger.log_stage_start("EXISTING_CHUNKS_PROCESSING")
+                    indexed_last_modified_str = existing_chunks['documents'][0].get('metadata_storage_last_modified')
+
+                    if not indexed_last_modified_str:
+                        logging.warning(
+                            f"[sharepoint_files_indexer] 'metadata_storage_last_modified' not found for existing chunks of '{file_name}'. "
+                            "Deleting existing chunks and proceeding to re-index."
+                        )
+                        api_start = time.time()
                         if self.direct_index:
                             await self.search_client.delete_documents(
                                 index_name=self.index_name,
@@ -215,104 +362,179 @@ class SharepointFilesIndexer:
                             )
                         else:
                             await self.delete_existing_chunks(existing_chunks, file_name)
-
-            # ---------- direct index path ----------
-            if self.direct_index:
-                document_record = {
-                    "id": sharepoint_id,
-                    "fileName": file_name,
-                    "metadata_storage_name": file_name,
-                    "metadata_storage_path": document_url,
-                    "url": document_url,
-                    "metadata_storage_last_modified": last_modified_datetime,
-                    "metadata_security_id": read_access_entity,
-                    "source": "sharepoint",
-                    # keep bytes JSON‑safe
-                    "documentBytes": (
-                        base64.b64encode(document_bytes).decode("utf-8")
-                        if isinstance(document_bytes, (bytes, bytearray))
-                        else document_bytes
-                    ),
-                }
-                # --- guarantee mandatory schema fields ---
-                mandatory = [
-                    "id",
-                    "fileName",
-                    "metadata_storage_name",
-                    "metadata_storage_path",
-                    "metadata_storage_last_modified",
-                    "metadata_security_id",
-                    "source",
-                    "url",
-                ]
-                for fld in mandatory:
-                    document_record.setdefault(fld, "")
-                # -----------------------------------------
-                try:
-                    await self.search_client.index_document(self.index_name, document_record)
-                    logging.info(
-                        f"[sharepoint_files_indexer] Indexed '{file_name}' directly (no Document Intelligence)."
-                    )
-                    # Track successful processing (direct mode = 1 chunk)
-                    self._track_file_processed(file_name, 1, "direct_index", file_size, False)
-                except Exception as e:
-                    logging.error(
-                        f"[sharepoint_files_indexer] Failed to index '{file_name}': {e}"
-                    )
-                    self._track_file_failed(file_name, str(e), file_size)
-                return  # skip the chunking path
-            # ---------- end direct index path ----------
-
-            # ---------- chunk & embed path (non‑direct_index) ----------
-            # Use DocumentChunker for consistent processing across all file types
-            try:
-                ext = os.path.splitext(file_name)[-1].lower()
-                
-                # Enable multimodal processing for supported file types
-                multimodal_env = os.getenv("MULTIMODAL", "false").lower() in ["true", "1", "yes"]
-                multimodal_enabled = multimodal_env and ext in ('.pdf', '.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.docx', '.pptx')
-                
-                # Create DocumentChunker instance
-                from chunking import DocumentChunker
-                dc = DocumentChunker(multimodal=multimodal_enabled, openai_client=None)
-                
-                # Prepare data in the format expected by DocumentChunker
-                data = {
-                    "fileName": file_name,
-                    "documentBytes": base64.b64encode(document_bytes).decode("utf-8") if isinstance(document_bytes, bytes) else document_bytes,
-                    "documentUrl": document_url or "",
-                }
-                
-                # Process the document
-                chunks, errors, warnings = dc.chunk_documents(data)
-                
-                if errors:
-                    logging.error(f"[sharepoint_files_indexer] Chunking errors for '{file_name}': {errors}")
-                if warnings:
-                    logging.warning(f"[sharepoint_files_indexer] Chunking warnings for '{file_name}': {warnings}")
+                        api_duration = time.time() - api_start
+                        perf_logger.log_api_call("ai_search", "delete_existing_chunks", api_duration, "success")
+                    else:
+                        # Compare modification times
+                        if last_modified_datetime <= indexed_last_modified_str:
+                            logging.info(f"[sharepoint_files_indexer] '{file_name}' has not been modified since last indexing. Skipping.")
+                            self._track_file_skipped(file_name, "No modifications since last indexing", file_size)
+                            perf_logger.log_stage_end("EXISTING_CHUNKS_PROCESSING", {"status": "skipped", "reason": "no_modifications"})
+                            perf_logger.finalize()
+                            return  # Skip indexing as no changes detected
+                        else:
+                            # If the file has been modified, delete existing chunks and re-index
+                            logging.debug(f"[sharepoint_files_indexer] '{file_name}' has been modified. Deleting existing chunks and re-indexing.")
+                            api_start = time.time()
+                            if self.direct_index:
+                                await self.search_client.delete_documents(
+                                    index_name=self.index_name,
+                                    key_field="id",
+                                    key_values=[sharepoint_id],
+                                )
+                            else:
+                                await self.delete_existing_chunks(existing_chunks, file_name)
+                            api_duration = time.time() - api_start
+                            perf_logger.log_api_call("ai_search", "delete_modified_chunks", api_duration, "success")
                     
-            except Exception as e:
-                logging.error(
-                    f"[sharepoint_files_indexer] Failed to create DocumentChunker for '{file_name}' (ext={ext}). "
-                    f"Error: {e}"
-                )
-                self._track_file_failed(file_name, f"DocumentChunker failed: {str(e)}", file_size)
-                return
+                    perf_logger.log_stage_end("EXISTING_CHUNKS_PROCESSING")
 
-            if not chunks:
-                logging.warning(
-                    f"[sharepoint_files_indexer] No chunks produced for '{file_name}'."
-                )
-                self._track_file_skipped(file_name, "No chunks produced", file_size)
-                return
+                # ---------- direct index path ----------
+                if self.direct_index:
+                    perf_logger.log_stage_start("DIRECT_INDEX_PROCESSING")
+                    
+                    document_record = {
+                        "id": sharepoint_id,
+                        "fileName": file_name,
+                        "metadata_storage_name": file_name,
+                        "metadata_storage_path": document_url,
+                        "url": document_url,
+                        "metadata_storage_last_modified": last_modified_datetime,
+                        "metadata_security_id": read_access_entity,
+                        "source": "sharepoint",
+                        # keep bytes JSON‑safe
+                        "documentBytes": (
+                            base64.b64encode(document_bytes).decode("utf-8")
+                            if isinstance(document_bytes, (bytes, bytearray))
+                            else document_bytes
+                        ),
+                    }
+                    # --- guarantee mandatory schema fields ---
+                    mandatory = [
+                        "id",
+                        "fileName",
+                        "metadata_storage_name",
+                        "metadata_storage_path",
+                        "metadata_storage_last_modified",
+                        "metadata_security_id",
+                        "source",
+                        "url",
+                    ]
+                    for fld in mandatory:
+                        document_record.setdefault(fld, "")
+                    # -----------------------------------------
+                    
+                    api_start = time.time()
+                    try:
+                        await self.search_client.index_document(self.index_name, document_record)
+                        api_duration = time.time() - api_start
+                        perf_logger.log_api_call("ai_search", "index_direct_document", api_duration, "success")
+                        
+                        logging.info(
+                            f"[sharepoint_files_indexer] Indexed '{file_name}' directly (no Document Intelligence)."
+                        )
+                        # Track successful processing (direct mode = 1 chunk)
+                        self._track_file_processed(file_name, 1, "direct_index", file_size, False)
+                        
+                        perf_logger.log_stage_end("DIRECT_INDEX_PROCESSING", {"status": "success", "chunks": 1})
+                        perf_logger.finalize()
+                        
+                    except Exception as e:
+                        api_duration = time.time() - api_start
+                        perf_logger.log_api_call("ai_search", "index_direct_document", api_duration, "failed", {
+                            "error": str(e)
+                        })
+                        logging.error(
+                            f"[sharepoint_files_indexer] Failed to index '{file_name}': {e}"
+                        )
+                        self._track_file_failed(file_name, str(e), file_size)
+                        perf_logger.log_stage_end("DIRECT_INDEX_PROCESSING", {"status": "failed", "error": str(e)})
+                        perf_logger.finalize()
+                # ---------- end direct index path ----------
 
-            # Convert DocumentChunker output to SharePoint index schema format
-            processed_chunks = []
-            for i, ch in enumerate(chunks):
-                # Extract text content (DocumentChunker uses different field names)
-                content = ch.get("page_chunk") or ch.get("chunk") or ch.get("content") or ""
-                if not content:
-                    continue
+                # ---------- chunk & embed path (non‑direct_index) ----------
+                # Use DocumentChunker for consistent processing across all file types
+                perf_logger.log_stage_start("DOCUMENT_CHUNKING")
+                
+                try:
+                    ext = os.path.splitext(file_name)[-1].lower()
+                    
+                    # Enable multimodal processing for supported file types
+                    multimodal_env = os.getenv("MULTIMODAL", "false").lower() in ["true", "1", "yes"]
+                    multimodal_enabled = multimodal_env and ext in ('.pdf', '.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.docx', '.pptx')
+                    
+                    perf_logger.log_stage_start("DOCUMENT_CHUNKER_INIT", {
+                        "file_extension": ext,
+                        "multimodal_enabled": multimodal_enabled
+                    })
+                    
+                    # Create DocumentChunker instance
+                    from chunking import DocumentChunker
+                    dc = DocumentChunker(multimodal=multimodal_enabled, openai_client=None)
+                    
+                    # Prepare data in the format expected by DocumentChunker
+                    data = {
+                        "fileName": file_name,
+                        "documentBytes": base64.b64encode(document_bytes).decode("utf-8") if isinstance(document_bytes, bytes) else document_bytes,
+                        "documentUrl": document_url or "",
+                    }
+                    
+                    perf_logger.log_stage_end("DOCUMENT_CHUNKER_INIT")
+                    
+                    # Process the document with timing
+                    chunking_start = time.time()
+                    chunks, errors, warnings = dc.chunk_documents(data)
+                    chunking_duration = time.time() - chunking_start
+                    
+                    perf_logger.log_api_call("document_chunker", "chunk_documents", chunking_duration, "success", {
+                        "chunks_produced": len(chunks) if chunks else 0,
+                        "errors_count": len(errors) if errors else 0,
+                        "warnings_count": len(warnings) if warnings else 0
+                    })
+                    
+                    if errors:
+                        logging.error(f"[sharepoint_files_indexer] Chunking errors for '{file_name}': {errors}")
+                    if warnings:
+                        logging.warning(f"[sharepoint_files_indexer] Chunking warnings for '{file_name}': {warnings}")
+                        
+                except Exception as e:
+                    chunking_duration = time.time() - chunking_start if 'chunking_start' in locals() else 0
+                    perf_logger.log_api_call("document_chunker", "chunk_documents", chunking_duration, "failed", {
+                        "error": str(e)
+                    })
+                    logging.error(
+                        f"[sharepoint_files_indexer] Failed to create DocumentChunker for '{file_name}' (ext={ext}). "
+                        f"Error: {e}"
+                    )
+                    self._track_file_failed(file_name, f"DocumentChunker failed: {str(e)}", file_size)
+                    perf_logger.log_stage_end("DOCUMENT_CHUNKING", {"status": "failed", "error": str(e)})
+                    perf_logger.finalize()
+                    return
+
+                if not chunks:
+                    logging.warning(
+                        f"[sharepoint_files_indexer] No chunks produced for '{file_name}'."
+                    )
+                    self._track_file_skipped(file_name, "No chunks produced", file_size)
+                    perf_logger.log_stage_end("DOCUMENT_CHUNKING", {"status": "skipped", "reason": "no_chunks"})
+                    perf_logger.finalize()
+                    return
+
+                perf_logger.log_stage_end("DOCUMENT_CHUNKING", {
+                    "chunks_produced": len(chunks),
+                    "file_extension": ext,
+                    "multimodal_enabled": multimodal_enabled
+                })
+
+                # Convert DocumentChunker output to SharePoint index schema format
+                perf_logger.log_stage_start("CHUNK_PREPARATION")
+                
+                processed_chunks = []
+                for i, ch in enumerate(chunks):
+                    # Extract text content (DocumentChunker uses different field names)
+                    content = ch.get("page_chunk") or ch.get("chunk") or ch.get("content") or ""
+                    if not content:
+                        continue
                     
                 # Create a properly formatted chunk for the SharePoint index
                 processed_chunk = {
@@ -352,44 +574,81 @@ class SharepointFilesIndexer:
                     
                 processed_chunks.append(processed_chunk)
 
-            # enrich each chunk with uniform metadata expected by the index schema
-            for i, ch in enumerate(processed_chunks):
-                ch.update(
-                    {
-                        "parent_id": sharepoint_id,
-                        "metadata_storage_path": document_url,
-                        "metadata_storage_name": file_name,
-                        "metadata_storage_last_modified": last_modified_datetime,
-                        "metadata_security_id": read_access_entity,
-                        "source": "sharepoint",
-                        "url": document_url,
-                    }
-                )
-                # guarantee minimal required fields
-                ch.setdefault("id", f"{sharepoint_id}_{i}")
-                ch.setdefault("page_number", i + 1)
-                ch.setdefault("source_file", file_name)
-                ch.setdefault("page_embedding_text_3_large", [])
+                # enrich each chunk with uniform metadata expected by the index schema
+                for i, ch in enumerate(processed_chunks):
+                    ch.update(
+                        {
+                            "parent_id": sharepoint_id,
+                            "metadata_storage_path": document_url,
+                            "metadata_storage_name": file_name,
+                            "metadata_storage_last_modified": last_modified_datetime,
+                            "metadata_security_id": read_access_entity,
+                            "source": "sharepoint",
+                            "url": document_url,
+                        }
+                    )
+                    # guarantee minimal required fields
+                    ch.setdefault("id", f"{sharepoint_id}_{i}")
+                    ch.setdefault("page_number", i + 1)
+                    ch.setdefault("source_file", file_name)
+                    ch.setdefault("page_embedding_text_3_large", [])
 
-            # upload in bulk
-            try:
-                await self.search_client.upload_documents(
-                    index_name=self.index_name, documents=processed_chunks
-                )
-                logging.info(
-                    f"[sharepoint_files_indexer] Indexed {len(processed_chunks)} chunks for '{file_name}' using DocumentChunker."
-                )
+                perf_logger.log_stage_end("CHUNK_PREPARATION", {
+                    "processed_chunks": len(processed_chunks),
+                    "multimodal_chunks": sum(1 for ch in processed_chunks if ch.get("isMultimodal", False))
+                })
+
+                # upload in bulk with performance tracking
+                perf_logger.log_stage_start("AI_SEARCH_UPLOAD")
                 
-                # Track successful processing with statistics
-                extraction_method = processed_chunks[0].get("extraction_method", "document_chunker") if processed_chunks else "document_chunker"
-                has_multimodal = any(chunk.get("isMultimodal", False) for chunk in processed_chunks)
-                self._track_file_processed(file_name, len(processed_chunks), extraction_method, file_size, has_multimodal)
-                
+                upload_start = time.time()
+                try:
+                    await self.search_client.upload_documents(
+                        index_name=self.index_name, documents=processed_chunks
+                    )
+                    upload_duration = time.time() - upload_start
+                    perf_logger.log_api_call("ai_search", "upload_documents", upload_duration, "success", {
+                        "documents_uploaded": len(processed_chunks),
+                        "index_name": self.index_name
+                    })
+                    
+                    logging.info(
+                        f"[sharepoint_files_indexer] Indexed {len(processed_chunks)} chunks for '{file_name}' using DocumentChunker."
+                    )
+                    
+                    # Track successful processing with statistics
+                    extraction_method = processed_chunks[0].get("extraction_method", "document_chunker") if processed_chunks else "document_chunker"
+                    has_multimodal = any(chunk.get("isMultimodal", False) for chunk in processed_chunks)
+                    self._track_file_processed(file_name, len(processed_chunks), extraction_method, file_size, has_multimodal)
+                    
+                    perf_logger.log_stage_end("AI_SEARCH_UPLOAD", {
+                        "status": "success",
+                        "chunks_uploaded": len(processed_chunks)
+                    })
+                    
+                except Exception as e:
+                    upload_duration = time.time() - upload_start
+                    perf_logger.log_api_call("ai_search", "upload_documents", upload_duration, "failed", {
+                        "error": str(e),
+                        "documents_attempted": len(processed_chunks)
+                    })
+                    logging.error(
+                        f"[sharepoint_files_indexer] Failed to upload chunks for '{file_name}': {e}"
+                    )
+                    self._track_file_failed(file_name, f"Upload failed: {str(e)}", file_size)
+                    perf_logger.log_stage_end("AI_SEARCH_UPLOAD", {
+                        "status": "failed",
+                        "error": str(e)
+                    })
+                    
             except Exception as e:
-                logging.error(
-                    f"[sharepoint_files_indexer] Failed to upload chunks for '{file_name}': {e}"
-                )
-                self._track_file_failed(file_name, f"Upload failed: {str(e)}", file_size)
+                # Handle any unexpected errors in the entire process
+                logging.error(f"[sharepoint_files_indexer] Unexpected error processing '{file_name}': {e}")
+                self._track_file_failed(file_name, f"Unexpected error: {str(e)}", file_size)
+                
+            finally:
+                # Always finalize performance logging
+                perf_logger.finalize()
 
     def _track_file_processed(self, file_name: str, chunks_count: int, extraction_method: str, 
                              file_size: int = 0, multimodal: bool = False) -> None:

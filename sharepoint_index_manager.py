@@ -11,6 +11,31 @@ from typing import Dict, List, Optional, Any, Tuple
 import logging
 from connectors.sharepoint.sharepoint_data_reader import SharePointDataReader
 
+# Phase 1 Optimization - Import optimization service
+try:
+    from services.sharepoint_optimization_service import SharePointOptimizationService
+    OPTIMIZATION_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"SharePoint optimization service not available: {e}")
+    OPTIMIZATION_AVAILABLE = False
+
+# Import PerformanceLogger for performance tracking
+try:
+    from connectors.sharepoint.sharepoint_files_indexer import PerformanceLogger
+except ImportError:
+    # Fallback in case of import issues
+    class PerformanceLogger:
+        def __init__(self, file_name):
+            self.file_name = file_name
+        def log_stage_start(self, stage, metadata=None):
+            pass
+        def log_stage_end(self, stage, metadata=None):
+            pass
+        def log_api_call(self, service, operation, duration, status, metadata=None):
+            pass
+        def finalize(self):
+            return {}
+
 
 class SharePointIndexManager:
     """Manages SharePoint folder tree view and indexing operations"""
@@ -21,6 +46,58 @@ class SharePointIndexManager:
         self.cache_timestamps = {}
         self.cache_timeout = 300  # 5 minutes cache timeout
         self.selected_folders = []
+        
+        # Phase 1 Optimization - Initialize optimization service
+        self.optimization_enabled = os.getenv("SHAREPOINT_OPTIMIZATION_ENABLED", "true").lower() == "true"
+        self.optimization_service = None
+    
+    def _init_optimization_service(self):
+        """Initialize the optimization service if available and enabled."""
+        if not OPTIMIZATION_AVAILABLE or not self.optimization_enabled:
+            return False
+        
+        try:
+            self.optimization_service = SharePointOptimizationService(
+                enable_optimizations=True
+            )
+            
+            logging.info("🚀 SharePoint optimization service initialized successfully")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Failed to initialize optimization service: {e}")
+            self.optimization_enabled = False
+            return False
+    
+    def get_optimization_status(self) -> Dict[str, Any]:
+        """Get the current optimization status."""
+        if not OPTIMIZATION_AVAILABLE:
+            return {
+                "available": False,
+                "enabled": False,
+                "message": "Optimization service not available - missing dependencies"
+            }
+        
+        if not self.optimization_enabled:
+            return {
+                "available": True,
+                "enabled": False,
+                "message": "Optimization disabled via SHAREPOINT_OPTIMIZATION_ENABLED environment variable"
+            }
+        
+        if self.optimization_service is None:
+            self._init_optimization_service()
+        
+        if self.optimization_service:
+            status = self.optimization_service.get_optimization_status()
+            status["available"] = True
+            return status
+        else:
+            return {
+                "available": True,
+                "enabled": False,
+                "message": "Optimization service failed to initialize"
+            }
     
     def get_sharepoint_auth_status(self) -> Dict[str, Any]:
         """Check SharePoint authentication status"""
@@ -764,6 +841,45 @@ class SharePointIndexManager:
             else:
                 index_name = os.getenv('INDEX_NAME', 'default-index')
         
+        # Phase 1 Optimization - Try to use optimized processing first
+        if self.optimization_enabled and OPTIMIZATION_AVAILABLE:
+            try:
+                if self.optimization_service is None:
+                    self._init_optimization_service()
+                
+                if self.optimization_service:
+                    logging.info(f"🚀 Using Phase 1 optimized processing for {len(files)} files")
+                    
+                    # Use optimized processing
+                    optimization_results = self.optimization_service.index_files_optimized(
+                        selected_files=files,
+                        index_name=index_name
+                    )
+                    
+                    # Convert optimization results to expected format
+                    processing_results = optimization_results.get("file_results", [])
+                    
+                    return {
+                        'success': optimization_results.get("failed_files", 0) == 0,
+                        'message': f"Phase 1 Optimized: {optimization_results.get('successful_files', 0)} successful, {optimization_results.get('failed_files', 0)} failed",
+                        'total_chunks': optimization_results.get("total_chunks_created", 0),
+                        'processing_results': processing_results,
+                        'optimization_used': True,
+                        'performance_metrics': optimization_results.get("performance_metrics", {}),
+                        'processing_time': optimization_results.get("processing_time", 0.0)
+                    }
+                    
+            except Exception as e:
+                logging.error(f"❌ Phase 1 optimization failed, falling back to standard processing: {e}")
+                # Continue with standard processing below
+        
+        # Standard processing (fallback or when optimization is disabled)
+        logging.info(f"📝 Using standard processing for {len(files)} files")
+        return self._index_files_standard(files, index_name)
+    
+    def _index_files_standard(self, files: List[Dict[str, Any]], index_name: str) -> Dict[str, Any]:
+        """Standard (non-optimized) file indexing method."""
+        
         try:
             # Import required modules for indexing
             import os
@@ -951,14 +1067,23 @@ class SharePointIndexManager:
                 
                 logging.info(f"[index_files] Using fallback _chunk_to_docs with full schema")
             
-            # Process files
+            # Process files with performance logging
             total_chunks = 0
             processing_results = []
             errors = []
             
             for file in files:
+                file_name = file.get('name', 'Unknown')
+                
+                # Initialize performance logger for each file
+                perf_logger = PerformanceLogger(file_name)
+                
                 try:
-                    file_name = file.get('name', 'Unknown')
+                    perf_logger.log_stage_start("FILE_PROCESSING_SETUP", {
+                        "file_name": file_name,
+                        "file_size": len(file.get('content', [])) if isinstance(file.get('content'), (bytes, bytearray)) else 0
+                    })
+                    
                     file_content = file.get('content')
                     file_url = file.get('source') or file.get('webUrl', '')
                     
@@ -969,7 +1094,20 @@ class SharePointIndexManager:
                             'error': 'No content or filename',
                             'chunks': 0
                         })
+                        perf_logger.log_stage_end("FILE_PROCESSING_SETUP", {
+                            "status": "failed",
+                            "reason": "no_content_or_filename"
+                        })
+                        perf_logger.finalize()
                         continue
+                    
+                    perf_logger.log_stage_end("FILE_PROCESSING_SETUP", {"status": "success"})
+                    
+                    # Document chunking with performance tracking
+                    perf_logger.log_stage_start("DOCUMENT_CHUNKING")
+                    
+                    import time
+                    chunking_start = time.time()
                     
                     # Use the chunking function with same signature as main app
                     docs = _chunk_to_docs(
@@ -980,9 +1118,31 @@ class SharePointIndexManager:
                         embed_deploy,
                     )
                     
+                    chunking_duration = time.time() - chunking_start
+                    perf_logger.log_api_call("document_chunker", "chunk_to_docs", chunking_duration, "success", {
+                        "chunks_produced": len(docs) if docs else 0
+                    })
+                    
+                    perf_logger.log_stage_end("DOCUMENT_CHUNKING", {
+                        "chunks_produced": len(docs) if docs else 0,
+                        "status": "success" if docs else "failed"
+                    })
+                    
                     if docs:
+                        # AI Search upload with performance tracking
+                        perf_logger.log_stage_start("AI_SEARCH_UPLOAD")
+                        
+                        upload_start = time.time()
+                        
                         # Upload to search index
                         sender.upload_documents(documents=docs)
+                        
+                        upload_duration = time.time() - upload_start
+                        perf_logger.log_api_call("ai_search", "upload_documents", upload_duration, "success", {
+                            "documents_uploaded": len(docs),
+                            "index_name": index_name
+                        })
+                        
                         total_chunks += len(docs)
                         
                         processing_results.append({
@@ -990,6 +1150,11 @@ class SharePointIndexManager:
                             'status': 'success',
                             'chunks': len(docs),
                             'extraction_method': docs[0].get("extraction_method", "unknown") if docs else "unknown"
+                        })
+                        
+                        perf_logger.log_stage_end("AI_SEARCH_UPLOAD", {
+                            "status": "success",
+                            "chunks_uploaded": len(docs)
                         })
                         
                         logging.info(f"[index_files] Successfully indexed {file_name}: {len(docs)} chunks")
@@ -1002,6 +1167,12 @@ class SharePointIndexManager:
                         })
                         
                 except Exception as e:
+                    chunking_duration = time.time() - chunking_start if 'chunking_start' in locals() else 0
+                    if chunking_duration > 0:
+                        perf_logger.log_api_call("document_chunker", "chunk_to_docs", chunking_duration, "failed", {
+                            "error": str(e)
+                        })
+                    
                     error_msg = f"Error processing file {file.get('name', 'Unknown')}: {str(e)}"
                     errors.append(error_msg)
                     processing_results.append({
@@ -1011,6 +1182,10 @@ class SharePointIndexManager:
                         'chunks': 0
                     })
                     logging.error(f"[index_files] {error_msg}")
+                    
+                finally:
+                    # Always finalize performance logging
+                    perf_logger.finalize()
             
             # Close sender to flush remaining documents
             sender.close()

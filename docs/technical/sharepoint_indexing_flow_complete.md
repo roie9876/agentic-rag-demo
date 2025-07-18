@@ -9,7 +9,180 @@
 6. [Embedding Process](#embedding-process)
 7. [Chunk Size Determination](#chunk-size-determination)
 8. [Parallel Processing Implementation](#parallel-processing-implementation)
-9. [AI Search Upload Process](#ai-search-upload-process)
+9. [AI Search Upload Process](#ai-search-upl### 4. **Code Updates**: Ensure all OpenAI clients use `AzureOpenAIClient` wrapper (not direct `AzureOpenAI` initialization)
+
+---
+
+## Performance Optimization Strategy
+
+### **Phase 0: Comprehensive Logging Implementation (FIRST PRIORITY)**
+
+Before implementing any performance optimizations, establish detailed logging to understand the current pipeline flow and identify bottlenecks.
+
+#### **Logging Architecture**
+
+```
+logs/
+├── sharepoint_indexing/
+│   ├── pipeline_performance.log     # Main pipeline timing
+│   ├── document_intelligence.log    # DI processing details
+│   ├── embedding_generation.log     # Embedding timing and batching
+│   ├── ai_search_upload.log        # Search upload performance
+│   └── error_analysis.log          # Detailed error tracking
+```
+
+#### **Key Metrics to Track**
+
+**1. Pipeline Stage Timing**
+- File download from SharePoint: `START → END` 
+- Document Intelligence processing: `START → API_CALL → RESPONSE → END`
+- Chunk creation and enrichment: `START → CHUNKS_COUNT → END`
+- Embedding generation: `START → BATCH_SIZE → API_CALLS → END`
+- AI Search upload: `START → DOCUMENTS_COUNT → END`
+
+**2. Performance Bottleneck Identification**
+- Time per processing stage (identify slowest stage)
+- API rate limiting incidents and delays
+- Memory usage peaks during processing
+- File size vs processing time correlation
+- Chunk count vs embedding time correlation
+
+**3. Error Pattern Analysis**
+- Authentication failures by service
+- Document Intelligence timeout patterns
+- Embedding API rate limit hits
+- Search upload failures and retry patterns
+
+#### **Implementation Strategy**
+
+**Step 1: Enhanced Pipeline Logging (1-2 hours)**
+```python
+# Add to sharepoint_files_indexer.py
+import time
+import logging
+from datetime import datetime
+
+class PerformanceLogger:
+    def __init__(self, file_name: str):
+        self.file_name = file_name
+        self.stage_times = {}
+        self.start_time = time.time()
+        
+    def log_stage_start(self, stage: str):
+        self.stage_times[stage] = {'start': time.time()}
+        logging.info(f"[PERF][{self.file_name}][{stage}] STARTED")
+        
+    def log_stage_end(self, stage: str, metadata: dict = None):
+        if stage in self.stage_times:
+            elapsed = time.time() - self.stage_times[stage]['start']
+            self.stage_times[stage]['duration'] = elapsed
+            metadata_str = f" | {metadata}" if metadata else ""
+            logging.info(f"[PERF][{self.file_name}][{stage}] COMPLETED in {elapsed:.2f}s{metadata_str}")
+```
+
+**Step 2: Document Intelligence Detailed Logging (1 hour)**
+- Log file size before processing
+- Track API call duration vs document complexity
+- Monitor timeout patterns for large documents
+- Record page count vs processing time
+
+**Step 3: Embedding Performance Tracking (30 minutes)**
+- Log batch sizes and API call frequency
+- Track token counts per chunk
+- Monitor rate limiting incidents
+- Record embedding generation time per batch
+
+**Step 4: Search Upload Analysis (30 minutes)**
+- Log chunk preparation time
+- Track bulk upload performance
+- Monitor upload success/failure rates
+- Record retry patterns and delays
+
+#### **Expected Insights from Logging**
+
+**Typical Bottleneck Patterns:**
+1. **Document Intelligence: 70-80% of total time**
+   - Large documents: 15-45 minutes
+   - API timeouts on 500+ page documents
+   
+2. **Embedding Generation: 10-15% of total time**
+   - Rate limiting on high-frequency calls
+   - Batch size optimization opportunities
+   
+3. **Search Upload: 5-10% of total time**
+   - Network latency for large chunk batches
+   - Occasional retry delays
+
+**Sample Expected Log Output:**
+```
+[PERF][document.docx][DOWNLOAD] STARTED
+[PERF][document.docx][DOWNLOAD] COMPLETED in 2.34s | size: 15MB
+[PERF][document.docx][DOC_INTELLIGENCE] STARTED  
+[PERF][document.docx][DOC_INTELLIGENCE] COMPLETED in 1847.23s | pages: 800, api_calls: 1
+[PERF][document.docx][CHUNK_CREATION] STARTED
+[PERF][document.docx][CHUNK_CREATION] COMPLETED in 12.45s | chunks: 785
+[PERF][document.docx][EMBEDDING] STARTED
+[PERF][document.docx][EMBEDDING] COMPLETED in 156.78s | batches: 40, api_calls: 40
+[PERF][document.docx][SEARCH_UPLOAD] STARTED
+[PERF][document.docx][SEARCH_UPLOAD] COMPLETED in 8.23s | documents: 785
+[PERF][document.docx][TOTAL_PIPELINE] COMPLETED in 2026.03s (33.77 minutes)
+```
+
+#### **Configuration for Logging**
+
+**Environment Variables to Add:**
+```properties
+# Performance logging
+PERFORMANCE_LOGGING_ENABLED=true
+PERFORMANCE_LOG_LEVEL=INFO
+PERFORMANCE_LOG_FILE=logs/sharepoint_indexing/pipeline_performance.log
+DETAILED_TIMING_ENABLED=true
+
+# Bottleneck analysis
+TRACK_API_RESPONSE_TIMES=true
+TRACK_MEMORY_USAGE=true
+TRACK_CHUNK_PROCESSING_TIME=true
+```
+
+#### **Analysis Tools Post-Logging**
+
+**Step 5: Log Analysis Scripts (1 hour)**
+- Parse performance logs to identify bottlenecks
+- Generate timing reports per processing stage
+- Create charts showing time distribution
+- Identify optimization opportunities
+
+**Expected Findings:**
+- Document Intelligence will likely be 70-80% of total time
+- Specific file size thresholds where performance degrades
+- Optimal batch sizes for embedding generation
+- Rate limiting patterns and mitigation strategies
+
+#### **Next Optimization Phases (After Logging)**
+
+**Phase 1: Quick Wins (Based on Log Analysis)**
+- Increase embedding batch sizes if rate limits allow
+- Implement streaming chunk processing
+- Optimize chunk filtering based on content analysis
+
+**Phase 2: Document Intelligence Optimization**
+- Implement parallel document splitting
+- Add document size-based processing strategies  
+- Implement smart retry logic for timeouts
+
+**Phase 3: Advanced Pipeline Optimizations**
+- Full streaming pipeline implementation
+- Predictive processing and caching
+- Multi-stage parallel processing
+
+### **Success Metrics After Logging Implementation**
+
+1. **Visibility**: Clear understanding of where time is spent
+2. **Baseline**: Accurate timing baselines for optimization comparison
+3. **Debugging**: Easy identification of failure points
+4. **Optimization Targets**: Data-driven priority for performance improvements
+
+This logging-first approach will provide the foundation for making informed optimization decisions rather than guessing where the bottlenecks are.ad-process)
 10. [Performance Optimizations](#performance-optimizations)
 11. [Error Handling & Monitoring](#error-handling--monitoring)
 

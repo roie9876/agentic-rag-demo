@@ -1,0 +1,7 @@
+# This directory contains performance logs for SharePoint indexing
+# Files in this directory:
+# - pipeline_performance.log: Main pipeline timing and bottleneck analysis
+# - document_intelligence.log: Document Intelligence API performance
+# - embedding_generation.log: Azure OpenAI embedding performance
+# - ai_search_upload.log: Azure AI Search upload performance
+# - error_analysis.log: Detailed error tracking and patterns
