@@ -21,7 +21,6 @@ def init_openai(model: str = "o3") -> Tuple[AzureOpenAI, dict]:
     endpoint = os.getenv(f"AZURE_OPENAI_ENDPOINT{suffix}")
     api_version = os.getenv(f"AZURE_OPENAI_API_VERSION{suffix}")
     deployment = os.getenv(f"AZURE_OPENAI_DEPLOYMENT{suffix}")
-    api_key = os.getenv(f"AZURE_OPENAI_KEY{suffix}", "").strip()
     
     # Check required variables
     if not endpoint:
@@ -31,24 +30,16 @@ def init_openai(model: str = "o3") -> Tuple[AzureOpenAI, dict]:
     if not deployment:
         raise ValueError(f"Missing required environment variable: AZURE_OPENAI_DEPLOYMENT{suffix}")
     
-    # Create client with API key or managed identity
-    if api_key:
-        # Use API key authentication
-        client = AzureOpenAI(
-            api_key=api_key,
-            azure_endpoint=endpoint.rstrip("/"),
-            api_version=api_version,
-        )
-    else:
-        # Use managed identity authentication
-        aad = get_bearer_token_provider(
-            DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
-        )
-        client = AzureOpenAI(
-            azure_endpoint=endpoint.rstrip("/"),
-            azure_ad_token_provider=aad,
-            api_version=api_version,
-        )
+    # Create client with managed identity authentication (preferred)
+    # Use managed identity authentication
+    aad = get_bearer_token_provider(
+        DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+    )
+    client = AzureOpenAI(
+        azure_endpoint=endpoint.rstrip("/"),
+        azure_ad_token_provider=aad,
+        api_version=api_version,
+    )
     
     chat_params = dict(
         model=deployment,
@@ -60,7 +51,7 @@ def init_openai(model: str = "o3") -> Tuple[AzureOpenAI, dict]:
 def init_search_client(index_name: str | None = None) -> Tuple[SearchClient, SearchIndexClient]:
     """
     Return (search_client, index_client).
-    Only API Key authentication is supported for agentic retrieval (see Azure docs).
+    Uses managed identity authentication (DefaultAzureCredential) for enhanced security.
     `index_name` – if provided, SearchClient will target that index,
     otherwise a dummy client pointing at the service root is returned.
     """
@@ -99,13 +90,13 @@ def init_search_client(index_name: str | None = None) -> Tuple[SearchClient, Sea
 def init_agent_client(agent_name: str) -> KnowledgeAgentRetrievalClient:
     """
     Create KnowledgeAgentRetrievalClient.
-    Only API Key authentication is supported for agentic retrieval (see Azure docs).
+    Uses managed identity authentication (DefaultAzureCredential) for enhanced security.
     """
     endpoint = os.getenv("AZURE_SEARCH_ENDPOINT")
     if not endpoint:
         raise ValueError("Missing required environment variable: AZURE_SEARCH_ENDPOINT")
         
-    cred = get_search_credential()   # Always AzureKeyCredential
+    cred = get_search_credential()   # Always DefaultAzureCredential (managed identity)
     return KnowledgeAgentRetrievalClient(
         endpoint=endpoint,
         agent_name=agent_name,

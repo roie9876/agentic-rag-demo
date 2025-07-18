@@ -6,18 +6,13 @@ import httpx
 import streamlit as st
 from pathlib import Path
 from azure.identity import DefaultAzureCredential
-from azure.core.credentials import AzureKeyCredential
 from dotenv import load_dotenv
 
 def get_search_credential():
     """
-    Return Azure credential based on env:
-    • If AZURE_SEARCH_KEY is set → key auth
-    • else → DefaultAzureCredential (AAD)
+    Return Azure credential using managed identity (DefaultAzureCredential)
+    for enhanced security and RBAC compliance.
     """
-    key = os.getenv("AZURE_SEARCH_KEY", "").strip()
-    if key:
-        return AzureKeyCredential(key)
     return DefaultAzureCredential()
 
 def rbac_enabled(service_url: str) -> bool:

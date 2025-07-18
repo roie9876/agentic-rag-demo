@@ -12,28 +12,18 @@ from azure.search.documents import SearchClient
 
 def get_search_headers() -> dict:
     """Get authentication headers for Azure Search API calls"""
-    search_api_key = os.getenv("AZURE_SEARCH_KEY") or os.getenv("SEARCH_API_KEY")
-    
-    if search_api_key:
-        return {"api-key": search_api_key, "Content-Type": "application/json"}
-    
-    # Try to get bearer token
+    # Use managed identity only
     try:
         token = DefaultAzureCredential().get_token("https://search.azure.com/.default").token
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     except Exception:
-        raise RuntimeError("No Search authentication available. Set AZURE_SEARCH_KEY or use managed identity.")
+        raise RuntimeError("No Search authentication available. Use managed identity.")
 
 def search_client_helper(index_name: str) -> SearchClient:
     """Create a SearchClient for document lookups"""
     search_endpoint = os.getenv("AZURE_SEARCH_ENDPOINT")
-    search_api_key = os.getenv("AZURE_SEARCH_KEY") or os.getenv("SEARCH_API_KEY")
-    
-    if search_api_key:
-        credential = AzureKeyCredential(search_api_key)
-    else:
-        credential = DefaultAzureCredential()
-        
+    # Use managed identity only
+    credential = DefaultAzureCredential()
     return SearchClient(endpoint=search_endpoint, index_name=index_name, credential=credential)
 
 def retrieve_with_direct_api(
@@ -433,16 +423,18 @@ def summarize_chunks_with_llm(chunks_text: str, user_question: str) -> str:
         
         # Get OpenAI configuration
         azure_openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT_41") or os.getenv("AZURE_OPENAI_ENDPOINT")
-        azure_openai_key = os.getenv("AZURE_OPENAI_KEY_41") or os.getenv("AZURE_OPENAI_KEY")
         azure_openai_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_41") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
         
-        if not all([azure_openai_endpoint, azure_openai_key, azure_openai_deployment]):
+        if not all([azure_openai_endpoint, azure_openai_deployment]):
             # No OpenAI config, return truncated chunks
             return chunks_text[:max_output_size]
             
-        # Create OpenAI client
+        # Create OpenAI client with managed identity
+        credential = DefaultAzureCredential()
+        token = credential.get_token("https://cognitiveservices.azure.com/.default")
+        
         client = AzureOpenAI(
-            api_key=azure_openai_key,
+            azure_ad_token_provider=lambda: token.token,
             azure_endpoint=azure_openai_endpoint,
             api_version="2024-02-15-preview"
         )
