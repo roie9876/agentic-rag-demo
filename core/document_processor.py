@@ -260,6 +260,57 @@ def chunk_to_docs(
     docs = []
     label = f"[{file_name}] "                 # ← prefix for DocumentChunker path
     
+    # TOKEN-AWARE CHUNKING FIX: Split large chunks before processing
+    processed_chunks = []
+    for chunk in chunks:
+        content = chunk.get("content", "")
+        if content:
+            # Check if content exceeds token limits
+            try:
+                import tiktoken
+                encoding = tiktoken.encoding_for_model("text-embedding-3-large")
+                content_tokens = len(encoding.encode(content))
+                
+                if content_tokens > 6000:  # Safety margin for 8192 limit
+                    logging.info(f"[chunk_to_docs][{file_name}] Large chunk detected: {content_tokens:,} tokens, splitting...")
+                    
+                    # Split large content
+                    split_contents = _split_large_content_token_aware(content, max_tokens=6000)
+                    
+                    for i, split_content in enumerate(split_contents):
+                        # Create a new chunk for each split
+                        new_chunk = chunk.copy()
+                        new_chunk["content"] = split_content
+                        new_chunk["id"] = f"{chunk.get('id', 'chunk')}_{i}"
+                        processed_chunks.append(new_chunk)
+                    
+                    logging.info(f"[chunk_to_docs][{file_name}] Split into {len(split_contents)} chunks")
+                else:
+                    processed_chunks.append(chunk)
+            except ImportError:
+                # tiktoken not available, use character-based fallback
+                if len(content) > 7000:  # Character-based approximation
+                    logging.info(f"[chunk_to_docs][{file_name}] Large chunk detected: {len(content):,} chars, splitting...")
+                    
+                    split_contents = _split_large_content_fallback(content, max_size=7000)
+                    
+                    for i, split_content in enumerate(split_contents):
+                        new_chunk = chunk.copy()
+                        new_chunk["content"] = split_content
+                        new_chunk["id"] = f"{chunk.get('id', 'chunk')}_{i}"
+                        processed_chunks.append(new_chunk)
+                    
+                    logging.info(f"[chunk_to_docs][{file_name}] Split into {len(split_contents)} chunks")
+                else:
+                    processed_chunks.append(chunk)
+        else:
+            processed_chunks.append(chunk)
+    
+    logging.info(f"[chunk_to_docs][{file_name}] Post-processed {len(chunks)} chunks into {len(processed_chunks)} chunks")
+    
+    # Use processed chunks instead of original chunks
+    chunks = processed_chunks
+    
     # Determine extraction method based on DocumentChunker's chunker selection
     extraction_method = {
         '.vtt': 'transcription_chunker',
@@ -429,3 +480,156 @@ def tabular_to_docs(
             }
         )
     return docs
+
+def _split_large_content_token_aware(content: str, max_tokens: int = 6000) -> List[str]:
+    """
+    Split large content into smaller chunks based on actual token count.
+    
+    Args:
+        content: Text content to split
+        max_tokens: Maximum tokens per chunk (default: 6000, safety margin for 8192 limit)
+        
+    Returns:
+        List of content chunks that respect token limits
+    """
+    import tiktoken
+    encoding = tiktoken.encoding_for_model("text-embedding-3-large")
+    
+    # Check if content is already within token limits
+    total_tokens = len(encoding.encode(content))
+    if total_tokens <= max_tokens:
+        return [content]
+    
+    chunks = []
+    overlap_tokens = 150  # Token-based overlap for continuity
+    
+    start_pos = 0
+    while start_pos < len(content):
+        # Estimate end position based on token density
+        avg_chars_per_token = len(content) / total_tokens if total_tokens > 0 else 4
+        estimated_end = start_pos + int(max_tokens * avg_chars_per_token)
+        estimated_end = min(estimated_end, len(content))
+        
+        # Find the best boundary within token limits
+        best_end = _find_best_boundary_simple(
+            content, start_pos, estimated_end, encoding, max_tokens
+        )
+        
+        if best_end <= start_pos:
+            # Fallback: force split at max tokens to avoid infinite loop
+            chunk_text = content[start_pos:]
+            tokens = encoding.encode(chunk_text)
+            if len(tokens) > max_tokens:
+                # Hard split at token boundary
+                chunk_tokens = tokens[:max_tokens]
+                chunk_text = encoding.decode(chunk_tokens)
+                best_end = start_pos + len(chunk_text)
+            else:
+                best_end = len(content)
+        
+        chunk = content[start_pos:best_end]
+        chunks.append(chunk)
+        
+        if best_end >= len(content):
+            break
+        
+        # Calculate overlap in tokens
+        overlap_chars = int(overlap_tokens * avg_chars_per_token)
+        start_pos = max(start_pos + 1, best_end - overlap_chars)
+    
+    return chunks
+
+def _find_best_boundary_simple(
+    content: str, 
+    start_pos: int, 
+    estimated_end: int, 
+    encoding, 
+    max_tokens: int
+) -> int:
+    """
+    Find the best boundary for splitting content within token limits.
+    
+    This is a simplified version that looks for sentence boundaries.
+    """
+    # Start with the estimated end position
+    test_end = estimated_end
+    
+    # Try to find a sentence boundary within a reasonable range
+    search_range = min(500, (estimated_end - start_pos) // 4)
+    
+    for offset in range(search_range):
+        # Look backwards from estimated end for sentence boundaries
+        test_pos = estimated_end - offset
+        if test_pos <= start_pos:
+            break
+            
+        # Check if this position is a sentence boundary
+        if test_pos < len(content) and content[test_pos] in '.!?':
+            # Found a sentence boundary, check if it's within token limits
+            chunk_text = content[start_pos:test_pos + 1]
+            tokens = len(encoding.encode(chunk_text))
+            
+            if tokens <= max_tokens:
+                return test_pos + 1
+    
+    # If no sentence boundary found, use binary search for exact token limit
+    left, right = start_pos, estimated_end
+    best_end = start_pos
+    
+    while left <= right:
+        mid = (left + right) // 2
+        chunk_text = content[start_pos:mid]
+        tokens = len(encoding.encode(chunk_text))
+        
+        if tokens <= max_tokens:
+            best_end = mid
+            left = mid + 1
+        else:
+            right = mid - 1
+    
+    return best_end
+
+def _split_large_content_fallback(content: str, max_size: int = 7000) -> List[str]:
+    """
+    Fallback character-based splitting when tiktoken is not available.
+    
+    Args:
+        content: Text content to split
+        max_size: Maximum characters per chunk
+        
+    Returns:
+        List of content chunks
+    """
+    if len(content) <= max_size:
+        return [content]
+    
+    chunks = []
+    overlap = 200  # Small overlap for continuity
+    
+    start = 0
+    while start < len(content):
+        end = min(start + max_size, len(content))
+        
+        # Try to break at sentence boundaries to maintain readability
+        if end < len(content):
+            # Look for sentence endings within the last 500 characters
+            search_start = max(end - 500, start)
+            sentence_end = -1
+            
+            for i in range(end - 1, search_start - 1, -1):
+                if content[i] in '.!?':
+                    sentence_end = i + 1
+                    break
+            
+            if sentence_end > search_start:
+                end = sentence_end
+        
+        chunk = content[start:end]
+        chunks.append(chunk)
+        
+        if end >= len(content):
+            break
+            
+        start = end - overlap
+    
+    return chunks

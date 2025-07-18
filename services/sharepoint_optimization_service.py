@@ -128,12 +128,9 @@ class SharePointOptimizationService:
         """Process files using Phase 1 optimizations."""
         self.logger.info(f"🚀 Processing {len(selected_files)} files with Phase 1 optimizations")
         
-        # Extract file paths from SharePoint metadata
-        file_paths = self._extract_file_paths(selected_files)
-        
-        # Process with optimized processor
-        optimization_results = self.optimized_processor.process_documents_batch(
-            file_paths=file_paths,
+        # Process with optimized processor using full file data
+        optimization_results = self.optimized_processor.process_sharepoint_files_batch(
+            files=selected_files,
             index_name=index_name
         )
         
@@ -217,8 +214,10 @@ class SharePointOptimizationService:
         
         for file_info in selected_files:
             # Extract file path from SharePoint metadata
-            # This depends on the structure of the SharePoint file metadata
-            file_path = file_info.get("ServerRelativeUrl") or file_info.get("file_path")
+            # SharePoint files use 'webUrl' as the main URL field
+            file_path = (file_info.get("webUrl") or 
+                        file_info.get("ServerRelativeUrl") or 
+                        file_info.get("file_path"))
             
             if file_path:
                 file_paths.append(file_path)
