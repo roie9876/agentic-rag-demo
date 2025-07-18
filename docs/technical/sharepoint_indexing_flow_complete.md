@@ -547,5 +547,32 @@ The SharePoint manual indexing flow provides a robust, scalable solution with:
 - **Comprehensive error handling** and monitoring
 - **User control** over processing parameters
 - **Azure-native integration** across all services
+- **Managed Identity support** for secure Azure service authentication
 
 The system processes documents through a sophisticated pipeline that balances performance, accuracy, and resource efficiency while providing detailed feedback and control to users.
+
+---
+
+## Managed Identity Configuration Notes
+
+### **Azure Services Supporting Managed Identity**
+- ✅ **Azure OpenAI**: Fully supported via `AzureOpenAIClient` wrapper
+- ✅ **Azure AI Search**: Fully supported via `AISearchClient` 
+- ✅ **Azure Key Vault**: Fully supported via `KeyVaultClient`
+- ✅ **Azure Document Intelligence**: Fully supported via `DocumentIntelligenceClientWrapper`
+
+### **SharePoint Authentication**
+- **Note**: SharePoint Graph API requires Service Principal authentication (client_id + client_secret)
+- **Reason**: SharePoint doesn't support managed identity for Graph API access
+- **Configuration**: Uses Azure Key Vault to securely store SharePoint client secrets
+
+### **Troubleshooting Authentication Issues**
+If you encounter "Missing credentials" errors:
+
+1. **Check VM Managed Identity**: Ensure the Linux VM has managed identity enabled
+2. **Verify Permissions**: Managed identity needs appropriate roles:
+   - `Cognitive Services OpenAI User` (Azure OpenAI)
+   - `Search Index Data Contributor` (Azure AI Search)
+   - `Key Vault Secrets User` (Azure Key Vault)
+3. **SharePoint Credentials**: Verify SharePoint client secret is stored in Key Vault
+4. **Code Updates**: Ensure all OpenAI clients use `AzureOpenAIClient` wrapper (not direct `AzureOpenAI` initialization)

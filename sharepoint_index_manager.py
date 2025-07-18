@@ -561,12 +561,9 @@ class SharePointIndexManager:
             # Create OpenAI client if not available
             if oai_client is None:
                 try:
-                    from openai import AzureOpenAI
-                    oai_client = AzureOpenAI(
-                        api_key=os.getenv("AZURE_OPENAI_KEY"),
-                        api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01"),
-                        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT")
-                    )
+                    from tools.aoai import AzureOpenAIClient
+                    aoai_wrapper = AzureOpenAIClient(document_filename="sharepoint_indexer")
+                    oai_client = aoai_wrapper.client
                 except Exception as e:
                     logging.error(f"[index_files] Failed to create OpenAI client: {e}")
                     return "Failed to create OpenAI client"
@@ -850,13 +847,9 @@ class SharePointIndexManager:
             # Create OpenAI client if not available
             if oai_client is None:
                 try:
-                    from openai import AzureOpenAI
-                    
-                    oai_client = AzureOpenAI(
-                        api_key=os.getenv("AZURE_OPENAI_KEY"),
-                        api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01"),
-                        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT")
-                    )
+                    from tools.aoai import AzureOpenAIClient
+                    aoai_wrapper = AzureOpenAIClient(document_filename="sharepoint_indexer")
+                    oai_client = aoai_wrapper.client
                 except Exception as e:
                     logging.error(f"[index_files] Failed to create OpenAI client: {e}")
                     return "Failed to create OpenAI client"
