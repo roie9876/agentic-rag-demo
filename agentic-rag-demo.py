@@ -45,6 +45,9 @@ from tools.aoai import AzureOpenAIClient
 # Import the test_retrieval module
 from test_retrieval import render_test_retrieval_tab
 
+# Enhanced document processing
+from services.optimized_document_processor import OptimizedDocumentProcessor, OptimizationConfig
+
 # Studio2Foundry module will be imported dynamically in the tab
 from app.ui.sharepoint_reports_tab import render_sharepoint_reports_tab, render_sharepoint_purge_section
 
@@ -1014,11 +1017,29 @@ def run_streamlit_ui() -> None:
                     st.dataframe(config_df, use_container_width=True, hide_index=True)
         
         st.divider()
-        st.subheader("📄 Upload PDFs into Selected Index")
+        st.subheader("📄 Enhanced Document Upload with SharePoint-Level Processing")
         st.markdown(
-            "פורמטים נתמכים בהעלאה ישירה: **PDF, DOCX, PPTX, XLSX/CSV, TXT, MD, JSON**  \n"
-            "_קבצים אחרים יידחו אוטומטית או יועלו כ‑binary ללא חיפוש סמנטי._"
+            "**🚀 Advanced Processing**: Smart Page-Aware Chunking, Accurate Page Detection, Large File Optimization  \n"
+            "**📁 Supported Formats**: PDF, DOCX, PPTX, XLSX/CSV, TXT, MD, JSON, RTX, XML  \n"
+            "_Now with the same sophisticated processing as SharePoint indexing!_"
         )
+        
+        # Enhanced capabilities banner
+        with st.expander("✨ Enhanced Processing Capabilities", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("#### 🧠 Smart Processing")
+                st.markdown("✅ **Smart Page-Aware Chunking** - Respects document structure")
+                st.markdown("✅ **Accurate Page Detection** - Real page numbers from Document Intelligence")
+                st.markdown("✅ **Large File Optimization** - Adaptive chunking for better performance")
+                st.markdown("✅ **Token Limit Management** - Intelligent splitting for embedding limits")
+            
+            with col2:
+                st.markdown("#### 📊 Quality Assurance")
+                st.markdown("✅ **Document Completeness Verification** - Ensures no content is lost")
+                st.markdown("✅ **Performance Monitoring** - Track processing stages")
+                st.markdown("✅ **Advanced Error Handling** - Comprehensive fallback strategies")
+                st.markdown("✅ **Metadata Preservation** - Rich chunk metadata for better search")
         
         # Processing Information Section
         with st.expander("ℹ️ Document Processing Information", expanded=False):
@@ -1070,23 +1091,67 @@ def run_streamlit_ui() -> None:
                 type=["pdf", "docx", "pptx", "xlsx", "csv", "txt", "md", "json", "rtx", "xml"],
                 accept_multiple_files=True
             )
-            if uploaded and st.button("🚀 Ingest"):
-                # Display processing overview
-                st.markdown("### 🔄 Processing Overview")
-                for pf in uploaded:
-                    ext = os.path.splitext(pf.name)[-1].lower()
-                    display_processing_info(pf.name, ext, show_capabilities=False)
-                    st.markdown("---")
+            if uploaded and st.button("🚀 Enhanced Processing & Ingest"):
+                # Display processing overview with enhanced capabilities
+                st.markdown("### 🔄 Enhanced Processing Overview")
                 
-                with st.spinner("Embedding and uploading…"):
+                # Create progress tracking
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                # Initialize enhanced document processor
+                optimization_config = OptimizationConfig(
+                    max_parallel_files=2,  # Conservative for direct upload
+                    optimal_chunk_size=3000,  # Smart chunking target
+                    enable_adaptive_chunking=True,
+                    memory_threshold_mb=512
+                )
+                
+                enhanced_processor = OptimizedDocumentProcessor(config=optimization_config)
+                
+                # Create enhanced processing summary
+                processing_summary = {
+                    "total_files": len(uploaded),
+                    "processing_method": "enhanced_sharepoint_level",
+                    "features": [
+                        "Smart Page-Aware Chunking",
+                        "Accurate Page Detection", 
+                        "Large File Optimization",
+                        "Token Limit Management"
+                    ]
+                }
+                
+                # Display processing info for each file
+                with st.expander("📋 Files to Process", expanded=True):
+                    for i, pf in enumerate(uploaded):
+                        ext = os.path.splitext(pf.name)[-1].lower()
+                        file_size = len(bytes(pf.getbuffer()))
+                        
+                        col1, col2, col3 = st.columns([2, 1, 2])
+                        with col1:
+                            st.write(f"**{pf.name}**")
+                        with col2:
+                            st.write(f"{file_size:,} bytes")
+                        with col3:
+                            if ext in ['.docx', '.pptx', '.pdf']:
+                                st.write("🧠 Smart Processing + Document Intelligence")
+                            elif ext in ['.xlsx', '.csv']:
+                                st.write("📊 Tabular Processing")
+                            else:
+                                st.write("📝 Text Processing")
+                
+                status_text.text("🚀 Initializing enhanced processing pipeline...")
+                
+                with st.spinner("🔄 Processing with SharePoint-level capabilities..."):
                     ###############################################
-                    # Build buffered sender with error‑tracking
+                    # Enhanced Processing Pipeline
                     ###############################################
+                    
+                    # Build buffered sender with error tracking
                     failed_ids: list[str] = []
 
                     def _on_error(action) -> None:
                         try:
-                            # IndexAction object doesn't have .get() method, need to access attributes
                             if hasattr(action, 'id'):
                                 failed_ids.append(action.id)
                             elif hasattr(action, 'document') and hasattr(action.document, 'get'):
@@ -1094,7 +1159,7 @@ def run_streamlit_ui() -> None:
                             else:
                                 failed_ids.append("?")
                         except Exception as exc:
-                            logging.error("⚠️  on_error callback failed to record ID: %s", exc)
+                            logging.error("⚠️ Enhanced processing on_error callback failed: %s", exc)
                             failed_ids.append("?")
 
                     sender = SearchIndexingBufferedSender(
@@ -1106,233 +1171,192 @@ def run_streamlit_ui() -> None:
                         on_error=_on_error,
                     )
 
-                    embed_deploy = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
+                    # Enhanced processing results tracking
                     total_pages = 0
+                    total_chunks = 0
                     processed_files = []
                     skipped_files = []
+                    processing_metrics = {
+                        "enhanced_features_used": [],
+                        "chunk_quality_metrics": {},
+                        "page_detection_results": {}
+                    }
                     
-                    for pf in uploaded:
+                    # Process files with enhanced pipeline
+                    for i, pf in enumerate(uploaded):
+                        progress = (i + 1) / len(uploaded)
+                        progress_bar.progress(progress)
+                        status_text.text(f"📄 Processing {pf.name} ({i+1}/{len(uploaded)}) with enhanced features...")
+                        
                         ext = os.path.splitext(pf.name)[-1].lower()
-                        docs = []
-
-                        # --- Use DocumentChunker for ALL files including PDFs for multimodal support ---
-                        error_message = None
+                        file_size = len(bytes(pf.getbuffer()))
                         
-                        # DEBUG: Check file size at the very beginning
-                        original_file_size = len(bytes(pf.getbuffer()))
-                        logging.info(f"[Streamlit Upload][{pf.name}] ORIGINAL FILE SIZE: {original_file_size:,} bytes")
-                        
-                        # Also check the Streamlit file object properties
-                        logging.info(f"[Streamlit Upload][{pf.name}] File object type: {type(pf)}")
-                        logging.info(f"[Streamlit Upload][{pf.name}] File object size property: {getattr(pf, 'size', 'N/A')}")
+                        # Create file data structure for enhanced processor
+                        file_data = {
+                            'name': pf.name,
+                            'content': bytes(pf.getbuffer()),
+                            'webUrl': f"direct-upload://{pf.name}",
+                            'size': file_size
+                        }
                         
                         try:
-                            docs = _chunk_to_docs(
-                                pf.name,
-                                bytes(pf.getbuffer()),
-                                "",          # no public URL for local upload
-                                oai_client,
-                                embed_deploy,
+                            # Use enhanced processor (same as SharePoint)
+                            result = enhanced_processor._process_sharepoint_file_optimized(
+                                file_data=file_data,
+                                index_name=st.session_state.selected_index
                             )
                             
-                            # Check if file was processed successfully
-                            if not docs:
-                                # Check if the original chunker returned any useful error information
-                                multimodal_enabled = os.getenv("MULTIMODAL", "false").lower() in ["true", "1", "yes"] and ext in ('.pdf', '.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.docx', '.pptx')
-                                dc = DocumentChunker(multimodal=multimodal_enabled, openai_client=oai_client if multimodal_enabled else None)
-                                data = {
-                                    "fileName": pf.name,
-                                    "documentBytes": base64.b64encode(bytes(pf.getbuffer())).decode("utf-8"),
-                                    "documentUrl": "",
-                                }
-                                chunks, errors, warnings = dc.chunk_documents(data)
+                            if result["success"]:
+                                # Track successful processing
+                                processed_files.append({
+                                    "name": pf.name,
+                                    "size": file_size,
+                                    "chunks_created": result["chunks_created"],
+                                    "processing_time": result["processing_time"],
+                                    "optimizations": result["optimizations_applied"]
+                                })
                                 
-                                if errors:
-                                    error_message = f"Processing failed: {errors[0] if errors else 'Unknown error'}"
-                                else:
-                                    error_message = "No content could be extracted from this file"
-                                    
-                        except Exception as docerr:
-                            error_message = str(docerr)
-                            logging.error("DocumentChunker failed for %s: %s", pf.name, docerr)
-                            
-                            # Try fallback for PDFs only
-                            if ext == ".pdf":
-                                try:
-                                    docs = pdf_to_documents(pf, oai_client, embed_deploy)
-                                    error_message = None  # Clear error if fallback succeeded
-                                    logging.info("Fallback to simple PDF processing for %s", pf.name)
-                                except Exception as pdf_err:
-                                    logging.error("PDF fallback also failed for %s: %s", pf.name, pdf_err)
-                                    error_message = f"PDF processing failed: {str(docerr)[:200]}... (Fallback also failed: {str(pdf_err)[:100]}...)"
+                                total_chunks += result["chunks_created"]
+                                processing_metrics["enhanced_features_used"].extend(result["optimizations_applied"])
+                                
+                                # Display success
+                                st.success(f"✅ **{pf.name}**: {result['chunks_created']} chunks created with enhanced features")
+                                
                             else:
-                                # For non-PDF files, keep the original error
-                                error_message = f"Failed to process {ext} file: {str(docerr)[:300]}..."
-                        
-                        # Handle errors - show in UI and track for summary
-                        if error_message or not docs:
-                            # Enhanced error message based on common issues
-                            file_size = len(bytes(pf.getbuffer()))
-                            enhanced_error = error_message or "Unknown processing error"
-                            
-                            # Provide specific guidance for common issues
-                            guidance = ""
-                            if file_size < 1000:
-                                guidance = """
-                                **This file is very small ({} bytes) which suggests it may be:**
-                                - Corrupted or incomplete
-                                - An empty file
-                                - A file that failed to upload properly
+                                # Handle processing failure
+                                error_msg = result.get("error", "Unknown processing error")
                                 
-                                **Try:**
-                                - Re-downloading the original file
-                                - Checking if it opens properly in its native application
-                                - Using a different version of the file
-                                """.format(file_size)
-                            elif "Document Intelligence" in enhanced_error and "UnsupportedContent" in enhanced_error:
-                                guidance = """
-                                **Document Intelligence couldn't process this file because:**
-                                - The file may be corrupted or have invalid internal structure
-                                - It might be password-protected
-                                - The format may not be fully compatible
-
-                                **Try:**
-                                - Opening and re-saving the file in its native application
-                                - Converting to a different format (e.g., PDF → DOCX)
-                                - Ensuring the file isn't password-protected
-                                """
-                            elif ext == ".pdf":
-                                guidance = """
-                                **PDF processing failed. Common causes:**
-                                - Corrupted PDF file
-                                - Password-protected PDF
-                                - Non-standard PDF encoding
-                                - Scanned PDF without OCR text layer
+                                # Enhanced error handling with guidance
+                                guidance = ""
+                                if file_size < 1000:
+                                    guidance = "This file is very small - it may be corrupted or empty."
+                                elif "Document Intelligence" in error_msg:
+                                    guidance = "Document Intelligence couldn't process this file. Try re-saving or converting to a different format."
+                                elif ext == ".pdf":
+                                    guidance = "PDF processing failed. Ensure the PDF is not password-protected or corrupted."
                                 
-                                **Try:**
-                                - Re-saving the PDF from its source application
-                                - Using a PDF repair tool
-                                - Converting to Word format first
-                                """
-                            
-                            st.error(f"""
-                            **❌ Processing Failed: {pf.name}**
-                            
-                            {enhanced_error}
-                            
-                            **File details:**
-                            - Size: {file_size} bytes  
-                            - Type: {ext}
-                            
-                            {guidance}
-                            
-                            **What you can try:**
-                            - Check if the file opens correctly in its native application
-                            - Try re-saving or converting the file to a different format
-                            - For PDFs: ensure they're not password-protected
-                            - For images: ensure they're in a standard format
-                            """)
+                                st.error(f"""
+                                **❌ Enhanced Processing Failed: {pf.name}**
+                                
+                                {error_msg}
+                                
+                                **File details:**
+                                - Size: {file_size:,} bytes  
+                                - Type: {ext}
+                                
+                                **Guidance:** {guidance}
+                                """)
+                                
+                                skipped_files.append({
+                                    "name": pf.name,
+                                    "size": file_size,
+                                    "reason": error_msg
+                                })
+                                
+                        except Exception as e:
+                            logging.error(f"Enhanced processing failed for {pf.name}: {str(e)}")
+                            st.error(f"❌ **{pf.name}**: Enhanced processing error - {str(e)}")
                             
                             skipped_files.append({
                                 "name": pf.name,
-                                "size": len(bytes(pf.getbuffer())),
-                                "reason": error_message or "Processing failed"
+                                "size": file_size,
+                                "reason": f"Processing exception: {str(e)}"
                             })
-                            continue
-
-                        if not docs:
-                            skipped_files.append({
-                                "name": pf.name,
-                                "size": len(bytes(pf.getbuffer())),
-                                "reason": "Corrupted or unsupported file"
-                            })
-                            continue
-                            
-                        # Show processing information to user
-                        processing_info = []
-                        for doc in docs[:1]:  # Check first document for processing info
-                            method = doc.get("extraction_method", "unknown")
-                            doc_type = doc.get("document_type", "Unknown")
-                            has_figs = doc.get("has_figures", False)
-                            
-                            if method == "document_intelligence":
-                                processing_info.append(f"📄 **{pf.name}** ({doc_type})")
-                                processing_info.append("🔍 **Processing Tool:** Azure Document Intelligence")
-                                processing_info.append("✨ **Capabilities:** Advanced layout analysis, OCR, table extraction")
-                                if has_figs:
-                                    processing_info.append("🖼️ **Figures:** Detected and processed with multimodal AI")
-                            elif method == "simple_parser":
-                                processing_info.append(f"📄 **{pf.name}** ({doc_type})")
-                                processing_info.append("🔧 **Processing Tool:** Simple text parser")
-                                processing_info.append("📝 **Capabilities:** Basic text extraction")
-                            elif method == "pandas_parser":
-                                processing_info.append(f"📊 **{pf.name}** ({doc_type})")
-                                processing_info.append("🐼 **Processing Tool:** Pandas data parser")
-                                processing_info.append("📈 **Capabilities:** Structured data extraction")
-                            elif method == "langchain_chunker":
-                                processing_info.append(f"📄 **{pf.name}** ({doc_type})")
-                                processing_info.append("🔗 **Processing Tool:** LangChain document loader")
-                                processing_info.append("⚡ **Capabilities:** Smart text chunking")
-                                # Check if this was a fallback from multimodal/Document Intelligence
-                                if ext in ('.pdf', '.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.docx', '.pptx'):
-                                    processing_info.append("⚠️ **Note:** Fell back to basic text extraction (Document Intelligence unavailable or file unsupported)")
-                            else:
-                                # Unknown method - show basic info
-                                processing_info.append(f"📄 **{pf.name}** ({doc_type})")
-                                processing_info.append(f"🔧 **Processing Tool:** {method}")
-                        
-                        # Add multimodal status info
-                        multimodal_docs = [doc for doc in docs if doc.get("isMultimodal", False)]
-                        if multimodal_docs:
-                            processing_info.append(f"🎨 **Multimodal Content:** {len(multimodal_docs)} chunks contain images/figures")
-                        elif ext in ('.pdf', '.png', '.jpeg', '.jpg', '.bmp', '.tiff') and os.getenv("MULTIMODAL", "false").lower() in ["true", "1", "yes"]:
-                            processing_info.append("ℹ️ **Multimodal Status:** No images detected or multimodal processing failed")
-                        
-                        if processing_info:
-                            with st.expander(f"ℹ️ Processing Details for {pf.name}", expanded=False):
-                                for info in processing_info:
-                                    st.markdown(info)
-                                st.markdown(f"📊 **Chunks Created:** {len(docs)}")
-                        
-                        sender.upload_documents(documents=docs)
-                        total_pages += len(docs)
-                        processed_files.append({
-                            "name": pf.name,
-                            "chunks": len(docs),
-                            "method": docs[0].get("extraction_method", "unknown") if docs else "unknown"
-                        })
-
-                    sender.close()
-
-                    try:
-                        search_client, _ = init_search_client(st.session_state.selected_index)
-                        for _ in range(30):
-                            if search_client.get_document_count() > 0:
-                                break
-                            time.sleep(1)
-                    except Exception as probe_err:
-                        logging.warning("Search probe failed: %s", probe_err)
-
-                    success_pages = total_pages - len(failed_ids)
-                    if failed_ids:
-                        st.error(f"❌ {len(failed_ids)} pages failed to index – see logs for details.")
-                    if success_pages:
-                        st.success(f"✅ Indexed {success_pages} pages into **{st.session_state.selected_index}**.")
                     
-                    # Show processing summary
-                    if processed_files or skipped_files:
-                        st.markdown("### 📊 Processing Summary")
+                    # Finalize upload
+                    status_text.text("📤 Finalizing upload to Azure Search...")
+                    sender.close()
+                    
+                    # Enhanced processing summary
+                    progress_bar.progress(1.0)
+                    status_text.text("✅ Enhanced processing complete!")
+                    
+                    # Display comprehensive results
+                    st.markdown("### 📊 Enhanced Processing Results")
+                    
+                    # Success metrics
+                    if processed_files:
+                        success_col1, success_col2, success_col3 = st.columns(3)
                         
-                        if processed_files:
-                            st.markdown(f"**✅ Successfully Processed ({len(processed_files)} files):**")
-                            for file_info in processed_files:
-                                st.markdown(f"   • {file_info['name']} - {file_info['chunks']} chunks ({file_info['method']})")
+                        with success_col1:
+                            st.metric(
+                                "Files Processed Successfully", 
+                                len(processed_files),
+                                delta=f"+{len(processed_files)} with enhanced features"
+                            )
                         
-                        if skipped_files:
-                            st.markdown(f"**⚠️ Skipped Files ({len(skipped_files)} files):**")
-                            for file_info in skipped_files:
-                                st.markdown(f"   • {file_info['name']} ({file_info['size']} bytes) - {file_info['reason']}")
-                            st.info("💡 **Tip:** Skipped files are usually corrupted, too small, or in an unsupported format.")
+                        with success_col2:
+                            st.metric(
+                                "Total Chunks Created",
+                                total_chunks,
+                                delta="Smart page-aware chunking"
+                            )
+                        
+                        with success_col3:
+                            avg_chunks = total_chunks / len(processed_files) if processed_files else 0
+                            st.metric(
+                                "Average Chunks per File",
+                                f"{avg_chunks:.1f}",
+                                delta="Optimized sizing"
+                            )
+                        
+                        # Enhanced features summary
+                        with st.expander("🚀 Enhanced Features Applied", expanded=False):
+                            unique_features = list(set(processing_metrics["enhanced_features_used"]))
+                            for feature in unique_features:
+                                st.write(f"✅ **{feature.replace('_', ' ').title()}**")
+                        
+                        # Detailed file results
+                        with st.expander("📋 Detailed Processing Results", expanded=False):
+                            results_df = pd.DataFrame([
+                                {
+                                    "File": pf["name"],
+                                    "Size (bytes)": f"{pf['size']:,}",
+                                    "Chunks": pf["chunks_created"],
+                                    "Processing Time": f"{pf['processing_time']:.2f}s",
+                                    "Enhancements": ", ".join(pf["optimizations"])
+                                }
+                                for pf in processed_files
+                            ])
+                            st.dataframe(results_df, use_container_width=True, hide_index=True)
+                    
+                    # Error summary
+                    if failed_ids:
+                        st.warning(f"⚠️ {len(failed_ids)} chunks failed to upload to Azure Search")
+                    
+                    if skipped_files:
+                        with st.expander("❌ Skipped Files", expanded=False):
+                            skipped_df = pd.DataFrame([
+                                {
+                                    "File": sf["name"],
+                                    "Size (bytes)": f"{sf['size']:,}",
+                                    "Reason": sf["reason"][:100] + "..." if len(sf["reason"]) > 100 else sf["reason"]
+                                }
+                                for sf in skipped_files
+                            ])
+                            st.dataframe(skipped_df, use_container_width=True, hide_index=True)
+                    
+                    # Success message
+                    if processed_files:
+                        st.success(f"""
+                        🎉 **Enhanced Processing Complete!**
+                        
+                        ✅ Successfully processed **{len(processed_files)} files** with SharePoint-level capabilities:
+                        - Smart Page-Aware Chunking
+                        - Accurate Page Detection
+                        - Large File Optimization
+                        - Token Limit Management
+                        
+                        📊 **Total chunks created**: {total_chunks} (optimized for search quality)
+                        🔍 **Index**: {st.session_state.selected_index}
+                        """)
+                    
+                    else:
+                        st.error("❌ No files were processed successfully. Please check the error messages above and try again.")
+                        
+                # Cleanup
+                progress_bar.empty()
+                status_text.empty()
 
     # ─────────────────── Tab 4 – SharePoint Index ────────────────────────
     with tab_sharepoint:

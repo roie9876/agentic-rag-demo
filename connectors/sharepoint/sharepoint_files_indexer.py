@@ -540,7 +540,7 @@ class SharepointFilesIndexer:
                 processed_chunk = {
                     "id": ch.get("id") or f"{sharepoint_id}_{i}",
                     "page_chunk": content,
-                    "page_number": ch.get("page_number") or i + 1,
+                    "page_number": ch.get("page_number") or ch.get("page") or i + 1,
                     "source_file": file_name,
                     "source": file_name,
                     "url": document_url,
@@ -589,7 +589,9 @@ class SharepointFilesIndexer:
                     )
                     # guarantee minimal required fields
                     ch.setdefault("id", f"{sharepoint_id}_{i}")
-                    ch.setdefault("page_number", i + 1)
+                    # Only set page_number if not already set by chunker (check both page_number and page fields)
+                    if not ch.get("page_number") and not ch.get("page"):
+                        ch.setdefault("page_number", i + 1)
                     ch.setdefault("source_file", file_name)
                     ch.setdefault("page_embedding_text_3_large", [])
 

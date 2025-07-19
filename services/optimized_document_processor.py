@@ -799,7 +799,7 @@ class OptimizedDocumentProcessor:
                                     "page_embedding_text_3_large": vector,
                                     "content": content,
                                     "contentVector": vector,
-                                    "page_number": chunk.get("page_number", i + 1),
+                                    "page_number": chunk.get("page_number") or chunk.get("page") or i + 1,
                                     "source_file": fname,
                                     "source": fname,
                                     "url": file_url,
