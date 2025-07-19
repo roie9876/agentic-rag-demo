@@ -451,33 +451,97 @@ class MultimodalProcessor:
             raise  # Re-raise original exception if all fallbacks fail
     
     def _process_extraction_result(self, result, filename):
-        """Process the extraction result to identify text segments and images."""
+        """
+        FIXED: Process Document Intelligence result with accurate page detection.
+        
+        This replaces the flawed estimation logic with proper page boundary detection.
+        """
         processed_content = {
             "text_segments": [],
             "images": []
         }
         
-        # Process text content from our Document Intelligence client format
-        # The result format from our client has 'content' and 'pages' keys
+        logging.info(f"[{filename}] Processing extraction result with improved page detection")
         
-        # Extract full content and split into segments
-        content = result.get('content', '')
-        pages = result.get('pages', [])
+        # IMPROVED PAGE DETECTION LOGIC
+        text_segments = []
         
-        if content:
-            # Split content into meaningful segments (paragraphs)
-            paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
+        # Method 1: Use paragraphs with bounding regions (most accurate for DOCX)
+        if "paragraphs" in result and result["paragraphs"]:
+            logging.info(f"[{filename}] Using paragraphs with bounding regions for accurate page detection")
             
-            # Estimate page numbers for paragraphs (simple heuristic)
-            total_pages = len(pages) if pages else 1
-            paragraphs_per_page = max(1, len(paragraphs) // total_pages)
-            
-            for i, paragraph in enumerate(paragraphs):
-                estimated_page = min(total_pages, (i // paragraphs_per_page) + 1)
-                processed_content["text_segments"].append({
-                    "content": paragraph,
-                    "page_number": estimated_page
+            for i, paragraph in enumerate(result["paragraphs"]):
+                content = paragraph.get("content", "").strip()
+                if not content:
+                    continue
+                    
+                # Extract ACTUAL page numbers from bounding regions
+                page_numbers = []
+                for region in paragraph.get("boundingRegions", []):
+                    if "pageNumber" in region:
+                        page_numbers.append(region["pageNumber"])
+                
+                # Use the first page number (paragraphs can span pages, take the first)
+                actual_page_number = page_numbers[0] if page_numbers else 1
+                
+                text_segments.append({
+                    "content": content,
+                    "page_number": actual_page_number,
+                    "method": "bounding_regions"
                 })
+        
+        # Method 2: Use pages with lines (fallback)
+        elif "pages" in result and result["pages"]:
+            logging.info(f"[{filename}] Using pages with lines for page detection")
+            
+            for page in result["pages"]:
+                page_number = page.get("pageNumber", 1)
+                
+                # Combine lines from this specific page
+                page_lines = []
+                for line in page.get("lines", []):
+                    line_content = line.get("content", "").strip()
+                    if line_content:
+                        page_lines.append(line_content)
+                
+                if page_lines:
+                    # Group lines into paragraphs
+                    page_text = "\n".join(page_lines)
+                    paragraphs = [p.strip() for p in page_text.split("\n\n") if p.strip()]
+                    
+                    for paragraph in paragraphs:
+                        text_segments.append({
+                            "content": paragraph,
+                            "page_number": page_number,  # Accurate page number
+                            "method": "page_lines"
+                        })
+        
+        # Method 3: Legacy fallback (with warning)
+        else:
+            logging.warning(f"[{filename}] No paragraphs or pages found - using legacy content splitting")
+            content = result.get("content", "")
+            if content:
+                paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+                for paragraph in paragraphs:
+                    text_segments.append({
+                        "content": paragraph,
+                        "page_number": 1,  # Can't determine actual page
+                        "method": "content_fallback"
+                    })
+        
+        # Add text segments to processed content
+        processed_content["text_segments"] = text_segments
+        
+        # Log page statistics
+        page_numbers = [seg["page_number"] for seg in text_segments]
+        unique_pages = sorted(set(page_numbers))
+        total_segments = len(text_segments)
+        logging.info(f"[{filename}] ✅ Extracted {total_segments} segments across {len(unique_pages)} pages")
+        
+        if len(unique_pages) > 1:
+            logging.info(f"[{filename}] Page range: {min(unique_pages)}-{max(unique_pages)}")
+        else:
+            logging.warning(f"[{filename}] ⚠️ All segments on single page {unique_pages[0] if unique_pages else 'unknown'} - check page detection")
         
         # Process images if found in the result
         # Our Document Intelligence client may have images in the 'figures' or similar structure
@@ -510,27 +574,28 @@ class MultimodalProcessor:
                     logging.warning(f"Failed to process figure {i} in {filename}: {e}")
         
         # Alternative: Extract images from pages if available
-        for page_idx, page in enumerate(pages):
-            if 'figures' in page:
-                logging.info(f"Found {len(page['figures'])} figures in page {page_idx + 1} of {filename}")
-                for fig_idx, figure in enumerate(page['figures']):
-                    try:
-                        image_id = f"{filename}_p{page_idx + 1}_f{fig_idx}_{uuid.uuid4().hex[:8]}"
-                        
-                        # Extract image if it has content
-                        if 'content' in figure or 'elements' in figure:
-                            image_info = {
-                                "image_id": image_id,
-                                "url": f"page_{page_idx + 1}_figure_{fig_idx}",
-                                "page_number": page_idx + 1,
-                                "caption": figure.get('caption', ''),
-                                "figure_data": figure,
-                                "needs_processing": True
-                            }
-                            processed_content["images"].append(image_info)
+        if "pages" in result:
+            for page_idx, page in enumerate(result["pages"]):
+                if 'figures' in page:
+                    logging.info(f"Found {len(page['figures'])} figures in page {page_idx + 1} of {filename}")
+                    for fig_idx, figure in enumerate(page['figures']):
+                        try:
+                            image_id = f"{filename}_p{page_idx + 1}_f{fig_idx}_{uuid.uuid4().hex[:8]}"
                             
-                    except Exception as e:
-                        logging.warning(f"Failed to process page {page_idx + 1} figure {fig_idx}: {e}")
+                            # Extract image if it has content
+                            if 'content' in figure or 'elements' in figure:
+                                image_info = {
+                                    "image_id": image_id,
+                                    "url": f"page_{page_idx + 1}_figure_{fig_idx}",
+                                    "page_number": page_idx + 1,
+                                    "caption": figure.get('caption', ''),
+                                    "figure_data": figure,
+                                    "needs_processing": True
+                                }
+                                processed_content["images"].append(image_info)
+                                
+                        except Exception as e:
+                            logging.warning(f"Failed to process page {page_idx + 1} figure {fig_idx}: {e}")
         
         return processed_content
     

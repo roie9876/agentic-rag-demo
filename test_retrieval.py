@@ -741,6 +741,16 @@ Guidelines:
                         sources = api_result.get("sources", [])
                         debug_info = api_result.get("debug_info", {})
                         
+                        # Show retrieval method prominently
+                        if "retrieval_method" in debug_info:
+                            st.info(f"🔍 **Retrieval Method:** {debug_info['retrieval_method']}")
+                        
+                        # Show chunks summary
+                        if "chunks_found" in debug_info:
+                            chunks_count = debug_info["chunks_found"]
+                            agent_success = debug_info.get("agent_success", "unknown")
+                            st.success(f"✅ **Found {chunks_count} chunks** | Agent Success: {agent_success}")
+                        
                         # Show debug info
                         st.expander("Debug API Call").write(debug_info)
                         

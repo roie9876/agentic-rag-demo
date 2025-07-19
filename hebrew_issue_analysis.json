@@ -1,0 +1,67 @@
+{
+  "document_name": "iecdoc.docx",
+  "index_name": "iec",
+  "total_chunks": 299,
+  "analysis_timestamp": "2025-07-19T08:19:20.392737",
+  "page_distribution": {
+    "unique_pages": 1,
+    "page_counts": {
+      "1": 299
+    },
+    "all_chunks_page_1": true,
+    "missing_page_numbers": 0
+  },
+  "content_analysis": {
+    "total_content_length": 1084979,
+    "avg_chunk_size": 3627.6923076923076,
+    "min_chunk_size": 35,
+    "max_chunk_size": 6238,
+    "estimated_pages_by_content": 542,
+    "small_chunks": 66,
+    "large_chunks": 176
+  },
+  "processing_analysis": {
+    "extraction_methods": {
+      "document_intelligence": 299
+    },
+    "document_intelligence_used": true,
+    "all_same_method": true
+  },
+  "hebrew_analysis": {
+    "chunks_with_hebrew": 10,
+    "chunks_with_rtl_words": 10,
+    "chunks_with_english": 0,
+    "language_detected": "Hebrew",
+    "sample_content": "ע.\nספק שירות חיוני רשת יעמיד לרשות צרכניו מענה קולי בדבר קיום התקלה באספקת החשמל על פי איזור וזמן משוער לסיום הטיפול ככל שידוע. מענה אנושי יינתן על פי תור.\nספק שירות חיוני רשת יפעל ככל היתן כדי להעמיד...\n\n.\nחשבון צריכה\nעל חשבון צריכה יחולו כללים אלה:\nהמועד האחרון לתשלום החשבון יהיה 20 ימים לפחות ממועד הפקת החשבון. פירעון עד למועד האחרון לתשלום הוא ללא ריבית.\nבסמוך למועד הפקת החשבון, ישלח ספק השירות החי...\n\nודיע ספק שירות חיוני כי היא במיתקן חשמל פרטי ונמצא כי הודעת הספק הייתה מוטעית, ישלם ספק השירות החיוני לצרכן תשלום בשיעור הקבוע בלוח 1-1.12 ללוחות התעריפים.\nזיהה ספק שירות חיוני רשת הפרעה או תקלה חשמלי...\n\nיבל תשובת מחלק לפי סעיף (ב) שלפיה לא מתאפשר חיבור של המיתקן במועד ובהספק המבוקש, רשאי לבקש מהמחלק חיבור לרשת החשמל המוגבל בהספק ובזמן (להלן – חיבור מוגבל).\nמבקש חיבור כאמור בסעיף קטן (1) יגיש בקשה לחי...\n\nאו לשלב את המיתקן בזמן הקצר ביותר;\n(2) (בוטל);\n(3) ככל שנקבעו בתנאים לזכאות לתעריף המבוקש תנאים נוספים להגשת בקשה לחיבור או שילוב – עמידת המבקש בתנאים אלה.\n(4) המחלק יבדוק את הבקשה בהתאם לדרישות מערכת...\n\nומיננטי סבר כי הטעמים שהציג המחלק אינם מצדיקים את אי-חיבור המיתקן למערכת התקשורת, הוא יפנה לרשות כדי שתכריע אם המחלק פטור מחיבור אותו מיתקן למערכת התקשורת.\nעל אף האמור בסעיף קטן (3) מחלק לא יידרש להתק...\n\nהל המערכת יקטין את הספק החיבור המבוקש. אם הוגשה בקשה כאמור, מנהל המערכת לא ישיב לצרכן את התשלום ששולם עבור התחייבות לחיבור ותוקף ההתחייבות לחיבור לא יוארך.\n(3) לבקשת מבקש חיבור להגדלת הספק המיתקן לפני...\n\n ייצור חשמל וכיוצא בזה, באזור שבו מבוקש החיבור, בעשרים השנים הקרובות, לפי תוכניות מתאר רלוונטיות;\nיעוד השטח והאזור שבו מבוקש החיבור לפי ההגדרות שבתוכנית המתאר הארצית המשולבת לבנייה לפיתוח ולשימור (תמא...\n\nד החלטה\nישיבה\nהחלטה\nסטטוס\nד': אמינות האספקה\nד': השלות\n43. השלה יזומה באמצעות הפעלת גנראטורים עצמיים\nסעיפים קטנים 43(ט)(2) ו- (3) שיחולו החל מ- 01.12.04\n23.04.07\n01.06.08\n23.04.12\n16.7.12\n03.06.13\n23.0...\n\nתחילה\nמועד החלטה\nישיבה\nהחלטה\nסטטוס\nו': רכישת חשמל, תחזוקה, ומשטר הפעלה של ביצרנים פרטיים\nיב': מקרים מיוחדים\n140. אירוע מבוטח\n26.10.08\n19.7.09\n3.6.13\n25.11.20\n237\n268\n403\n592\n4\n2\n9\n2\nמאושר\nמאושר\nמאושר\n...\n\n"
+  },
+  "page_indicators": {
+    "page_numbers_in_content": 1,
+    "section_breaks": 20,
+    "chapter_markers": 177
+  },
+  "metadata_analysis": {
+    "unique_timestamps": 106,
+    "unique_doc_keys": 0,
+    "sample_doc_keys": [],
+    "has_figures": 299,
+    "multimodal_chunks": 0
+  },
+  "assessment": {
+    "primary_issue": "Page number extraction failure in Document Intelligence",
+    "likely_cause": "Hebrew RTL document processing or Document Intelligence configuration",
+    "document_quality": "Content appears complete and well-extracted",
+    "page_detection_status": "FAILED",
+    "content_completeness": "EXCELLENT",
+    "issues": [
+      "All chunks assigned to page 1 - page detection not working",
+      "Content suggests ~542 pages, but only 1 detected",
+      "Hebrew RTL text may cause page detection issues"
+    ],
+    "recommendations": [
+      "Check Document Intelligence page detection settings",
+      "Large document with page detection failure",
+      "Consider RTL-specific document processing settings",
+      "Document Intelligence is being used - check API response for page info"
+    ]
+  }
+}

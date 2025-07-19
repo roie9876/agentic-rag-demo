@@ -1,0 +1,51 @@
+{
+  "total_chunks": 299,
+  "document_name": "iecdoc.docx",
+  "index_name": "iec",
+  "analysis_timestamp": "2025-07-19T08:17:39.453822",
+  "unique_doc_keys": 0,
+  "doc_keys_sample": [],
+  "page_coverage": {
+    "min_page": 1,
+    "max_page": 1,
+    "total_pages_with_content": 1,
+    "page_range": "1-1",
+    "pages_distribution": {
+      "1": 299
+    }
+  },
+  "missing_pages": [],
+  "missing_pages_count": 0,
+  "content_analysis": {
+    "avg_chunk_size": 3627.6923076923076,
+    "min_chunk_size": 35,
+    "max_chunk_size": 6238,
+    "total_content_length": 1084680,
+    "very_small_chunks": 66,
+    "empty_chunks": 0
+  },
+  "completeness_assessment": {
+    "score": 75.0,
+    "grade": "GOOD",
+    "issues": [
+      "No chunk index information available"
+    ],
+    "recommendations": [
+      "Enable chunk indexing in document processing"
+    ]
+  },
+  "800_page_comparison": {
+    "document_type": "800-page Word document",
+    "expectations": {
+      "typical_chunk_count": "200-400 chunks",
+      "typical_chunk_size": "1500-3000 characters",
+      "expected_pages": "1-800",
+      "processing_time": "2-5 minutes"
+    },
+    "actual_vs_expected": {
+      "chunk_count": "\u2705 Within expected range",
+      "page_coverage": "\u26a0\ufe0f  Only reaches page 1 - may be incomplete",
+      "content_volume": "\u2705 Substantial content volume"
+    }
+  }
+}

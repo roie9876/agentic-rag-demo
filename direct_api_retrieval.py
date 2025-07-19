@@ -6,9 +6,10 @@ import requests
 import json
 import os
 from typing import Dict, List, Any, Optional
-from azure.identity import DefaultAzureCredential
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
+from openai import AzureOpenAI
 
 def get_search_headers() -> dict:
     """Get authentication headers for Azure Search API calls"""
@@ -30,7 +31,7 @@ def retrieve_with_direct_api(
     user_question: str,
     agent_name: str,
     index_name: str,
-    reranker_threshold: float = 2.5,
+    reranker_threshold: float = 1.0,  # FIXED: Match working agent.py default
     include_sources: bool = True
 ) -> Dict[str, Any]:
     """
@@ -48,8 +49,10 @@ def retrieve_with_direct_api(
     service_name = search_endpoint.replace("https://", "").replace(".search.windows.net", "")
     api_version = "2025-05-01-preview"
     
-    # Build the API endpoint for /retrieve
-    endpoint = f"https://{service_name}.search.windows.net/agents/{agent_name}/retrieve?api-version={api_version}"
+    # FIXED: Use correct URL format but with /retrieve endpoint (like working function/agent.py)
+    # The working agent.py uses retrieve endpoint with use_responses=False by default
+    route = "retrieve"  # Use retrieve endpoint like the working agent.py
+    endpoint = f"https://{service_name}.search.windows.net/agents('{agent_name}')/{route}?api-version={api_version}"
     
     # Prepare the request body
     body = {
@@ -75,11 +78,12 @@ def retrieve_with_direct_api(
             {
                 "indexName": index_name,
                 "rerankerThreshold": reranker_threshold,
-                "includeReferenceSourceData": True  # Enable full metadata return
-                # Note: top_k is not supported here - use defaultMaxDocsForReranker in agent config
+                "maxDocsForReranker": 200,
             }
         ]
     }
+    
+    # Note: citationFieldName and responseFields are not needed for /retrieve endpoint
     
     # Get authentication headers
     headers = get_search_headers()
@@ -131,7 +135,8 @@ def retrieve_with_direct_api(
                 "debug_info": debug_info
             }
             
-        # Extract chunks from response using robust schema-agnostic extraction from agent.py
+        # Handle retrieve endpoint format (returns chunks, not final answer)
+        # Use the same robust extraction logic as the working function/agent.py
         chunks = []
         try:
             if "response" in response_data:               # /responses OR "merged" retrieve
@@ -140,12 +145,16 @@ def retrieve_with_direct_api(
                     # If it's a JSON list of chunks → continue below
                     chunks = json.loads(json_str)
                 except Exception:
-                    # Not JSON → it is already the final answer
+                    # Not JSON → it is already the final answer (shouldn't happen with /retrieve)
                     return {
                         "answer": json_str.strip(),
                         "chunks": [],
                         "sources": [],
-                        "debug_info": debug_info
+                        "debug_info": {
+                            **debug_info,
+                            "retrieval_method": "Azure Search Agent API (/retrieve with merged response)",
+                            "endpoint_type": "retrieve"
+                        }
                     }
             elif "chunks" in response_data:
                 chunks = response_data["chunks"]
@@ -155,8 +164,33 @@ def retrieve_with_direct_api(
         except Exception as exc:
             debug_info["extraction_error"] = str(exc)
             chunks = []
+        
+        debug_info["chunks_found"] = len(chunks)
+        debug_info["retrieval_method"] = "Azure Search Agent API (/retrieve endpoint)"
+        debug_info["endpoint_type"] = "retrieve"
                 
         debug_info["chunks_found"] = len(chunks)
+        
+        # Add source method information
+        if len(chunks) > 0:
+            debug_info["retrieval_method"] = "Azure Search Agent API"
+            debug_info["agent_success"] = True
+        else:
+            debug_info["retrieval_method"] = "No chunks from Agent - will try fallback"
+            debug_info["agent_success"] = False
+        
+        # Add detailed chunk debugging
+        if len(chunks) > 0:
+            debug_info["chunks_preview"] = []
+            for i, chunk in enumerate(chunks[:3]):  # Show first 3 chunks
+                preview = {
+                    "ref_id": chunk.get("ref_id", "?"),
+                    "score": chunk.get("score", "no_score"),
+                    "content_preview": chunk.get("content", "")[:150] + "..." if len(chunk.get("content", "")) > 150 else chunk.get("content", ""),
+                    "source_file": chunk.get("source_file", ""),
+                    "doc_key": chunk.get("doc_key", "")
+                }
+                debug_info["chunks_preview"].append(preview)
         
         # If no chunks found, try alternative search approaches for debugging
         if len(chunks) == 0:
@@ -184,7 +218,7 @@ def retrieve_with_direct_api(
                             if response2.status_code == 200:
                                 result2 = response2.json()
                                 if "error" not in result2:
-                                    # Use same robust extraction logic as above
+                                    # Handle retrieve endpoint format for translated query (same as working agent.py)
                                     chunks_translated = []
                                     try:
                                         if "response" in result2:
@@ -197,7 +231,11 @@ def retrieve_with_direct_api(
                                                     "answer": json_str.strip(),
                                                     "chunks": [],
                                                     "sources": [],
-                                                    "debug_info": debug_info
+                                                    "debug_info": {
+                                                        **debug_info,
+                                                        "translation_success": True,
+                                                        "retrieval_method": "Azure Search Agent API (/retrieve + translation, merged response)"
+                                                    }
                                                 }
                                         elif "chunks" in result2:
                                             chunks_translated = result2["chunks"]
@@ -208,6 +246,7 @@ def retrieve_with_direct_api(
                                     if len(chunks_translated) > 0:
                                         chunks = chunks_translated
                                         debug_info["translation_success"] = True
+                                        debug_info["retrieval_method"] = "Azure Search Agent API (/retrieve + translation)"
                                         debug_info["chunks_found_after_translation"] = len(chunks)
                                     else:
                                         debug_info["translation_success"] = False
@@ -217,6 +256,7 @@ def retrieve_with_direct_api(
                                         chunks = try_direct_search_fallback(translated_query, index_name, search_endpoint)
                                         if len(chunks) > 0:
                                             debug_info["direct_search_fallback_success"] = True
+                                            debug_info["retrieval_method"] = "Direct Search Fallback (after Agent + translation failed)"
                                             debug_info["chunks_from_direct_search"] = len(chunks)
                         except Exception as e:
                             debug_info["translation_error"] = str(e)
@@ -226,6 +266,7 @@ def retrieve_with_direct_api(
                             chunks = try_direct_search_fallback(translated_query, index_name, search_endpoint)
                             if len(chunks) > 0:
                                 debug_info["direct_search_fallback_success"] = True
+                                debug_info["retrieval_method"] = "Direct Search Fallback (after Agent + translation error)"
                                 debug_info["chunks_from_direct_search"] = len(chunks)
             except ImportError:
                 debug_info["translation_unavailable"] = "query_translation module not available"
@@ -238,6 +279,7 @@ def retrieve_with_direct_api(
                     chunks = try_direct_search_fallback(english_fallback, index_name, search_endpoint)
                     if len(chunks) > 0:
                         debug_info["direct_search_fallback_success"] = True
+                        debug_info["retrieval_method"] = "Direct Search Fallback (no translation module)"
                         debug_info["chunks_from_direct_search"] = len(chunks)
         
         # Enrich chunks with source_file if missing
@@ -343,9 +385,24 @@ def retrieve_with_direct_api(
             combined_text = " ".join(f"[{get_chunk_label(c)}] {c.get('content', '')}" for c in chunks)
             
             # Try to summarize with LLM if available
+            debug_info["attempting_llm_summarization"] = True
             final_answer = summarize_chunks_with_llm(combined_text, user_question)
+            
+            # Check if LLM actually worked
+            if final_answer and not final_answer.startswith("LLM authentication failed") and len(final_answer) > 20:
+                debug_info["llm_summarization_success"] = True
+                debug_info["final_answer_source"] = "LLM processed"
+            else:
+                debug_info["llm_summarization_success"] = False
+                debug_info["final_answer_source"] = "Raw chunks fallback"
+                if final_answer and final_answer.startswith("LLM authentication failed"):
+                    debug_info["llm_error"] = final_answer.split(". Raw chunks:")[0]
+                # Use raw chunks as fallback
+                final_answer = f"Based on the indexed sources:\n\n{combined_text[:4000]}..."
         else:
             final_answer = "No relevant information found."
+            debug_info["final_answer_source"] = "No chunks retrieved"
+            debug_info["llm_summarization_success"] = False
             
         # Build sources list with URL enrichment (like function/agent.py)
         sources = []
@@ -414,54 +471,86 @@ def retrieve_with_direct_api(
 
 def summarize_chunks_with_llm(chunks_text: str, user_question: str) -> str:
     """
-    Summarize retrieved chunks using Azure OpenAI
+    Summarize retrieved chunks using Azure OpenAI with managed identity
     Falls back to truncated chunks if LLM is not available
     """
     max_output_size = 16000  # Default max output size
     try:
         from openai import AzureOpenAI
+        from azure.identity import DefaultAzureCredential, get_bearer_token_provider
         
-        # Get OpenAI configuration
-        azure_openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT_41") or os.getenv("AZURE_OPENAI_ENDPOINT")
-        azure_openai_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_41") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
+        # Get OpenAI configuration (use same env vars as working agent.py)
+        azure_openai_endpoint = os.getenv("OPENAI_ENDPOINT") or os.getenv("AZURE_OPENAI_ENDPOINT_41") or os.getenv("AZURE_OPENAI_ENDPOINT")
+        azure_openai_deployment = os.getenv("OPENAI_DEPLOYMENT") or os.getenv("AZURE_OPENAI_DEPLOYMENT_41") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
         
         if not all([azure_openai_endpoint, azure_openai_deployment]):
             # No OpenAI config, return truncated chunks
             return chunks_text[:max_output_size]
             
-        # Create OpenAI client with managed identity
-        credential = DefaultAzureCredential()
-        token = credential.get_token("https://cognitiveservices.azure.com/.default")
+        # Create OpenAI client with managed identity (same approach as working agent.py)
+        try:
+            cred = DefaultAzureCredential()
+            token_provider = get_bearer_token_provider(cred, "https://cognitiveservices.azure.com/.default")
+            
+            client = AzureOpenAI(
+                azure_ad_token_provider=token_provider,  # Auto-refreshing token provider
+                azure_endpoint=azure_openai_endpoint,
+                api_version="2024-02-15-preview"
+            )
+            
+            # Test token provider is working
+            test_token = token_provider()
+            if not test_token or len(test_token) < 100:
+                raise Exception("Token provider returned invalid token")
+                
+        except Exception as e:
+            # If managed identity fails, fall back to raw chunks with debug info
+            error_info = f"🔴 LLM Authentication Error: {str(e)}"
+            print(error_info)
+            return f"{error_info}\n\n📄 Raw chunks for analysis:\n{chunks_text[:max_output_size]}"
         
-        client = AzureOpenAI(
-            azure_ad_token_provider=lambda: token.token,
-            azure_endpoint=azure_openai_endpoint,
-            api_version="2024-02-15-preview"
-        )
-        
-        # Create summarization prompt
+        # Create summarization prompt matching the working Azure Function agent.py EXACTLY
         system_msg = (
-            "ענה בקצרה ובבהירות בעברית. הסתמך אך ורק על המידע המופיע ב-chunks "
+            "ענה בקצרה ובבהירות . הסתמך אך ורק על המידע המופיע ב‑chunks "
             "והצג סימוכין בסוגריים מרובעות—for example [my_document.pdf]. "
             "אם אין מידע, השב \"אין לי מידע\"."
         )
         
-        prompt = f"== Chunks ==\n{chunks_text[:8000]}\n== Question ==\n{user_question}\n== End =="
-        
-        response = client.chat.completions.create(
-            model=azure_openai_deployment,
-            temperature=0.2,
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": prompt}
-            ]
+        prompt = (
+            f"== Chunks ==\n{chunks_text}\n"  # Don't truncate! Let LLM see all chunks
+            f"== Question ==\n{user_question}\n"
+            "== End =="
         )
         
-        return response.choices[0].message.content.strip()[:max_output_size]
+        try:
+            response = client.chat.completions.create(
+                model=azure_openai_deployment,
+                temperature=0.2,  # Match Azure Function exactly
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            result = response.choices[0].message.content.strip()
+            
+            # Add debug info for successful LLM processing
+            debug_info = f"🟢 LLM Success: Model={azure_openai_deployment}, Tokens={len(result)}, Auth=Managed Identity"
+            print(debug_info)
+            
+            return result[:max_output_size]
+            
+        except Exception as llm_error:
+            # Detailed error for LLM processing failure
+            error_detail = f"🔴 LLM Processing Error: {str(llm_error)}"
+            print(error_detail)
+            return f"{error_detail}\n\n📄 Raw chunks for analysis:\n{chunks_text[:max_output_size]}"
         
-    except Exception:
-        # Fallback to truncated chunks
-        return chunks_text[:max_output_size]
+    except Exception as outer_error:
+        # Comprehensive error handling for the entire function
+        error_info = f"🔴 Summarization Function Error: {str(outer_error)}"
+        print(error_info)
+        return f"{error_info}\n\n📄 Fallback - Raw chunks:\n{chunks_text[:max_output_size]}"
 
 def try_direct_search_fallback(query: str, index_name: str, search_endpoint: str) -> List[Dict]:
     """
@@ -471,12 +560,11 @@ def try_direct_search_fallback(query: str, index_name: str, search_endpoint: str
     try:
         search_client = search_client_helper(index_name)
         
-        # Try multiple search strategies
+        # Try multiple search strategies for Hebrew queries
         strategies = [
             {"search_text": query, "top": 3},
-            {"search_text": query.replace("השוואה", "comparison"), "top": 3},
-            {"search_text": "UltraDisk disk types comparison", "top": 3},
-            {"search_text": "*", "filter": "source_file eq '04. UltraDisk new features.pptx'", "top": 3}
+            {"search_text": query.replace("תעריף", "cost"), "top": 3},
+            {"search_text": query.replace("בדיקת מונה", "meter inspection"), "top": 3}
         ]
         
         for strategy in strategies:
@@ -531,48 +619,28 @@ def try_alternative_searches(query: str, index_name: str, search_endpoint: str) 
         except Exception as e:
             results["original_hebrew_query"] = {"query": query, "hits": 0, "error": str(e)}
         
-        # 2. Try key English terms from the query
-        # "תערוך טבלת השוואה בין סוגי הדיסקים" = "Create comparison table between disk types"
-        english_queries = [
-            "disk types",
-            "UltraDisk", 
-            "Premium SSD",
-            "Standard HDD",
-            "Azure disk",
-            "storage disk",
-            "comparison",
-            "table"
+        # 2. Try key Hebrew terms (generic)
+        hebrew_queries = [
+            "בדיקה",
+            "תעריף", 
+            "חינם",
+            "שירות"
         ]
         
-        for eng_query in english_queries:
+        for heb_query in hebrew_queries:
             try:
-                search_results = search_client.search(search_text=eng_query, top=3)
+                search_results = search_client.search(search_text=heb_query, top=3)
                 hits = list(search_results)
                 if len(hits) > 0:
-                    results[f"english_{eng_query.replace(' ', '_')}"] = {
-                        "query": eng_query, 
+                    results[f"hebrew_{heb_query.replace(' ', '_')}"] = {
+                        "query": heb_query, 
                         "hits": len(hits),
                         "first_hit_source": hits[0].get("source_file", "unknown") if hits else None
                     }
             except Exception as e:
                 continue  # Skip failed queries
         
-        # 3. Try exact file search since we know the file contains UltraDisk content
-        try:
-            search_results = search_client.search(
-                search_text="*",
-                filter="source_file eq '04. UltraDisk new features.pptx'",
-                top=3
-            )
-            hits = list(search_results)
-            results["ultradisk_file_filter"] = {
-                "query": "filter by UltraDisk file", 
-                "hits": len(hits)
-            }
-        except Exception as e:
-            results["ultradisk_file_filter"] = {"error": str(e)}
-        
-        # 4. Try wildcard search to see if index has any content
+        # 3. Try wildcard search to see if index has any content
         try:
             search_results = search_client.search(search_text="*", top=5)
             hits = list(search_results)
@@ -584,7 +652,7 @@ def try_alternative_searches(query: str, index_name: str, search_endpoint: str) 
         except Exception as e:
             results["wildcard_all_docs"] = {"query": "*", "hits": 0, "error": str(e)}
             
-        # 5. Try search with specific Hebrew analyzer if available
+        # 4. Try search with specific Hebrew analyzer if available
         try:
             # Some indexes might have Hebrew language analyzer
             search_results = search_client.search(
