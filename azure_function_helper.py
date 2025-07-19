@@ -14,7 +14,7 @@ from typing import Dict, List, Tuple, Optional, Union
 import pandas as pd
 import re
 
-from azure.identity import DefaultAzureCredential
+from azure.identity import DefaultAzureCredential, AzureCliCredential
 from azure.mgmt.web import WebSiteManagementClient
 from dotenv import dotenv_values
 
@@ -93,7 +93,13 @@ def list_function_apps(subscription_id: str) -> Tuple[List[str], Dict[str, Tuple
         return func_choices, func_map
         
     try:
-        wcli = WebSiteManagementClient(DefaultAzureCredential(), subscription_id)
+        # Set the subscription context first
+        import subprocess
+        subprocess.run(["az", "account", "set", "--subscription", subscription_id], 
+                      capture_output=True, timeout=10)
+        
+        # Try using Azure SDK with CLI credential
+        wcli = WebSiteManagementClient(AzureCliCredential(), subscription_id)
         for site in wcli.web_apps.list():
             # Filter only Function Apps (kind contains "functionapp")
             if site.kind and "functionapp" in site.kind:
@@ -102,8 +108,33 @@ def list_function_apps(subscription_id: str) -> Tuple[List[str], Dict[str, Tuple
                 # Include the actual hostname/domain from Azure
                 hostname = getattr(site, 'default_host_name', f"{site.name}.azurewebsites.net")
                 func_map[label] = (site.name, site.resource_group, hostname)
-    except Exception:
-        pass  # Silently fail, UI will show warning
+                
+    except Exception as e:
+        # Try fallback with Azure CLI
+        try:
+            import subprocess
+            result = subprocess.run([
+                "az", "functionapp", "list", 
+                "--subscription", subscription_id,
+                "--query", "[].{name:name, resourceGroup:resourceGroup, kind:kind, defaultHostName:defaultHostName}",
+                "-o", "json"
+            ], capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0:
+                import json
+                apps = json.loads(result.stdout)
+                for app in apps:
+                    if app.get("kind") and "functionapp" in app.get("kind", ""):
+                        name = app.get("name", "")
+                        rg = app.get("resourceGroup", "")
+                        hostname = app.get("defaultHostName", f"{name}.azurewebsites.net")
+                        
+                        if name and rg:
+                            label = f"{name}  ({rg})"
+                            func_choices.append(label)
+                            func_map[label] = (name, rg, hostname)
+        except Exception:
+            pass  # Final fallback - return empty lists
         
     return func_choices, func_map
 
@@ -147,7 +178,7 @@ def load_function_settings(
         return False, None, {}, "Missing required parameters"
         
     try:
-        wcli = WebSiteManagementClient(DefaultAzureCredential(), subscription_id)
+        wcli = WebSiteManagementClient(AzureCliCredential(), subscription_id)
         cfg = wcli.web_apps.list_application_settings(resource_group, function_name)
         raw = cfg.properties or {}
         
@@ -303,7 +334,7 @@ def push_function_settings(
         return False, "No settings to push"
         
     try:
-        wcli = WebSiteManagementClient(DefaultAzureCredential(), subscription_id)
+        wcli = WebSiteManagementClient(AzureCliCredential(), subscription_id)
         
         # Build new property map – start with original raw to preserve hidden keys
         new_props = dict(original_raw)
@@ -872,7 +903,7 @@ def get_function_url_and_key(
         return False, "", "", "Missing required parameters"
     
     try:
-        wcli = WebSiteManagementClient(DefaultAzureCredential(), subscription_id)
+        wcli = WebSiteManagementClient(AzureCliCredential(), subscription_id)
         
         # Step 1: Get the Function App details to get the correct hostname
         try:

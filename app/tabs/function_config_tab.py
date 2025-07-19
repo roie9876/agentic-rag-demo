@@ -116,8 +116,34 @@ def render_function_config_tab(
         st.session_state.selected_function_app = "-- manual input --"
 
     # Get available subscriptions
-    with st.spinner("🔍 Loading subscriptions..."):
-        subscription_choices, subscription_map = get_available_subscriptions()
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        with st.spinner("🔍 Loading subscriptions..."):
+            subscription_choices, subscription_map = get_available_subscriptions()
+    
+    with col2:
+        if st.button("🔄 Re-login", help="Re-authenticate with Azure CLI", key="azure_relogin"):
+            with st.spinner("🔐 Re-authenticating with Azure CLI..."):
+                try:
+                    import subprocess
+                    # Clear Azure CLI cache and force re-login
+                    result = subprocess.run(["az", "login", "--use-device-code"], 
+                                          capture_output=True, text=True, timeout=60)
+                    if result.returncode == 0:
+                        st.success("✅ Successfully re-authenticated with Azure!")
+                        # Clear cached data to refresh
+                        for key in list(st.session_state.keys()):
+                            if key.startswith("func_apps_"):
+                                del st.session_state[key]
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Authentication failed: {result.stderr}")
+                except subprocess.TimeoutExpired:
+                    st.warning("⏰ Authentication timed out. Try running `az login` manually in terminal.")
+                except Exception as e:
+                    st.error(f"❌ Error during authentication: {str(e)}")
+                    st.info("💡 **Alternative:** Run `az login` in your terminal and refresh this page.")
     
     if subscription_choices:
         # Add current/default subscription to the top if available
@@ -170,6 +196,19 @@ def render_function_config_tab(
 
     # Function App Selection (only if subscription is selected)
     if sub_id:
+        # Add refresh functionality
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            st.write("🔹 **Function Apps in Selected Subscription**")
+        with col2:
+            if st.button("🔄 Refresh", help="Refresh the list of Function Apps", key="refresh_function_apps"):
+                # Clear the cache to force refresh
+                func_cache_key = f"func_apps_{sub_id}"
+                if func_cache_key in st.session_state:
+                    del st.session_state[func_cache_key]
+                st.rerun()
+        
         # Cache function apps for the selected subscription
         func_cache_key = f"func_apps_{sub_id}"
         
@@ -219,7 +258,50 @@ def render_function_config_tab(
                 st.session_state["current_app"] = app
         else:
             st.warning("⚠️ No Function Apps found in selected subscription")
+            
+            # Provide troubleshooting information
+            with st.expander("🔧 **Troubleshooting: Why are no Function Apps showing?**"):
+                st.markdown("""
+                **Possible reasons and solutions:**
+                
+                1. **🔑 Authentication Issue**:
+                   - Try re-authenticating: `az login` in terminal
+                   - Check your Azure CLI login status: `az account show`
+                
+                2. **📋 No Function Apps in this subscription**:
+                   - Verify Function Apps exist in the Azure Portal
+                   - Check if they're in a different subscription
+                
+                3. **🔒 Permission Issue**:
+                   - You need **Reader** permission on the subscription
+                   - Or **Contributor** permission on the Function Apps
+                
+                4. **🔄 Cache/Session Issue**:
+                   - Click the **🔄 Refresh** button above
+                   - Restart the Streamlit app if needed
+                
+                5. **🧪 Manual Input**:
+                   - You can manually enter Function App details below
+                   - Use the exact names from Azure Portal
+                """)
+                
+                # Add diagnostic information
+                st.markdown("**🔍 Diagnostic Information:**")
+                st.code(f"Selected Subscription ID: {sub_id}")
+                
+                # Check if Azure CLI is working
+                try:
+                    import subprocess
+                    result = subprocess.run(["az", "account", "show"], capture_output=True, text=True, timeout=10)
+                    if result.returncode == 0:
+                        st.success("✅ Azure CLI authentication is working")
+                    else:
+                        st.error(f"❌ Azure CLI issue: {result.stderr}")
+                except Exception as e:
+                    st.error(f"❌ Azure CLI error: {str(e)}")
+            
             # Manual input fallback
+            st.markdown("**📝 Manual Input (Alternative)**")
             rg = st.text_input("Resource Group", 
                              value=st.session_state.get("current_rg", os.getenv("AZURE_RG", "")))
             app = st.text_input("Function App name", 
