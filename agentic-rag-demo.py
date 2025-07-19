@@ -675,31 +675,24 @@ def run_streamlit_ui() -> None:
         st.info("Index management features may not work. Check the Public Health Check tab for details.")
         root_index_client = None
     
-    tab_ai, tab_health, tab_private_health, tab_create, tab_manage, tab_sharepoint, tab_test, tab_cfg, tab_studio2foundry = st.tabs([
-        "🏭 AI Foundry Account",
-        "🩺 Public Health Check",
-        "🔒 Private Health Check", 
-        "1️⃣ Create Index",
-        "2️⃣ Manage Index",
-        "📁 SharePoint Index",
-        "3️⃣ Test Retrieval",
-        "⚙️ Function Config",
-        "🏭 Studio2Foundry"
+    tab_ai, tab_private_health, tab_create, tab_manage, tab_test, tab_sharepoint, tab_cfg, tab_studio2foundry = st.tabs([
+        "🏭 (1) AI Foundry Account",
+        "🔒 (2) Private Health Check", 
+        "📋 (3) Create Index",
+        "📊 (4) Manage Index",
+        "🧪 (5) Test Retrieval",
+        "📁 (6) SharePoint Index",
+        "⚙️ (7) Function Config",
+        "🏭 (8) Studio2Foundry"
     ])
 
-    # ─────────────────── Tab 1 – AI Foundry Account ──────────────────────────
+    # ─────────────────── Tab (1) – AI Foundry Account ────────────────────────────
     with tab_ai:
         # Use the enhanced AI Foundry Account tab (no health check needed for fast loading)
         from app.tabs.enhanced_ai_foundry_tab import render_enhanced_ai_foundry_tab
         render_enhanced_ai_foundry_tab(
             session_state=st.session_state
         )
-
-    # Public Health Check Tab (renamed from Health Check)
-    with tab_health:
-        # Initialize and render health check UI
-        health_ui = HealthCheckUI()
-        health_ui.render_health_check_tab()
 
     # Private Health Check Tab (new dedicated tab)
     with tab_private_health:
@@ -737,7 +730,7 @@ def run_streamlit_ui() -> None:
         health_ui = HealthCheckUI()
         health_ui.health_block()
 
-    # ─────────────────── Tab 3 – Create Index ────────────────────────────
+    # ─────────────────── Tab (3) – Create Index ────────────────────────────
     with tab_create:
         render_index_creation_tab(root_index_client, st.session_state, health_block)
 
@@ -1358,7 +1351,7 @@ def run_streamlit_ui() -> None:
                 progress_bar.empty()
                 status_text.empty()
 
-    # ─────────────────── Tab 4 – SharePoint Index ────────────────────────
+    # ─────────────────── Tab (6) – SharePoint Index ────────────────────────
     with tab_sharepoint:
         health_block()
         st.header("📁 SharePoint Index Management")
@@ -1830,7 +1823,7 @@ def run_streamlit_ui() -> None:
             ```
             """)
 
-    # ─────────────────── Tab 5 – Test Retrieval ──────────────────────────
+    # ─────────────────── Tab (5) – Test Retrieval ──────────────────────────
     with tab_test:
         # Use the proper agentic retrieval implementation from test_retrieval.py
 
@@ -1844,14 +1837,14 @@ def run_streamlit_ui() -> None:
             search_credential_fn=get_search_credential
         )
 
-    # ─────────────────── Tab 6 – Function Config ─────────────────────────
+    # ─────────────────── Tab (7) – Function Config ─────────────────────────
     with tab_cfg:
         health_block()
         render_function_config_tab(
             session_state=st.session_state
         )
 
-    # ── Studio2Foundry Tab ────────────────────────────────────────────────
+    # ── Tab (8) – Studio2Foundry ────────────────────────────────────────────────
     with tab_studio2foundry:
         # Use the enhanced Studio2Foundry tab with AI Foundry integration
         from app.tabs.enhanced_studio2foundry_tab import render_enhanced_studio2foundry_tab
