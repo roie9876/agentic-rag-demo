@@ -2,7 +2,8 @@
 """
 Private Endpoint Health Check UI Module for Agentic RAG Demo
 ===========================================================
-This module provides UI components for private endpoint health checks.
+This module provides UI components for private endpoint health checks including
+comprehensive managed identity and RBAC testing.
 """
 
 import streamlit as st
@@ -10,9 +11,12 @@ import json
 import subprocess
 import requests
 import re
+import asyncio
+import traceback
 from datetime import datetime
 from typing import Dict, Any
 from .private_endpoint_health_checker import PrivateEndpointHealthChecker, HealthStatus
+from .managed_identity_rbac_checker import ManagedIdentityRBACChecker, RBACTestStatus, RBACTestResult
 import os
 
 
@@ -171,6 +175,10 @@ class PrivateEndpointHealthCheckUI:
         if 'identity_info' in st.session_state:
             self._render_identity_diagnostics()
         
+        # Managed Identity & RBAC Testing Section  
+        st.divider()
+        self._render_managed_identity_rbac_section()
+        
         # Configuration guidance section
         st.divider()
         self._render_configuration_guidance()
@@ -325,6 +333,24 @@ class PrivateEndpointHealthCheckUI:
                     "✅ Query operations working",
                     "✅ Index management available"
                 ]
+            },
+            "Blob Storage": {
+                "healthy_info": "Blob storage accessible via private endpoint with managed identity",
+                "checks": [
+                    "✅ Private endpoint DNS resolution",
+                    "✅ Managed identity authentication",
+                    "✅ Container access verified",
+                    "✅ Blob operations working"
+                ]
+            },
+            "Linux VM": {
+                "healthy_info": "VM managed identity and RBAC permissions configured correctly",
+                "checks": [
+                    "✅ System-assigned managed identity enabled",
+                    "✅ VM metadata accessible via IMDS",
+                    "✅ RBAC permissions for all Azure services",
+                    "✅ Token acquisition working"
+                ]
             }
         }
         
@@ -343,6 +369,95 @@ class PrivateEndpointHealthCheckUI:
                     # Convert checkmark to X for failed services
                     failed_check = check.replace("✅", "❌")
                     st.write(failed_check)
+        
+        # Special handling for Linux VM - add RBAC fix button if there are issues
+        if service_name == "Linux VM" and not is_healthy:
+            st.divider()
+            st.subheader("🔧 Fix VM RBAC Permissions")
+            
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                if st.button("🛠️ Generate RBAC Fix Commands", key="vm_rbac_fix"):
+                    with st.spinner("Generating RBAC fix commands..."):
+                        try:
+                            fix_commands = self._get_health_checker().get_vm_rbac_fix_commands()
+                            st.session_state['vm_rbac_fix_commands'] = fix_commands
+                        except Exception as e:
+                            st.error(f"Error generating fix commands: {str(e)}")
+            
+            with col2:
+                if st.button("🔄 Re-check VM Permissions", key="vm_recheck"):
+                    with st.spinner("Re-checking VM RBAC permissions..."):
+                        try:
+                            result = self._get_health_checker().check_linux_vm_health()
+                            st.session_state['vm_recheck_result'] = result
+                        except Exception as e:
+                            st.error(f"Error re-checking permissions: {str(e)}")
+            
+            # Display RBAC fix commands if generated
+            if 'vm_rbac_fix_commands' in st.session_state:
+                self._display_vm_rbac_fix_commands()
+            
+            # Display recheck results if available
+            if 'vm_recheck_result' in st.session_state:
+                result = st.session_state['vm_recheck_result']
+                if result[0]:
+                    st.success(f"✅ Re-check result: {result[1]}")
+                else:
+                    st.error(f"❌ Re-check result: {result[1]}")
+                # Clear the result after displaying
+                del st.session_state['vm_recheck_result']
+    
+    def _display_vm_rbac_fix_commands(self):
+        """Display the generated VM RBAC fix commands."""
+        fix_commands = st.session_state['vm_rbac_fix_commands']
+        
+        if 'error' in fix_commands:
+            st.error(f"❌ {fix_commands['error']}")
+            st.info("**Instructions:**")
+            for instruction in fix_commands['instructions']:
+                st.write(f"- {instruction}")
+            return
+        
+        st.success(f"✅ **Generated RBAC Fix Commands for VM: {fix_commands['vm_name']}**")
+        
+        # Show instructions
+        st.info("**Instructions:**")
+        for instruction in fix_commands['instructions']:
+            st.write(f"- {instruction}")
+        
+        # Show the Azure CLI commands
+        st.markdown("**🔧 Azure CLI Commands to Run:**")
+        commands_text = '\n'.join(fix_commands['commands'])
+        st.code(commands_text, language='bash')
+        
+        # Show important notes
+        st.markdown("**📋 Important Notes:**")
+        st.markdown("""
+        1. **Replace placeholders** with your actual values:
+           - `<SUBSCRIPTION_ID>` - Your Azure subscription ID
+           - `<RG>` - Your resource group name  
+           - `<OPENAI_SERVICE_NAME>` - Your Azure OpenAI service name
+           - `<SEARCH_SERVICE_NAME>` - Your AI Search service name
+           - `<DOC_INTEL_SERVICE_NAME>` - Your Document Intelligence service name
+           - `<STORAGE_ACCOUNT_NAME>` - Your storage account name
+        
+        2. **Permissions needed**: You need Contributor or User Access Administrator role to assign RBAC permissions
+        
+        3. **Propagation time**: Role assignments take 5-10 minutes to take effect
+        
+        4. **Verification**: Use the "Re-check VM Permissions" button after running the commands
+        """)
+        
+        # Add a copy button functionality
+        if st.button("📋 Copy Commands to Clipboard", key="copy_rbac_commands"):
+            st.info("💡 Commands are displayed above - copy them manually from the code block")
+            
+        # Add clear button
+        if st.button("🗑️ Clear Commands", key="clear_rbac_commands"):
+            del st.session_state['vm_rbac_fix_commands']
+            st.rerun()
 
     def _render_private_endpoint_results(self):
         """Render the private endpoint health check results."""
@@ -1149,7 +1264,7 @@ AZURE_OPENAI_MODEL_VERSION=2024-02-15-preview
                 }
     
     def _display_env_validation_results(self, env_results: Dict[str, Any]):
-        """Display environment validation results."""
+        """Display enhanced environment validation results."""
         if 'error' in env_results:
             st.error(f"❌ Environment validation failed: {env_results['error']}")
             return
@@ -1157,86 +1272,268 @@ AZURE_OPENAI_MODEL_VERSION=2024-02-15-preview
         validation = env_results['validation']
         guidance = env_results['guidance']
         
-        # Show overall status
+        # Show overall status with more detail
         if validation['is_configuration_complete']:
-            st.success("✅ **Environment Configuration Complete**")
+            auth_details = ' | '.join(validation.get('auth_details', [validation['auth_method']]))
+            st.success(f"✅ **Environment Configuration Complete** - Authentication: {auth_details}")
         else:
             missing_count = len(validation['missing_required'])
             st.warning(f"⚠️ **Environment Configuration Incomplete** - {missing_count} required variables missing")
         
-        # Summary metrics
-        col1, col2, col3, col4 = st.columns(4)
+        # Enhanced summary metrics
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
-            st.metric("Present Variables", len(validation['present_vars']))
+            st.metric("Total Variables", validation['total_vars_defined'])
         with col2:
-            st.metric("Missing Required", len(validation['missing_required']))
+            st.metric("Present", len(validation['present_vars']), 
+                     delta=f"{len(validation['present_vars'])}/{validation['total_vars_defined']}")
         with col3:
-            st.metric("Missing Optional", len(validation['missing_optional']))
+            missing_required = len(validation['missing_required'])
+            st.metric("Missing Required", missing_required, 
+                     delta="-" + str(missing_required) if missing_required > 0 else None,
+                     delta_color="inverse")
         with col4:
+            missing_optional = len(validation['missing_optional'])
+            st.metric("Missing Optional", missing_optional,
+                     delta="-" + str(missing_optional) if missing_optional > 0 else None,
+                     delta_color="normal")
+        with col5:
             auth_method = validation['auth_method'].replace('_', ' ').title()
             st.metric("Auth Method", auth_method)
         
         # Show guidance message
+        st.markdown("### 📋 Configuration Status")
         st.markdown(guidance['guidance_message'])
         
-        # Show missing required variables
+        # Service Health Dashboard
+        if 'configuration_health' in validation and validation['configuration_health']:
+            st.markdown("### 🎯 Service Configuration Status")
+            
+            # Create service status grid
+            services_health = validation['configuration_health']
+            service_cols = st.columns(3)
+            
+            service_items = list(services_health.items())
+            for idx, (service_name, health_info) in enumerate(service_items):
+                col = service_cols[idx % 3]
+                
+                with col:
+                    service_display_name = service_name.replace('_', ' ').title()
+                    
+                    if health_info.get('complete', False):
+                        st.success(f"✅ {service_display_name}")
+                        
+                        # Show additional configuration details
+                        if health_info.get('embedding_configured', False):
+                            st.caption("🔍 Embeddings configured")
+                        if health_info.get('multi_endpoint', False):
+                            st.caption("🔄 Multi-endpoint setup")
+                        if health_info.get('configured', False) and service_name in ['azure_keyvault', 'function_app']:
+                            st.caption("🔧 Optional service configured")
+                            
+                    elif health_info.get('enabled', True) and service_name not in ['azure_keyvault', 'function_app']:
+                        # Only show warnings for services that are meant to be enabled
+                        st.warning(f"⚠️ {service_display_name}")
+                        if not health_info.get('auth_complete', True):
+                            st.caption("🔐 Auth incomplete")
+                        if not health_info.get('location_configured', True):
+                            st.caption("📍 Location not set")
+                    else:
+                        # Optional services or disabled services
+                        if health_info.get('enabled', False) or health_info.get('configured', False):
+                            st.info(f"� {service_display_name} (Optional - Configured)")
+                        else:
+                            st.info(f"📊 {service_display_name} (Optional - Not Used)")
+        
+        # Show missing required variables with enhanced display
         if validation['missing_required']:
-            with st.expander("❌ Missing Required Variables", expanded=True):
+            with st.expander("❌ Critical: Missing Required Variables", expanded=True):
                 for var in validation['missing_required']:
                     var_def = validation['var_definitions'][var]
-                    st.markdown(f"**`{var}`**")
-                    st.markdown(f"- Description: {var_def['description']}")
-                    st.markdown(f"- Example: `{var}={var_def['example']}`")
+                    category = var_def['category'].replace('_', ' ').title()
+                    
+                    col1, col2 = st.columns([1, 3])
+                    with col1:
+                        st.markdown(f"**`{var}`**")
+                        st.caption(f"Category: {category}")
+                    with col2:
+                        st.markdown(f"📝 {var_def['description']}")
+                        st.code(f"{var}={var_def['example']}", language='bash')
+        
+        # Show missing optional variables by category
+        if validation['missing_optional']:
+            with st.expander("ℹ️ Optional: Missing Variables for Enhanced Features", expanded=False):
+                # Group by category
+                optional_by_category = {}
+                for var in validation['missing_optional']:
+                    category = validation['var_definitions'][var]['category']
+                    if category not in optional_by_category:
+                        optional_by_category[category] = []
+                    optional_by_category[category].append(var)
+                
+                for category, vars_in_category in optional_by_category.items():
+                    category_display = category.replace('_', ' ').title()
+                    st.markdown(f"**{category_display}**")
+                    
+                    for var in vars_in_category:
+                        var_def = validation['var_definitions'][var]
+                        st.markdown(f"- `{var}`: {var_def['description']}")
                     st.markdown("")
         
-        # Show missing optional variables  
-        if validation['missing_optional']:
-            with st.expander("ℹ️ Missing Optional Variables", expanded=False):
-                for var in validation['missing_optional']:
-                    var_def = validation['var_definitions'][var]
-                    st.markdown(f"**`{var}`** - {var_def['description']}")
-        
-        # Show present variables
+        # Show present variables organized by category
         if validation['present_vars']:
             with st.expander(f"✅ Present Variables ({len(validation['present_vars'])})", expanded=False):
+                # Group by category
+                present_by_category = {}
                 for var in validation['present_vars']:
-                    var_def = validation['var_definitions'][var]
-                    var_status = validation['env_status'][var]
-                    value_length = var_status['value_length']
-                    
-                    # Mask sensitive values
-                    if var_def.get('sensitive', False):
-                        display_info = f"**`{var}`** - {var_def['description']} (****** - {value_length} chars)"
-                    else:
-                        display_info = f"**`{var}`** - {var_def['description']} ({value_length} chars)"
-                    
-                    st.markdown(display_info)
-        
-        # Authentication method recommendations
-        with st.expander("🔐 Authentication Method Recommendations", expanded=False):
-            for method, details in guidance['auth_recommendations'].items():
-                status_icon = "✅" if details['recommended'] else "ℹ️"
-                status_text = "Recommended" if details['recommended'] else "Available"
+                    category = validation['var_definitions'][var]['category']
+                    if category not in present_by_category:
+                        present_by_category[category] = []
+                    present_by_category[category].append(var)
                 
-                st.markdown(f"**{method.replace('_', ' ').title()}** {status_icon} {status_text}")
+                for category, vars_in_category in present_by_category.items():
+                    category_display = category.replace('_', ' ').title()
+                    
+                    with st.container():
+                        st.markdown(f"**{category_display}** ({len(vars_in_category)} variables)")
+                        
+                        for var in vars_in_category:
+                            var_def = validation['var_definitions'][var]
+                            var_status = validation['env_status'][var]
+                            value_length = var_status['value_length']
+                            
+                            # Mask sensitive values
+                            if var_def.get('sensitive', False):
+                                st.markdown(f"- `{var}`: {var_def['description']} (****** - {value_length} chars)")
+                            else:
+                                st.markdown(f"- `{var}`: {var_def['description']} ({value_length} chars)")
+                        st.markdown("")
+        
+        # Enhanced next steps with actionable recommendations
+        st.markdown("### 🛠️ Recommended Actions")
+        
+        if 'recommendations' in guidance:
+            recommendations = guidance['recommendations']
+            
+            # Critical actions
+            if recommendations.get('critical'):
+                st.markdown("**🚨 Critical Actions Required:**")
+                for step in recommendations['critical']:
+                    st.markdown(step)
+                st.markdown("")
+            
+            # Improvement suggestions
+            if recommendations.get('improvements'):
+                st.markdown("**⚡ Suggested Improvements:**")
+                for step in recommendations['improvements']:
+                    st.markdown(step)
+                st.markdown("")
+            
+            # Best practices
+            if recommendations.get('good_practices'):
+                st.markdown("**✅ Following Best Practices:**")
+                for step in recommendations['good_practices']:
+                    st.markdown(step)
+        else:
+            # Fallback to basic next steps
+            st.markdown("**📝 Next Steps:**")
+            for step in guidance['next_steps']:
+                st.markdown(step)
+        
+        # Authentication method recommendations with enhanced display
+        with st.expander("🔐 Authentication Method Analysis", expanded=False):
+            current_method = validation['auth_method']
+            st.markdown(f"**Current Method:** {current_method.replace('_', ' ').title()}")
+            
+            if validation.get('auth_details'):
+                st.markdown("**Authentication Details:**")
+                for detail in validation['auth_details']:
+                    st.markdown(f"- {detail}")
+                st.markdown("")
+            
+            st.markdown("**Available Authentication Methods:**")
+            for method, details in guidance['auth_recommendations'].items():
+                status_icon = "🏆" if details['recommended'] else "ℹ️"
+                status_text = "**RECOMMENDED**" if details['recommended'] else "Available"
+                current_marker = " ← **CURRENT**" if method == current_method else ""
+                
+                st.markdown(f"**{method.replace('_', ' ').title()}** {status_icon} {status_text}{current_marker}")
                 st.markdown(f"- {details['description']}")
                 st.markdown(f"- Setup: {details['setup_required']}")
                 st.markdown("")
         
-        # Sample .env file
-        with st.expander("📄 Sample .env File", expanded=False):
-            st.markdown("**Complete .env template with all variables:**")
+        # Enhanced sample .env file with download and copy options
+        with st.expander("📄 Complete .env Configuration Template", expanded=False):
+            st.markdown("**Complete .env template with all available variables:**")
+            st.markdown("This template includes all possible configuration options organized by category.")
+            
+            # Show sample content
             st.code(guidance['sample_env_content'], language='bash')
             
-            # Add download button for .env template
-            st.download_button(
-                label="💾 Download .env Template",
-                data=guidance['sample_env_content'],
-                file_name="template.env",
-                mime="text/plain",
-                help="Download this template and rename to .env, then fill in your values",
-                key="private_env_template_download"
-            )
+            # Action buttons
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.download_button(
+                    label="💾 Download .env Template",
+                    data=guidance['sample_env_content'],
+                    file_name="complete-template.env",
+                    mime="text/plain",
+                    help="Download complete .env template with all variables",
+                    key="private_env_template_download_complete"
+                )
+            with col2:
+                # Minimal template (only required variables)
+                minimal_template = self._generate_minimal_env_template(validation['var_definitions'])
+                st.download_button(
+                    label="📋 Download Minimal Template", 
+                    data=minimal_template,
+                    file_name="minimal-template.env",
+                    mime="text/plain",
+                    help="Download template with only required variables",
+                    key="private_env_template_download_minimal"
+                )
+            with col3:
+                if st.button("📋 Copy to Clipboard", help="Copy template to clipboard", key="private_env_copy_clipboard"):
+                    st.info("📋 Template content is displayed above - copy manually for now")
+        
+        # Configuration health summary
+        if validation.get('core_services_complete', False):
+            st.success("🎉 **All Core Services Configured** - Your application is ready to run!")
+        elif len(validation['missing_required']) == 0:
+            st.info("📊 **Basic Configuration Complete** - Consider adding optional services for enhanced functionality")
+        else:
+            st.error(f"🔧 **Configuration Required** - Please add {len(validation['missing_required'])} missing required variables")
+    
+    def _generate_minimal_env_template(self, var_definitions: Dict[str, Any]) -> str:
+        """Generate a minimal .env template with only required variables."""
+        lines = [
+            "# ── Azure RAG Demo - Minimal Required Configuration ─────────────────────────────",
+            "# Only required variables are included in this template",
+            "# Add these variables with your actual values",
+            ""
+        ]
+        
+        # Add only required variables
+        required_vars = {k: v for k, v in var_definitions.items() if v.get('required', False)}
+        
+        # Group by category
+        categories = {}
+        for var_name, var_info in required_vars.items():
+            category = var_info['category']
+            if category not in categories:
+                categories[category] = []
+            categories[category].append((var_name, var_info))
+        
+        for category, vars_in_cat in categories.items():
+            category_title = category.replace('_', ' ').title()
+            lines.append(f"# ── {category_title} ─────────────────────────────")
+            
+            for var_name, var_info in vars_in_cat:
+                lines.append(f"# {var_info['description']}")
+                lines.append(f"{var_name}={var_info['example']}")
+            lines.append("")
+        
+        return '\n'.join(lines)
     
     def _show_auth_status(self):
         """Show current authentication status for all services (same as public health check)."""
@@ -1612,3 +1909,284 @@ AZURE_OPENAI_MODEL_VERSION=2024-02-15-preview
         except Exception as e:
             st.error(f"❌ Error assigning role {role}: {str(e)}")
             return False
+
+    def _render_managed_identity_rbac_section(self):
+        """Render the comprehensive managed identity and RBAC testing section."""
+        st.subheader("🔐 Comprehensive Managed Identity & RBAC Testing")
+        
+        with st.expander("ℹ️ About Managed Identity & RBAC Testing", expanded=False):
+            st.markdown("""
+            This comprehensive testing validates:
+            
+            **🔧 Managed Identity Configuration:**
+            - ✅ System-assigned or user-assigned managed identity detection
+            - ✅ Principal ID and resource ID discovery
+            - ✅ Azure CLI authentication integration
+            
+            **🎯 RBAC Permissions Testing for All Services:**
+            - **Azure Blob Storage**: Storage Blob Data Contributor/Reader
+            - **Azure OpenAI**: Cognitive Services OpenAI User, Cognitive Services User
+            - **Azure AI Search**: Search Index Data Contributor/Reader, Search Service Contributor
+            - **Azure Document Intelligence**: Cognitive Services User
+            
+            **🔧 Automatic Fix Generation:**
+            - Azure CLI commands for role assignment
+            - Azure Portal links for manual configuration
+            - Step-by-step remediation guidance
+            """)
+        
+        col1, col2, col3 = st.columns([1, 1, 1])
+        
+        with col1:
+            if st.button("🔍 Test All RBAC Permissions", key="test_all_rbac", type="primary"):
+                self._run_comprehensive_rbac_test()
+        
+        with col2:
+            if st.button("🆔 Check Managed Identity", key="check_managed_identity"):
+                self._check_managed_identity_info()
+        
+        with col3:
+            if st.button("🛠️ Generate Fix Commands", key="generate_fix_commands"):
+                if 'rbac_test_results' in st.session_state:
+                    self._generate_rbac_fix_commands()
+                else:
+                    st.warning("⚠️ Please run RBAC tests first to generate fix commands")
+        
+        # Display managed identity information if available
+        if 'managed_identity_info' in st.session_state:
+            self._display_managed_identity_info(st.session_state['managed_identity_info'])
+        
+        # Display comprehensive RBAC test results if available
+        if 'rbac_test_results' in st.session_state:
+            self._display_comprehensive_rbac_results(st.session_state['rbac_test_results'])
+        
+        # Display fix commands if available
+        if 'rbac_fix_summary' in st.session_state:
+            self._display_rbac_fix_summary(st.session_state['rbac_fix_summary'])
+
+    def _run_comprehensive_rbac_test(self):
+        """Run comprehensive RBAC testing for all services."""
+        with st.spinner("🔍 Testing managed identity and RBAC permissions for all services..."):
+            try:
+                # Initialize the comprehensive RBAC checker
+                rbac_checker = ManagedIdentityRBACChecker()
+                
+                # Run the tests asynchronously
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                try:
+                    results = loop.run_until_complete(rbac_checker.test_all_rbac_permissions())
+                    st.session_state['rbac_test_results'] = results
+                    
+                    # Generate fix summary
+                    fix_summary = rbac_checker.generate_rbac_fix_summary(results)
+                    st.session_state['rbac_fix_summary'] = fix_summary
+                    
+                    st.success(f"✅ RBAC testing completed! Total tests: {fix_summary['total_tests']}, Passed: {fix_summary['passed']}, Failed: {fix_summary['failed']}")
+                    
+                finally:
+                    loop.close()
+                    
+            except Exception as e:
+                st.error(f"❌ Error running RBAC tests: {str(e)}")
+                st.code(traceback.format_exc())
+
+    def _check_managed_identity_info(self):
+        """Check and display managed identity information."""
+        with st.spinner("🆔 Checking managed identity configuration..."):
+            try:
+                rbac_checker = ManagedIdentityRBACChecker()
+                
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                try:
+                    identity_info = loop.run_until_complete(rbac_checker.get_managed_identity_info())
+                    st.session_state['managed_identity_info'] = identity_info
+                    
+                    if identity_info.type != "None":
+                        st.success(f"✅ Managed Identity detected: {identity_info.type}")
+                    else:
+                        st.warning("⚠️ No managed identity detected")
+                        
+                finally:
+                    loop.close()
+                    
+            except Exception as e:
+                st.error(f"❌ Error checking managed identity: {str(e)}")
+
+    def _generate_rbac_fix_commands(self):
+        """Generate fix commands for failed RBAC tests."""
+        if 'rbac_test_results' not in st.session_state:
+            st.warning("⚠️ Please run RBAC tests first")
+            return
+            
+        try:
+            rbac_checker = ManagedIdentityRBACChecker()
+            fix_summary = rbac_checker.generate_rbac_fix_summary(st.session_state['rbac_test_results'])
+            st.session_state['rbac_fix_summary'] = fix_summary
+            
+            if fix_summary['failed'] > 0:
+                st.info(f"🛠️ Generated fix commands for {fix_summary['failed']} failed tests")
+            else:
+                st.success("🎉 No fixes needed - all tests passed!")
+                
+        except Exception as e:
+            st.error(f"❌ Error generating fix commands: {str(e)}")
+
+    def _display_managed_identity_info(self, identity_info):
+        """Display managed identity information."""
+        st.subheader("🆔 Managed Identity Information")
+        
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.metric("Identity Type", identity_info.type)
+            if identity_info.principal_id:
+                st.metric("Principal ID", identity_info.principal_id)
+                
+        with col2:
+            if identity_info.tenant_id:
+                st.metric("Tenant ID", identity_info.tenant_id)
+            if identity_info.client_id:
+                st.metric("Client ID", identity_info.client_id)
+        
+        if identity_info.vm_resource_id:
+            st.info(f"🖥️ VM Resource ID: `{identity_info.vm_resource_id}`")
+
+    def _display_comprehensive_rbac_results(self, results):
+        """Display comprehensive RBAC test results."""
+        st.subheader("🔐 RBAC Test Results")
+        
+        # Create tabs for each service
+        services = list(results.keys())
+        if services:
+            tabs = st.tabs([config.replace('_', ' ').title() for config in services])
+            
+            for i, (service_key, service_results) in enumerate(results.items()):
+                with tabs[i]:
+                    service_name = service_key.replace('_', ' ').title()
+                    
+                    if not service_results:
+                        st.info(f"No tests run for {service_name}")
+                        continue
+                    
+                    # Count results
+                    passed = sum(1 for result in service_results if result.status == RBACTestStatus.PASS)
+                    failed = sum(1 for result in service_results if result.status == RBACTestStatus.FAIL)
+                    total = len(service_results)
+                    
+                    # Display summary
+                    col1, col2, col3 = st.columns([1, 1, 1])
+                    with col1:
+                        st.metric("✅ Passed", passed)
+                    with col2:
+                        st.metric("❌ Failed", failed)
+                    with col3:
+                        st.metric("📊 Total", total)
+                    
+                    # Display individual test results
+                    for result in service_results:
+                        status_color = {
+                            RBACTestStatus.PASS: "success",
+                            RBACTestStatus.FAIL: "error",
+                            RBACTestStatus.WARNING: "warning",
+                            RBACTestStatus.SKIP: "info",
+                            RBACTestStatus.ERROR: "error"
+                        }.get(result.status, "info")
+                        
+                        with st.container():
+                            if status_color == "success":
+                                st.success(f"**{result.role}**: {result.message}")
+                            elif status_color == "error":
+                                st.error(f"**{result.role}**: {result.message}")
+                                
+                                # Show fix command if available
+                                if result.fix_command:
+                                    with st.expander("🛠️ Fix Command", expanded=False):
+                                        st.code(result.fix_command, language="bash")
+                                        
+                                # Show portal link if available
+                                if result.azure_portal_link:
+                                    st.link_button("🌐 Open in Azure Portal", result.azure_portal_link)
+                                    
+                            elif status_color == "warning":
+                                st.warning(f"**{result.role}**: {result.message}")
+                            else:
+                                st.info(f"**{result.role}**: {result.message}")
+                            
+                            # Show details if available
+                            if result.details:
+                                with st.expander("📋 Details", expanded=False):
+                                    st.json(result.details)
+
+    def _display_rbac_fix_summary(self, fix_summary):
+        """Display RBAC fix summary with actionable commands."""
+        st.subheader("🛠️ RBAC Fix Summary")
+        
+        # Overall statistics
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+        
+        with col1:
+            st.metric("📊 Total Tests", fix_summary['total_tests'])
+        with col2:
+            st.metric("✅ Passed", fix_summary['passed'], delta=f"{fix_summary['passed'] / max(fix_summary['total_tests'], 1) * 100:.1f}%")
+        with col3:
+            st.metric("❌ Failed", fix_summary['failed'], delta=f"-{fix_summary['failed'] / max(fix_summary['total_tests'], 1) * 100:.1f}%")
+        with col4:
+            st.metric("⏭️ Skipped", fix_summary['skipped'])
+        
+        # Failed roles
+        if fix_summary['failed_roles']:
+            st.subheader("❌ Failed Roles")
+            for role in fix_summary['failed_roles']:
+                st.error(f"• {role}")
+        
+        # Fix commands
+        if fix_summary['fix_commands']:
+            st.subheader("🛠️ Generated Fix Commands")
+            st.info("💡 **Tip**: Run these commands in Azure CLI to assign missing roles")
+            
+            # Combine all fix commands
+            all_commands = "\n\n".join(fix_summary['fix_commands'])
+            
+            # Clean up duplicates and format nicely
+            unique_commands = []
+            seen_commands = set()
+            for cmd in fix_summary['fix_commands']:
+                if cmd not in seen_commands:
+                    unique_commands.append(cmd)
+                    seen_commands.add(cmd)
+            
+            combined_script = "\n\n".join(unique_commands)
+            st.code(combined_script, language="bash")
+            
+            # Add copy button
+            if st.button("📋 Copy All Commands"):
+                # Note: This would require JavaScript to actually copy to clipboard
+                st.info("💡 Commands are displayed above - select and copy manually")
+        
+        # Azure Portal links
+        if fix_summary['portal_links']:
+            st.subheader("🌐 Azure Portal Links")
+            st.info("💡 **Alternative**: Use Azure Portal for manual role assignment")
+            
+            for link_info in fix_summary['portal_links']:
+                st.link_button(f"Configure {link_info['service']} RBAC", link_info['url'])
+        
+        # Recommendations
+        if fix_summary['failed'] > 0:
+            st.subheader("💡 Recommendations")
+            
+            recommendations = [
+                "🔧 **Run the generated Azure CLI commands** to assign missing roles",
+                "⏰ **Wait 5-10 minutes** after role assignment for permissions to propagate",
+                "🔄 **Re-run the RBAC tests** to verify fixes",
+                "🌐 **Use Azure Portal** as an alternative to CLI commands"
+            ]
+            
+            for rec in recommendations:
+                st.markdown(rec)
+        else:
+            st.success("🎉 **All RBAC tests passed!** Your managed identity has proper permissions for all services.")

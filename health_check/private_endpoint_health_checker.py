@@ -9,6 +9,8 @@ Resources checked:
 - Azure OpenAI (private-openai-agentic)
 - Document Intelligence (private-doc-int)
 - AI Search (private-ai-search)
+- Blob Storage (privateblogagenticimages)
+- Linux VM (compute infrastructure)
 """
 
 import os
@@ -32,11 +34,12 @@ try:
     # Azure SDK imports
     from azure.search.documents.indexes import SearchIndexClient
     from azure.ai.documentintelligence import DocumentIntelligenceClient
+    from azure.storage.blob import BlobServiceClient
     from openai import AzureOpenAI
     
 except ImportError as e:
     print(f"❌ Missing required dependencies: {e}")
-    print("Run: pip install azure-identity azure-search-documents azure-ai-documentintelligence openai")
+    print("Run: pip install azure-identity azure-search-documents azure-ai-documentintelligence azure-storage-blob openai")
     sys.exit(1)
 
 from enum import Enum
@@ -340,6 +343,286 @@ class PrivateEndpointHealthChecker:
         except Exception as e:
             return False, f"❌ AI Search health check failed: {str(e)}"
     
+    def check_blob_storage_private_endpoint(self) -> Tuple[bool, str]:
+        """Enhanced Blob Storage health check for private endpoints using managed identity only."""
+        try:
+            # Get storage account info from environment
+            storage_url = os.getenv("AZURE_STORAGE_ACCOUNT_URL", "")
+            storage_account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "")
+            container_name = os.getenv("AZURE_STORAGE_CONTAINER", "images")
+            
+            if not storage_url and not storage_account_name:
+                return False, "❌ No Blob Storage configuration found (AZURE_STORAGE_ACCOUNT_URL or AZURE_STORAGE_ACCOUNT_NAME required)"
+            
+            # Construct URL if only account name is provided
+            if not storage_url and storage_account_name:
+                storage_url = f"https://{storage_account_name}.blob.core.windows.net"
+            
+            # Check network connectivity first
+            network_ok, network_msg = self.check_network_connectivity(storage_url, "Blob Storage")
+            
+            # Use managed identity only (no connection strings for private endpoints)
+            try:
+                credential = DefaultAzureCredential()
+                client = BlobServiceClient(
+                    account_url=storage_url,
+                    credential=credential
+                )
+                
+                # Test basic operations
+                containers = list(client.list_containers())
+                container_count = len(containers)
+                
+                # Try to access the specific container if specified
+                container_info = ""
+                if container_name:
+                    try:
+                        container_client = client.get_container_client(container_name)
+                        blobs = list(container_client.list_blobs())
+                        blob_count = len(blobs)
+                        container_info = f" Container '{container_name}' has {blob_count} blobs."
+                    except Exception as container_error:
+                        container_info = f" Warning: Could not access container '{container_name}': {str(container_error)}"
+                
+                return True, f"✅ Blob Storage connected with managed identity. {network_msg}. Found {container_count} containers.{container_info}"
+                
+            except ClientAuthenticationError as e:
+                return False, f"❌ Managed identity authentication failed: {str(e)}. {network_msg}. Check if managed identity is enabled and has proper RBAC roles."
+            except HttpResponseError as e:
+                if "Forbidden" in str(e) or "403" in str(e):
+                    return False, f"❌ Access forbidden: {str(e)}. {network_msg}. Check RBAC permissions: 'Storage Blob Data Reader' or 'Storage Blob Data Contributor' roles required."
+                else:
+                    return False, f"❌ HTTP error: {str(e)}. {network_msg}"
+            except Exception as e:
+                return False, f"❌ Managed identity connection failed: {str(e)}. {network_msg}"
+                
+        except Exception as e:
+            return False, f"❌ Blob Storage health check failed: {str(e)}"
+    
+    def check_linux_vm_health(self) -> Tuple[bool, str]:
+        """Check Linux VM managed identity and RBAC permissions for all Azure services."""
+        try:
+            health_details = []
+            rbac_issues = []
+            
+            # 1. Check VM metadata and managed identity configuration
+            vm_name = "unknown-vm"
+            resource_group = "unknown-rg"
+            
+            try:
+                # Get VM metadata from Azure Instance Metadata Service (IMDS)
+                imds_result = subprocess.run([
+                    "curl", "-s", "-H", "Metadata:true", 
+                    "http://169.254.169.254/metadata/instance?api-version=2021-02-01"
+                ], capture_output=True, text=True, timeout=10)
+                
+                if imds_result.returncode == 0 and imds_result.stdout.strip():
+                    vm_metadata = json.loads(imds_result.stdout)
+                    compute_info = vm_metadata.get("compute", {})
+                    
+                    vm_name = compute_info.get("name", "unknown-vm")
+                    resource_group = compute_info.get("resourceGroupName", "unknown-rg")
+                    location = compute_info.get("location", "unknown-location")
+                    
+                    health_details.append(f"VM Name: {vm_name}")
+                    health_details.append(f"Resource Group: {resource_group}")
+                    health_details.append(f"Location: {location}")
+                else:
+                    rbac_issues.append("Could not retrieve VM metadata from IMDS")
+                    
+            except Exception as e:
+                rbac_issues.append(f"VM metadata check failed: {str(e)}")
+            
+            # 2. Check if managed identity is enabled and working
+            managed_identity_working = False
+            try:
+                # Test managed identity token acquisition
+                token_result = subprocess.run([
+                    "curl", "-s", "-H", "Metadata:true",
+                    "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/"
+                ], capture_output=True, text=True, timeout=10)
+                
+                if token_result.returncode == 0 and "access_token" in token_result.stdout:
+                    health_details.append("✅ Managed Identity: Enabled & Working")
+                    managed_identity_working = True
+                else:
+                    rbac_issues.append("❌ Managed Identity: Not configured or not working")
+                    
+            except Exception as e:
+                rbac_issues.append(f"Managed identity check failed: {str(e)}")
+            
+            # 3. If managed identity is working, check RBAC permissions for all services
+            if managed_identity_working:
+                # Check RBAC for each service by testing actual connections
+                service_rbac_status = {}
+                
+                # Test OpenAI RBAC
+                try:
+                    openai_check = self.check_openai_private_endpoint()
+                    if openai_check[0]:
+                        service_rbac_status["OpenAI"] = "✅ RBAC OK"
+                    else:
+                        if "403" in openai_check[1] or "Forbidden" in openai_check[1]:
+                            service_rbac_status["OpenAI"] = "❌ RBAC Missing"
+                            rbac_issues.append("OpenAI: Missing 'Cognitive Services OpenAI User' role")
+                        else:
+                            service_rbac_status["OpenAI"] = f"⚠️ Other issue: {openai_check[1][:50]}..."
+                except Exception as e:
+                    service_rbac_status["OpenAI"] = f"❌ Error: {str(e)[:30]}..."
+                
+                # Test AI Search RBAC
+                try:
+                    search_check = self.check_ai_search_private_endpoint()
+                    if search_check[0]:
+                        service_rbac_status["AI Search"] = "✅ RBAC OK"
+                    else:
+                        if "403" in search_check[1] or "Forbidden" in search_check[1]:
+                            service_rbac_status["AI Search"] = "❌ RBAC Missing"
+                            rbac_issues.append("AI Search: Missing 'Search Index Data Reader' role")
+                        else:
+                            service_rbac_status["AI Search"] = f"⚠️ Other issue: {search_check[1][:50]}..."
+                except Exception as e:
+                    service_rbac_status["AI Search"] = f"❌ Error: {str(e)[:30]}..."
+                
+                # Test Document Intelligence RBAC
+                try:
+                    doc_check = self.check_document_intelligence_private_endpoint()
+                    if doc_check[0]:
+                        service_rbac_status["Document Intelligence"] = "✅ RBAC OK"
+                    else:
+                        if "403" in doc_check[1] or "Forbidden" in doc_check[1]:
+                            service_rbac_status["Document Intelligence"] = "❌ RBAC Missing"
+                            rbac_issues.append("Document Intelligence: Missing 'Cognitive Services User' role")
+                        else:
+                            service_rbac_status["Document Intelligence"] = f"⚠️ Other issue: {doc_check[1][:50]}..."
+                except Exception as e:
+                    service_rbac_status["Document Intelligence"] = f"❌ Error: {str(e)[:30]}..."
+                
+                # Test Blob Storage RBAC
+                try:
+                    blob_check = self.check_blob_storage_private_endpoint()
+                    if blob_check[0]:
+                        service_rbac_status["Blob Storage"] = "✅ RBAC OK"
+                    else:
+                        if "403" in blob_check[1] or "Forbidden" in blob_check[1]:
+                            service_rbac_status["Blob Storage"] = "❌ RBAC Missing"
+                            rbac_issues.append("Blob Storage: Missing 'Storage Blob Data Reader' role")
+                        else:
+                            service_rbac_status["Blob Storage"] = f"⚠️ Other issue: {blob_check[1][:50]}..."
+                except Exception as e:
+                    service_rbac_status["Blob Storage"] = f"❌ Error: {str(e)[:30]}..."
+                
+                # Add RBAC status to health details
+                for service, status in service_rbac_status.items():
+                    health_details.append(f"{service}: {status}")
+            
+            # Store VM details for RBAC fix commands
+            self._vm_details = {
+                "vm_name": vm_name,
+                "resource_group": resource_group,
+                "managed_identity_working": managed_identity_working,
+                "rbac_issues": rbac_issues
+            }
+            
+            # Determine overall status
+            if len(rbac_issues) == 0:
+                status_msg = f"✅ VM Identity & RBAC: All permissions working. {health_details[0]} | {health_details[1]}"
+                return True, status_msg
+            elif managed_identity_working and len(rbac_issues) <= 2:
+                status_msg = f"⚠️ VM Identity OK but {len(rbac_issues)} RBAC issue(s). {health_details[0]} | RBAC needs fixing"
+                return True, status_msg
+            else:
+                status_msg = f"❌ VM Identity/RBAC issues: {' | '.join(rbac_issues[:2])}"
+                return False, status_msg
+                
+        except Exception as e:
+            return False, f"❌ Linux VM health check failed: {str(e)}"
+    
+    def get_vm_rbac_fix_commands(self) -> Dict[str, Any]:
+        """Generate Azure CLI commands to fix VM managed identity RBAC permissions."""
+        vm_details = getattr(self, '_vm_details', {})
+        
+        if not vm_details.get('managed_identity_working', False):
+            return {
+                'error': 'Managed identity is not working. Enable it first in Azure Portal.',
+                'instructions': [
+                    "1. Go to Azure Portal → Virtual Machines → {vm_name}".format(vm_name=vm_details.get('vm_name', 'your-vm')),
+                    "2. Navigate to Identity → System assigned",
+                    "3. Set Status to 'On' and Save",
+                    "4. Wait for the system to enable managed identity",
+                    "5. Come back and run the health check again"
+                ]
+            }
+        
+        vm_name = vm_details.get('vm_name', 'your-vm-name')
+        resource_group = vm_details.get('resource_group', 'your-resource-group')
+        
+        commands = []
+        
+        # Get the VM's managed identity principal ID
+        commands.extend([
+            "# Get your VM's managed identity principal ID",
+            f"PRINCIPAL_ID=$(az vm identity show --resource-group {resource_group} --name {vm_name} --query principalId -o tsv)",
+            f"echo \"VM Principal ID: $PRINCIPAL_ID\"",
+            ""
+        ])
+        
+        # Add role assignments for each service that needs fixing
+        rbac_issues = vm_details.get('rbac_issues', [])
+        
+        for issue in rbac_issues:
+            if "OpenAI" in issue:
+                commands.extend([
+                    "# Fix OpenAI RBAC permissions",
+                    "az role assignment create --assignee $PRINCIPAL_ID --role 'Cognitive Services OpenAI User' --scope '/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG>/providers/Microsoft.CognitiveServices/accounts/<OPENAI_SERVICE_NAME>'",
+                    "az role assignment create --assignee $PRINCIPAL_ID --role 'Cognitive Services User' --scope '/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG>/providers/Microsoft.CognitiveServices/accounts/<OPENAI_SERVICE_NAME>'",
+                    ""
+                ])
+            
+            elif "AI Search" in issue:
+                commands.extend([
+                    "# Fix AI Search RBAC permissions",
+                    "az role assignment create --assignee $PRINCIPAL_ID --role 'Search Index Data Reader' --scope '/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG>/providers/Microsoft.Search/searchServices/<SEARCH_SERVICE_NAME>'",
+                    "az role assignment create --assignee $PRINCIPAL_ID --role 'Search Service Contributor' --scope '/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG>/providers/Microsoft.Search/searchServices/<SEARCH_SERVICE_NAME>'",
+                    ""
+                ])
+            
+            elif "Document Intelligence" in issue:
+                commands.extend([
+                    "# Fix Document Intelligence RBAC permissions",
+                    "az role assignment create --assignee $PRINCIPAL_ID --role 'Cognitive Services User' --scope '/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG>/providers/Microsoft.CognitiveServices/accounts/<DOC_INTEL_SERVICE_NAME>'",
+                    ""
+                ])
+            
+            elif "Blob Storage" in issue:
+                commands.extend([
+                    "# Fix Blob Storage RBAC permissions",
+                    "az role assignment create --assignee $PRINCIPAL_ID --role 'Storage Blob Data Reader' --scope '/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG>/providers/Microsoft.Storage/storageAccounts/<STORAGE_ACCOUNT_NAME>'",
+                    "az role assignment create --assignee $PRINCIPAL_ID --role 'Storage Blob Data Contributor' --scope '/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG>/providers/Microsoft.Storage/storageAccounts/<STORAGE_ACCOUNT_NAME>'",
+                    ""
+                ])
+        
+        commands.extend([
+            "# Wait for role assignments to propagate (5-10 minutes)",
+            "echo \"✅ Role assignments completed. Wait 5-10 minutes for changes to take effect.\"",
+            "echo \"🔄 Then run the health check again to verify permissions.\""
+        ])
+        
+        return {
+            'vm_name': vm_name,
+            'resource_group': resource_group,
+            'commands': commands,
+            'issues_found': len(rbac_issues),
+            'instructions': [
+                f"1. The VM '{vm_name}' managed identity is working ✅",
+                f"2. Found {len(rbac_issues)} RBAC permission issues that need fixing",
+                "3. Replace <SUBSCRIPTION_ID>, <RG>, and service names with your actual values",
+                "4. Run the Azure CLI commands below to fix the permissions",
+                "5. Wait 5-10 minutes for role assignments to propagate",
+                "6. Re-run the health check to verify all permissions are working"
+            ]
+        }
+    
     def generate_rbac_guidance(self, service_name: str, error_message: str) -> Dict[str, Any]:
         """Generate RBAC guidance for 403 Forbidden errors."""
         
@@ -389,6 +672,45 @@ class PrivateEndpointHealthChecker:
                 "2. Click 'Add role assignment'",
                 "3. Assign 'Cognitive Services User' role to your account",
                 "4. Wait 5-10 minutes for permissions to propagate"
+            ]
+        
+        elif "blob" in service_name.lower() or "storage" in service_name.lower():
+            guidance["required_roles"] = [
+                "Storage Blob Data Reader",
+                "Storage Blob Data Contributor"
+            ]
+            guidance["instructions"] = [
+                "1. Go to Azure Portal → Storage Account → Access control (IAM)",
+                "2. Click 'Add role assignment'",
+                "3. Assign 'Storage Blob Data Reader' or 'Storage Blob Data Contributor' role",
+                "4. Wait 5-10 minutes for permissions to propagate"
+            ]
+            guidance["commands"] = [
+                "# Replace <YOUR_EMAIL>, <SUBSCRIPTION_ID>, <RESOURCE_GROUP>, <STORAGE_ACCOUNT> with actual values",
+                "az role assignment create --assignee <YOUR_EMAIL> --role 'Storage Blob Data Reader' --scope '/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RESOURCE_GROUP>/providers/Microsoft.Storage/storageAccounts/<STORAGE_ACCOUNT>'",
+                "az role assignment create --assignee <YOUR_EMAIL> --role 'Storage Blob Data Contributor' --scope '/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RESOURCE_GROUP>/providers/Microsoft.Storage/storageAccounts/<STORAGE_ACCOUNT>'"
+            ]
+        
+        elif "vm" in service_name.lower() or "linux" in service_name.lower():
+            guidance["required_roles"] = [
+                "Virtual Machine Contributor",
+                "Reader"
+            ]
+            guidance["instructions"] = [
+                "1. Go to Azure Portal → Virtual Machine → Access control (IAM)",
+                "2. Click 'Add role assignment'",
+                "3. Assign 'Virtual Machine Contributor' role for VM management",
+                "4. Ensure system-assigned managed identity is enabled",
+                "5. Verify network connectivity to Azure endpoints"
+            ]
+            guidance["commands"] = [
+                "# Replace <SUBSCRIPTION_ID>, <RESOURCE_GROUP>, <VM_NAME> with actual values",
+                "# Enable system-assigned managed identity",
+                "az vm identity assign --resource-group <RESOURCE_GROUP> --name <VM_NAME>",
+                "# Get the VM's managed identity principal ID",
+                "PRINCIPAL_ID=$(az vm identity show --resource-group <RESOURCE_GROUP> --name <VM_NAME> --query principalId -o tsv)",
+                "# Assign reader role to the VM's identity (if needed)",
+                "az role assignment create --assignee $PRINCIPAL_ID --role 'Reader' --scope '/subscriptions/<SUBSCRIPTION_ID>'"
             ]
         
         return guidance
@@ -483,7 +805,9 @@ class PrivateEndpointHealthChecker:
         results = {
             "OpenAI": self.check_openai_private_endpoint(),
             "Document Intelligence": self.check_document_intelligence_private_endpoint(),
-            "AI Search": self.check_ai_search_private_endpoint()
+            "AI Search": self.check_ai_search_private_endpoint(),
+            "Blob Storage": self.check_blob_storage_private_endpoint(),
+            "Linux VM": self.check_linux_vm_health()
         }
         
         all_healthy = all(status for status, _ in results.values())
@@ -576,6 +900,36 @@ class PrivateEndpointHealthChecker:
 - Verify endpoint URL format: https://your-service.search.windows.net/
 - Check if RBAC is enabled on the search service
 - Verify managed identity has proper search permissions
+            """,
+            
+            "Blob Storage": """
+**Common Issues:**
+1. **Missing Environment Variables**: Ensure AZURE_STORAGE_ACCOUNT_URL or AZURE_STORAGE_ACCOUNT_NAME is set
+2. **Authentication**: Check managed identity configuration (no connection strings needed)
+3. **Network**: Verify private endpoint connectivity to *.blob.core.windows.net
+4. **RBAC**: Ensure 'Storage Blob Data Reader' or 'Storage Blob Data Contributor' role is assigned
+
+**Quick Fixes:**
+- Verify storage URL format: https://youraccount.blob.core.windows.net
+- Check if managed identity is enabled on your VM/App Service
+- Test DNS resolution: `nslookup youraccount.blob.core.windows.net`
+- Verify container exists and is accessible
+            """,
+            
+            "Linux VM": """
+**Common Issues:**
+1. **VM Resources**: Check disk space, memory, and system performance
+2. **Managed Identity**: Ensure system-assigned managed identity is enabled
+3. **Network**: Verify connectivity to Azure management endpoints
+4. **Dependencies**: Ensure required Python packages are installed
+5. **IMDS**: Check Azure Instance Metadata Service availability
+
+**Quick Fixes:**
+- Check disk space: `df -h /`
+- Check memory: `free -h`
+- Test managed identity: `curl -H "Metadata:true" "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/"`
+- Verify VM identity in Azure Portal: VM → Identity → System assigned = On
+- Check network connectivity: `curl -I https://management.azure.com/`
             """
         }
         
@@ -1079,119 +1433,338 @@ class PrivateEndpointHealthChecker:
         """
         # Define all possible environment variables for the application
         env_var_definitions = {
-            # Core Azure endpoints (required)
+            # ── Azure OpenAI Configuration (Core) ─────────────────────────────
             'AZURE_OPENAI_ENDPOINT': {
                 'required': True,
-                'description': 'Azure OpenAI service endpoint URL',
+                'description': 'Primary Azure OpenAI service endpoint URL',
                 'example': 'https://your-openai-service.openai.azure.com/',
-                'category': 'azure_endpoints'
+                'category': 'azure_openai_core'
             },
+            'AZURE_OPENAI_API_VERSION': {
+                'required': True,
+                'description': 'OpenAI API version',
+                'example': '2025-01-01-preview',
+                'category': 'azure_openai_core'
+            },
+            'AZURE_OPENAI_DEPLOYMENT': {
+                'required': True,
+                'description': 'Primary OpenAI model deployment name',
+                'example': 'gpt-4.1',
+                'category': 'azure_openai_core'
+            },
+            'AZURE_OPENAI_SERVICE_NAME': {
+                'required': True,
+                'description': 'Azure OpenAI service name',
+                'example': 'your-openai-service',
+                'category': 'azure_openai_core'
+            },
+            
+            # ── Azure OpenAI Extended Configuration ─────────────────────────────
+            'AZURE_OPENAI_ENDPOINT_41': {
+                'required': False,
+                'description': 'OpenAI endpoint with _41 suffix (for compatibility)',
+                'example': 'https://your-openai-service.openai.azure.com/',
+                'category': 'azure_openai_extended'
+            },
+            'AZURE_OPENAI_API_VERSION_41': {
+                'required': False,
+                'description': 'OpenAI API version with _41 suffix (for compatibility)',
+                'example': '2025-01-01-preview',
+                'category': 'azure_openai_extended'
+            },
+            'AZURE_OPENAI_DEPLOYMENT_41': {
+                'required': False,
+                'description': 'OpenAI deployment with _41 suffix (for compatibility)',
+                'example': 'gpt-4.1',
+                'category': 'azure_openai_extended'
+            },
+            'AZURE_OPENAI_CHATGPT_DEPLOYMENT': {
+                'required': False,
+                'description': 'ChatGPT specific deployment name',
+                'example': 'gpt-4.1',
+                'category': 'azure_openai_extended'
+            },
+            
+            # ── Azure OpenAI Embedding Configuration ─────────────────────────────
+            'AZURE_OPENAI_EMBEDDING_DEPLOYMENT': {
+                'required': False,
+                'description': 'Embedding model deployment name',
+                'example': 'text-embedding-3-large',
+                'category': 'azure_embeddings'
+            },
+            'AZURE_OPENAI_EMBEDDING_MODEL': {
+                'required': False,
+                'description': 'Embedding model name',
+                'example': 'text-embedding-3-large',
+                'category': 'azure_embeddings'
+            },
+            'AZURE_OPENAI_EMBEDDING_ENDPOINT': {
+                'required': False,
+                'description': 'Dedicated embedding endpoint (if different from main)',
+                'example': 'https://your-openai-service.openai.azure.com/',
+                'category': 'azure_embeddings'
+            },
+            'AZURE_OPENAI_EMBEDDING_API_VERSION': {
+                'required': False,
+                'description': 'Embedding API version',
+                'example': '2023-05-15',
+                'category': 'azure_embeddings'
+            },
+            'AZURE_OPENAI_EMBEDDING_SERVICE_NAME': {
+                'required': False,
+                'description': 'Embedding service name',
+                'example': 'your-openai-service',
+                'category': 'azure_embeddings'
+            },
+            
+            # ── Document Intelligence Configuration ─────────────────────────────
+            'DOCUMENT_INTEL_ENDPOINT': {
+                'required': True,
+                'description': 'Primary Document Intelligence service endpoint URL',
+                'example': 'https://your-docint.cognitiveservices.azure.com/',
+                'category': 'document_intelligence'
+            },
+            'AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT': {
+                'required': False,
+                'description': 'Document Intelligence endpoint alias (multimodal compatibility)',
+                'example': 'https://your-docint.cognitiveservices.azure.com/',
+                'category': 'document_intelligence'
+            },
+            'AZURE_FORMREC_ENDPOINT': {
+                'required': False,
+                'description': 'Form Recognizer endpoint alias (backward compatibility)',
+                'example': 'https://your-docint.cognitiveservices.azure.com/',
+                'category': 'document_intelligence'
+            },
+            'AZURE_FORMREC_SERVICE': {
+                'required': False,
+                'description': 'Form Recognizer service alias (backward compatibility)',
+                'example': 'https://your-docint.cognitiveservices.azure.com/',
+                'category': 'document_intelligence'
+            },
+            
+            # ── Azure Search Configuration ─────────────────────────────
             'AZURE_SEARCH_ENDPOINT': {
                 'required': True,
                 'description': 'Azure AI Search service endpoint URL',
                 'example': 'https://your-search-service.search.windows.net/',
-                'category': 'azure_endpoints'
+                'category': 'azure_search'
             },
-            'DOCUMENT_INTEL_ENDPOINT': {
+            'AZURE_SEARCH_SERVICE': {
+                'required': False,
+                'description': 'Azure Search service name',
+                'example': 'your-search-service',
+                'category': 'azure_search'
+            },
+            
+            # ── Azure Storage Configuration ─────────────────────────────
+            'AZURE_STORAGE_ACCOUNT_NAME': {
                 'required': True,
-                'description': 'Azure Document Intelligence service endpoint URL',
-                'example': 'https://your-docint-service.cognitiveservices.azure.com/',
-                'category': 'azure_endpoints'
+                'description': 'Azure Storage account name',
+                'example': 'yourstorageaccount',
+                'category': 'azure_storage'
             },
-            
-            # OpenAI specific configuration
-            'AZURE_OPENAI_DEPLOYMENT': {
+            'AZURE_STORAGE_ACCOUNT_URL': {
                 'required': True,
-                'description': 'OpenAI model deployment name',
-                'example': 'gpt-4',
-                'category': 'openai_config'
+                'description': 'Azure Storage account URL',
+                'example': 'https://yourstorageaccount.blob.core.windows.net',
+                'category': 'azure_storage'
             },
-            'AZURE_OPENAI_MODEL_VERSION': {
+            'AZURE_STORAGE_CONTAINER': {
                 'required': False,
-                'description': 'OpenAI model API version',
-                'example': '2024-02-15-preview',
-                'category': 'openai_config'
+                'description': 'Default storage container name',
+                'example': 'images',
+                'category': 'azure_storage'
             },
             
-            # Alternative OpenAI endpoints (optional)
-            'AZURE_OPENAI_ENDPOINT_41': {
+            # ── Azure Key Vault Configuration ─────────────────────────────
+            'AZURE_KEY_VAULT_ENDPOINT': {
                 'required': False,
-                'description': 'Alternative OpenAI endpoint for GPT-4-turbo',
-                'example': 'https://your-openai-41.openai.azure.com/',
-                'category': 'openai_alternatives'
+                'description': 'Azure Key Vault endpoint URL',
+                'example': 'https://your-keyvault.vault.azure.net/',
+                'category': 'azure_keyvault'
             },
-            'AZURE_OPENAI_ENDPOINT_4o': {
+            'AZURE_KEY_VAULT_NAME': {
                 'required': False,
-                'description': 'Alternative OpenAI endpoint for GPT-4o',
-                'example': 'https://your-openai-4o.openai.azure.com/',
-                'category': 'openai_alternatives'
+                'description': 'Azure Key Vault name',
+                'example': 'your-keyvault',
+                'category': 'azure_keyvault'
             },
-            
-            # API Keys (optional - for API key authentication)
-            'AZURE_OPENAI_KEY': {
+            'SHAREPOINT_CLIENT_SECRET_NAME': {
                 'required': False,
-                'description': 'OpenAI service API key (if not using managed identity)',
-                'example': 'your_api_key_here',
-                'category': 'api_keys',
-                'sensitive': True
-            },
-            'AZURE_SEARCH_KEY': {
-                'required': False,
-                'description': 'AI Search service API key (if not using managed identity)',
-                'example': 'your_api_key_here',
-                'category': 'api_keys',
-                'sensitive': True
-            },
-            'DOCUMENT_INTEL_KEY': {
-                'required': False,
-                'description': 'Document Intelligence API key (if not using managed identity)',
-                'example': 'your_api_key_here',
-                'category': 'api_keys',
-                'sensitive': True
+                'description': 'Key Vault secret name for SharePoint client secret',
+                'example': 'sharepointClientSecret',
+                'category': 'azure_keyvault'
             },
             
-            # Service Principal authentication (optional)
-            'AZURE_CLIENT_ID': {
-                'required': False,
-                'description': 'Service principal client ID',
-                'example': 'your-client-id-guid',
-                'category': 'service_principal',
-                'sensitive': True
-            },
-            'AZURE_CLIENT_SECRET': {
-                'required': False,
-                'description': 'Service principal client secret',
-                'example': 'your-client-secret',
-                'category': 'service_principal',
-                'sensitive': True
-            },
+            # ── SharePoint Authentication ─────────────────────────────
             'AZURE_TENANT_ID': {
                 'required': False,
-                'description': 'Azure tenant ID',
+                'description': 'Azure tenant ID for SharePoint authentication',
                 'example': 'your-tenant-id-guid',
-                'category': 'service_principal',
+                'category': 'sharepoint_auth',
                 'sensitive': True
-            },
-            
-            # SharePoint integration (optional)
-            'SHAREPOINT_SITE_URL': {
-                'required': False,
-                'description': 'SharePoint site URL for document integration',
-                'example': 'https://yourtenant.sharepoint.com/sites/yoursite',
-                'category': 'sharepoint'
             },
             'SHAREPOINT_CLIENT_ID': {
                 'required': False,
                 'description': 'SharePoint app client ID',
                 'example': 'your-sharepoint-client-id',
-                'category': 'sharepoint',
+                'category': 'sharepoint_auth',
                 'sensitive': True
             },
             'SHAREPOINT_CLIENT_SECRET': {
                 'required': False,
                 'description': 'SharePoint app client secret',
                 'example': 'your-sharepoint-client-secret',
-                'category': 'sharepoint',
+                'category': 'sharepoint_auth',
+                'sensitive': True
+            },
+            'AGENTIC_APP_SPN_CERT_PATH': {
+                'required': False,
+                'description': 'Path to certificate for SharePoint authentication',
+                'example': '/path/to/your/cert.pfx',
+                'category': 'sharepoint_auth',
+                'sensitive': True
+            },
+            'AGENTIC_APP_SPN_CERT_PASSWORD': {
+                'required': False,
+                'description': 'Certificate password for SharePoint authentication',
+                'example': 'your-cert-password',
+                'category': 'sharepoint_auth',
+                'sensitive': True
+            },
+            
+            # ── SharePoint Location Configuration ─────────────────────────────
+            'SHAREPOINT_SITE_DOMAIN': {
+                'required': False,
+                'description': 'SharePoint site domain',
+                'example': 'yourtenant.sharepoint.com',
+                'category': 'sharepoint_location'
+            },
+            'SHAREPOINT_SITE_NAME': {
+                'required': False,
+                'description': 'SharePoint site name',
+                'example': 'yoursite',
+                'category': 'sharepoint_location'
+            },
+            'SHAREPOINT_DRIVE_NAME': {
+                'required': False,
+                'description': 'SharePoint drive name',
+                'example': 'Documents',
+                'category': 'sharepoint_location'
+            },
+            'SHAREPOINT_SITE_FOLDER': {
+                'required': False,
+                'description': 'SharePoint site folder path',
+                'example': '/yourfolder',
+                'category': 'sharepoint_location'
+            },
+            
+            # ── SharePoint Connector Configuration ─────────────────────────────
+            'SHAREPOINT_CONNECTOR_ENABLED': {
+                'required': False,
+                'description': 'Enable SharePoint connector',
+                'example': 'true',
+                'category': 'sharepoint_connector'
+            },
+            'SHAREPOINT_INDEX_DIRECT': {
+                'required': False,
+                'description': 'Enable direct SharePoint indexing',
+                'example': 'true',
+                'category': 'sharepoint_connector'
+            },
+            'SHAREPOINT_OPTIMIZATION_ENABLED': {
+                'required': False,
+                'description': 'Enable SharePoint optimization',
+                'example': 'true',
+                'category': 'sharepoint_connector'
+            },
+            
+            # ── Function App Configuration ─────────────────────────────
+            'MODEL_DEPLOYMENT_NAME': {
+                'required': False,
+                'description': 'Function app model deployment name',
+                'example': 'gpt-4.1',
+                'category': 'function_app'
+            },
+            'API_VERSION': {
+                'required': False,
+                'description': 'Function app API version',
+                'example': '2025-05-01-preview',
+                'category': 'function_app'
+            },
+            'AGENT_FUNC_KEY': {
+                'required': False,
+                'description': 'Function app access key',
+                'example': 'your-function-key',
+                'category': 'function_app',
+                'sensitive': True
+            },
+            'MAX_OUTPUT_SIZE': {
+                'required': False,
+                'description': 'Maximum output size for function responses',
+                'example': '16000',
+                'category': 'function_app'
+            },
+            'RERANKER_THRESHOLD': {
+                'required': False,
+                'description': 'Reranker threshold for search results',
+                'example': '1',
+                'category': 'function_app'
+            },
+            'TOP_K': {
+                'required': False,
+                'description': 'Top K results for search',
+                'example': '5',
+                'category': 'function_app'
+            },
+            
+            # ── Application Configuration ─────────────────────────────
+            'debug': {
+                'required': False,
+                'description': 'Enable debug mode',
+                'example': 'false',
+                'category': 'app_config'
+            },
+            'includesrc': {
+                'required': False,
+                'description': 'Include source in responses',
+                'example': 'true',
+                'category': 'app_config'
+            },
+            'MULTIMODAL': {
+                'required': False,
+                'description': 'Enable multimodal processing',
+                'example': 'true',
+                'category': 'app_config'
+            },
+            'CHUNK_OVERLAP': {
+                'required': False,
+                'description': 'Chunk overlap size for document processing',
+                'example': '200',
+                'category': 'app_config'
+            },
+            
+            # ── API Keys (Legacy - optional for backward compatibility) ─────────────────────────────
+            'AZURE_OPENAI_KEY': {
+                'required': False,
+                'description': 'OpenAI service API key (legacy - prefer managed identity)',
+                'example': 'your_api_key_here',
+                'category': 'legacy_api_keys',
+                'sensitive': True
+            },
+            'AZURE_SEARCH_KEY': {
+                'required': False,
+                'description': 'AI Search service API key (legacy - prefer managed identity)',
+                'example': 'your_api_key_here',
+                'category': 'legacy_api_keys',
+                'sensitive': True
+            },
+            'DOCUMENT_INTEL_KEY': {
+                'required': False,
+                'description': 'Document Intelligence API key (legacy - prefer managed identity)',
+                'example': 'your_api_key_here',
+                'category': 'legacy_api_keys',
                 'sensitive': True
             }
         }
@@ -1219,17 +1792,49 @@ class PrivateEndpointHealthChecker:
             else:
                 missing_optional.append(var_name)
         
-        # Determine authentication method
-        has_api_keys = any(os.getenv(key) for key in ['AZURE_OPENAI_KEY', 'AZURE_SEARCH_KEY', 'DOCUMENT_INTEL_KEY'])
+        # Determine authentication method based on current configuration
+        has_legacy_api_keys = any(os.getenv(key) for key in ['AZURE_OPENAI_KEY', 'AZURE_SEARCH_KEY', 'DOCUMENT_INTEL_KEY'])
         has_service_principal = all(os.getenv(key) for key in ['AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_TENANT_ID'])
+        has_sharepoint_auth = bool(os.getenv('SHAREPOINT_CLIENT_ID') and os.getenv('SHAREPOINT_CLIENT_SECRET'))
+        has_key_vault = bool(os.getenv('AZURE_KEY_VAULT_ENDPOINT'))
         
-        auth_method = 'unknown'
+        # Primary authentication method determination
+        auth_method = 'managed_identity'  # Default for private endpoints
+        auth_details = []
+        
         if has_service_principal:
             auth_method = 'service_principal'
-        elif has_api_keys:
+            auth_details.append('Azure Service Principal configured')
+        elif has_legacy_api_keys:
             auth_method = 'api_keys'
+            auth_details.append('Legacy API keys detected (consider migration to managed identity)')
         else:
-            auth_method = 'managed_identity'
+            auth_details.append('Managed identity (recommended for private endpoints)')
+        
+        # Additional authentication configurations
+        if has_sharepoint_auth:
+            auth_details.append('SharePoint app authentication configured')
+        if has_key_vault:
+            auth_details.append('Azure Key Vault integration enabled')
+        
+        # Configuration completeness analysis
+        core_services_complete = all(os.getenv(var) for var in [
+            'AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_DEPLOYMENT', 'AZURE_OPENAI_API_VERSION', 'AZURE_OPENAI_SERVICE_NAME',
+            'DOCUMENT_INTEL_ENDPOINT',
+            'AZURE_SEARCH_ENDPOINT',
+            'AZURE_STORAGE_ACCOUNT_NAME', 'AZURE_STORAGE_ACCOUNT_URL'
+        ])
+        
+        # SharePoint is complete if:
+        # 1. It's disabled (SHAREPOINT_CONNECTOR_ENABLED != true), OR
+        # 2. It's enabled AND has required auth variables
+        sharepoint_enabled = os.getenv('SHAREPOINT_CONNECTOR_ENABLED', '').lower() == 'true'
+        if sharepoint_enabled:
+            sharepoint_complete = all(os.getenv(var) for var in [
+                'SHAREPOINT_CLIENT_ID', 'SHAREPOINT_CLIENT_SECRET', 'AZURE_TENANT_ID', 'SHAREPOINT_SITE_DOMAIN'
+            ])
+        else:
+            sharepoint_complete = True  # Not enabled, so considered complete
         
         # Check .env file existence
         env_file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
@@ -1243,11 +1848,55 @@ class PrivateEndpointHealthChecker:
             'missing_required': missing_required,
             'missing_optional': missing_optional,
             'auth_method': auth_method,
-            'has_api_keys': has_api_keys,
+            'auth_details': auth_details,
+            'has_legacy_api_keys': has_legacy_api_keys,
             'has_service_principal': has_service_principal,
+            'has_sharepoint_auth': has_sharepoint_auth,
+            'has_key_vault': has_key_vault,
+            'core_services_complete': core_services_complete,
+            'sharepoint_complete': sharepoint_complete,
             'env_status': env_status,
-            'is_configuration_complete': len(missing_required) == 0,
-            'var_definitions': env_var_definitions
+            'is_configuration_complete': len(missing_required) == 0 and core_services_complete,
+            'var_definitions': env_var_definitions,
+            # Configuration health summary
+            'configuration_health': {
+                'azure_openai': {
+                    'complete': bool(os.getenv('AZURE_OPENAI_ENDPOINT') and os.getenv('AZURE_OPENAI_DEPLOYMENT')),
+                    'embedding_configured': bool(os.getenv('AZURE_OPENAI_EMBEDDING_DEPLOYMENT')),
+                    'multi_endpoint': bool(os.getenv('AZURE_OPENAI_ENDPOINT_41'))
+                },
+                'document_intelligence': {
+                    'complete': bool(os.getenv('DOCUMENT_INTEL_ENDPOINT')),
+                    'multi_alias': bool(os.getenv('AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT'))
+                },
+                'azure_search': {
+                    'complete': bool(os.getenv('AZURE_SEARCH_ENDPOINT')),
+                    'service_name_configured': bool(os.getenv('AZURE_SEARCH_SERVICE'))
+                },
+                'azure_storage': {
+                    'complete': bool(os.getenv('AZURE_STORAGE_ACCOUNT_NAME') and os.getenv('AZURE_STORAGE_ACCOUNT_URL')),
+                    'container_configured': bool(os.getenv('AZURE_STORAGE_CONTAINER'))
+                },
+                'sharepoint': {
+                    'enabled': os.getenv('SHAREPOINT_CONNECTOR_ENABLED', '').lower() == 'true',
+                    'auth_complete': has_sharepoint_auth,
+                    'location_configured': bool(os.getenv('SHAREPOINT_SITE_DOMAIN')),
+                    'complete': (os.getenv('SHAREPOINT_CONNECTOR_ENABLED', '').lower() == 'true' and 
+                               has_sharepoint_auth and bool(os.getenv('SHAREPOINT_SITE_DOMAIN'))) or 
+                               (os.getenv('SHAREPOINT_CONNECTOR_ENABLED', '').lower() != 'true')  # Complete if disabled
+                },
+                'azure_keyvault': {
+                    'enabled': bool(os.getenv('AZURE_KEY_VAULT_ENDPOINT')),
+                    'complete': True,  # Key Vault is always optional and complete if not used
+                    'configured': bool(os.getenv('AZURE_KEY_VAULT_ENDPOINT') and os.getenv('AZURE_KEY_VAULT_NAME'))
+                },
+                'function_app': {
+                    'enabled': bool(os.getenv('AGENT_FUNC_KEY')),
+                    'complete': True,  # Function app is optional and complete if not used
+                    'configured': bool(os.getenv('AGENT_FUNC_KEY')),
+                    'deployment_configured': bool(os.getenv('MODEL_DEPLOYMENT_NAME'))
+                }
+            }
         }
     
     def generate_env_guidance(self, validation_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -1263,88 +1912,173 @@ class PrivateEndpointHealthChecker:
         missing_required = validation_result['missing_required']
         missing_optional = validation_result['missing_optional']
         auth_method = validation_result['auth_method']
+        auth_details = validation_result.get('auth_details', [])
         env_file_exists = validation_result['env_file_exists']
         var_definitions = validation_result['var_definitions']
+        configuration_health = validation_result.get('configuration_health', {})
+        core_services_complete = validation_result.get('core_services_complete', False)
         
-        # Generate guidance message
-        if len(missing_required) == 0:
-            if auth_method == 'managed_identity':
-                guidance_message = "✅ **Configuration Complete**: All required variables are set for managed identity authentication."
-            elif auth_method == 'api_keys':
-                guidance_message = "✅ **Configuration Complete**: All required variables are set for API key authentication."
-            elif auth_method == 'service_principal':
-                guidance_message = "✅ **Configuration Complete**: All required variables are set for service principal authentication."
-            else:
-                guidance_message = "⚠️ **Configuration Review**: Required variables are set but authentication method is unclear."
+        # Generate comprehensive guidance message
+        if len(missing_required) == 0 and core_services_complete:
+            auth_summary = ' | '.join(auth_details) if auth_details else auth_method.replace('_', ' ').title()
+            guidance_message = f"✅ **Configuration Complete**: All required services configured. Authentication: {auth_summary}"
+        elif len(missing_required) == 0:
+            guidance_message = f"⚠️ **Partial Configuration**: Required variables set but some core services incomplete."
         else:
             guidance_message = f"❌ **Configuration Incomplete**: {len(missing_required)} required variables are missing."
         
-        # Generate next steps
+        # Generate service-specific status
+        service_status = []
+        for service, health in configuration_health.items():
+            service_name = service.replace('_', ' ').title()
+            if health.get('complete', False):
+                service_status.append(f"✅ {service_name}")
+            elif health.get('enabled', True):  # Enabled but incomplete
+                service_status.append(f"⚠️ {service_name}")
+            else:
+                service_status.append(f"🔄 {service_name} (Disabled)")
+        
+        # Generate detailed next steps based on current state
         next_steps = []
         
         if not env_file_exists:
-            next_steps.append("1. Create a `.env` file in your project root directory")
+            next_steps.append("1. 📁 Create a `.env` file in your project root directory")
         
         if missing_required:
-            next_steps.append("2. Add the missing required environment variables:")
+            next_steps.append("2. 🔧 Add missing required variables:")
             for var in missing_required:
-                next_steps.append(f"   - {var}: {var_definitions[var]['description']}")
+                category = var_definitions[var]['category']
+                next_steps.append(f"   • {var} ({category}): {var_definitions[var]['description']}")
         
-        next_steps.append("3. Choose your authentication method:")
-        next_steps.append("   - **Managed Identity** (recommended for Azure VMs): No additional setup needed")
-        next_steps.append("   - **API Keys**: Add *_KEY variables for each service")
-        next_steps.append("   - **Service Principal**: Add AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID")
+        # Service-specific recommendations
+        service_recommendations = []
         
-        next_steps.append("4. Restart the application after updating the .env file")
+        # Azure OpenAI recommendations
+        openai_health = configuration_health.get('azure_openai', {})
+        if not openai_health.get('complete', False):
+            service_recommendations.append("🤖 **REQUIRED**: Azure OpenAI - Configure AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_DEPLOYMENT")
+        elif not openai_health.get('embedding_configured', False):
+            service_recommendations.append("🔍 **OPTIONAL**: Azure OpenAI Embeddings - Consider configuring AZURE_OPENAI_EMBEDDING_DEPLOYMENT for vector search")
         
-        # Generate sample .env content
+        # Storage recommendations
+        storage_health = configuration_health.get('azure_storage', {})
+        if not storage_health.get('complete', False):
+            service_recommendations.append("💾 **REQUIRED**: Azure Storage - Configure AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_ACCOUNT_URL")
+        
+        # SharePoint recommendations (only if enabled)
+        sharepoint_health = configuration_health.get('sharepoint', {})
+        if sharepoint_health.get('enabled', False) and not sharepoint_health.get('auth_complete', False):
+            service_recommendations.append("📋 **SHAREPOINT**: Complete authentication setup (SHAREPOINT_CLIENT_ID, SHAREPOINT_CLIENT_SECRET)")
+        elif sharepoint_health.get('enabled', False) and not sharepoint_health.get('location_configured', False):
+            service_recommendations.append("📋 **SHAREPOINT**: Configure location settings (SHAREPOINT_SITE_DOMAIN)")
+        
+        # Function App recommendations (only if you want to use it)
+        function_health = configuration_health.get('function_app', {})
+        if not function_health.get('configured', False):
+            service_recommendations.append("⚡ **OPTIONAL**: Function App - Configure AGENT_FUNC_KEY for serverless functionality (only if needed)")
+        
+        # Key Vault recommendations (only if you want to use it)
+        keyvault_health = configuration_health.get('azure_keyvault', {})
+        if keyvault_health.get('enabled', False) and not keyvault_health.get('configured', False):
+            service_recommendations.append("🔐 **OPTIONAL**: Key Vault - Complete configuration (AZURE_KEY_VAULT_NAME)")
+        
+        # Only show service recommendations if there are actual issues
+        if service_recommendations:
+            next_steps.append("3. 🎯 Service-specific recommendations:")
+            next_steps.extend([f"   • {rec}" for rec in service_recommendations])
+        else:
+            next_steps.append("3. ✅ All required services are properly configured!")
+        
+        next_steps.append("4. 🔐 Authentication method summary:")
+        if auth_method == 'managed_identity':
+            next_steps.append("   • ✅ Managed Identity (recommended for private endpoints)")
+            next_steps.append("   • No additional authentication setup required")
+        elif auth_method == 'service_principal':
+            next_steps.append("   • 🔑 Service Principal authentication detected")
+            next_steps.append("   • Ensure AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID are correct")
+        elif auth_method == 'api_keys':
+            next_steps.append("   • ⚠️ Legacy API Key authentication detected")
+            next_steps.append("   • Consider migrating to Managed Identity for better security")
+        
+        next_steps.append("5. 🔄 Restart the application after updating the .env file")
+        
+        # Generate comprehensive sample .env content organized by categories
         sample_env_lines = []
-        sample_env_lines.append("# Azure Service Endpoints (Required)")
-        sample_env_lines.append("#" + "="*50)
         
-        # Add required variables
-        for var_name, var_info in var_definitions.items():
-            if var_info['required']:
-                sample_env_lines.append(f"{var_name}={var_info['example']}")
+        # Header
+        sample_env_lines.extend([
+            "# ── Azure RAG Demo Environment Configuration ─────────────────────────────",
+            "# Complete configuration template with all available options",
+            "# Required variables are marked with (REQUIRED)",
+            "# Optional variables are marked with (OPTIONAL)",
+            ""
+        ])
         
-        sample_env_lines.append("")
-        sample_env_lines.append("# Authentication Method 1: API Keys (Optional)")
-        sample_env_lines.append("#" + "="*50)
-        sample_env_lines.append("# Uncomment these if you want to use API key authentication")
+        # Organize by categories
+        categories = {
+            'azure_openai_core': '── Azure OpenAI Configuration (Core) ─────────────────────────────',
+            'azure_openai_extended': '── Azure OpenAI Extended Configuration ─────────────────────────────',
+            'azure_embeddings': '── Azure OpenAI Embedding Configuration ─────────────────────────────',
+            'document_intelligence': '── Document Intelligence Configuration ─────────────────────────────',
+            'azure_search': '── Azure Search Configuration ─────────────────────────────',
+            'azure_storage': '── Azure Storage Configuration ─────────────────────────────',
+            'azure_keyvault': '── Azure Key Vault Configuration ─────────────────────────────',
+            'sharepoint_auth': '── SharePoint Authentication ─────────────────────────────',
+            'sharepoint_location': '── SharePoint Location Configuration ─────────────────────────────',
+            'sharepoint_connector': '── SharePoint Connector Configuration ─────────────────────────────',
+            'function_app': '── Function App Configuration ─────────────────────────────',
+            'app_config': '── Application Configuration ─────────────────────────────',
+            'legacy_api_keys': '── Legacy API Keys (Optional - prefer Managed Identity) ─────────────────────────────'
+        }
         
-        for var_name, var_info in var_definitions.items():
-            if var_info['category'] == 'api_keys':
-                sample_env_lines.append(f"# {var_name}={var_info['example']}")
+        for category_key, category_title in categories.items():
+            # Find variables in this category
+            category_vars = {k: v for k, v in var_definitions.items() if v['category'] == category_key}
+            
+            if category_vars:
+                sample_env_lines.append(f"# {category_title}")
+                
+                for var_name, var_info in category_vars.items():
+                    required_label = "(REQUIRED)" if var_info['required'] else "(OPTIONAL)"
+                    comment_prefix = "" if var_info['required'] else "# "
+                    
+                    sample_env_lines.append(f"# {var_info['description']} {required_label}")
+                    sample_env_lines.append(f"{comment_prefix}{var_name}={var_info['example']}")
+                
+                sample_env_lines.append("")
         
-        sample_env_lines.append("")
-        sample_env_lines.append("# Authentication Method 2: Service Principal (Optional)")
-        sample_env_lines.append("#" + "="*50)
-        sample_env_lines.append("# Uncomment these if you want to use service principal authentication")
-        
-        for var_name, var_info in var_definitions.items():
-            if var_info['category'] == 'service_principal':
-                sample_env_lines.append(f"# {var_name}={var_info['example']}")
-        
-        sample_env_lines.append("")
-        sample_env_lines.append("# Optional: Alternative OpenAI Endpoints")
-        sample_env_lines.append("#" + "="*50)
-        
-        for var_name, var_info in var_definitions.items():
-            if var_info['category'] == 'openai_alternatives':
-                sample_env_lines.append(f"# {var_name}={var_info['example']}")
-        
-        sample_env_lines.append("")
-        sample_env_lines.append("# Optional: SharePoint Integration")
-        sample_env_lines.append("#" + "="*50)
-        
-        for var_name, var_info in var_definitions.items():
-            if var_info['category'] == 'sharepoint':
-                sample_env_lines.append(f"# {var_name}={var_info['example']}")
+        # Add authentication guidance
+        sample_env_lines.extend([
+            "# ── Authentication Method Selection ─────────────────────────────",
+            "# Choose ONE authentication method:",
+            "#",
+            "# Option 1: Managed Identity (RECOMMENDED for Azure VMs/App Services)",
+            "#   - No additional configuration needed",
+            "#   - Most secure for private endpoints",
+            "#",
+            "# Option 2: Service Principal",
+            "#   - Uncomment and configure: AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID",
+            "#",
+            "# Option 3: Legacy API Keys (NOT RECOMMENDED for production)",
+            "#   - Uncomment and configure: *_KEY variables",
+            "#   - Less secure, harder to manage"
+        ])
         
         return {
             'guidance_message': guidance_message,
+            'service_status': service_status,
             'next_steps': next_steps,
             'sample_env_content': '\n'.join(sample_env_lines),
+            'missing_count': len(missing_required),
+            'optional_missing_count': len(missing_optional),
+            'auth_method': auth_method,
+            'auth_details': auth_details,
+            'configuration_health': configuration_health,
+            'recommendations': {
+                'critical': [step for step in next_steps if '❌' in step or 'REQUIRED' in step],
+                'improvements': [step for step in next_steps if '⚠️' in step or 'OPTIONAL' in step],
+                'good_practices': [step for step in next_steps if '✅' in step or 'recommended' in step.lower()]
+            },
             'auth_recommendations': {
                 'managed_identity': {
                     'recommended': True,

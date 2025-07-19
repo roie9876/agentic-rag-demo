@@ -452,67 +452,234 @@ This comprehensive pipeline ensures that Office files and PDFs from SharePoint a
 
 ---
 
-## Environment variables (`.env`)
+## 🔧 Environment Configuration
 
-Below are the main environment variables used by this project. **Do not use real secrets in documentation or commits.**
+This application uses environment variables for configuration. Copy `.env.example` to `.env` and update with your Azure service credentials.
 
-### Core Azure Services
-| Key | Example value (fake) | Description |
-|-----|----------------------|-------------|
-| `AZURE_OPENAI_ENDPOINT` | `https://my-openai.openai.azure.com/` | Azure OpenAI endpoint |
-| `AZURE_OPENAI_KEY` | `YOUR-OPENAI-KEY` | Azure OpenAI API key |
-| `AZURE_OPENAI_API_VERSION` | `2025-01-01-preview` | OpenAI API version |
-| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4.1` | Chat model deployment name |
-| `AZURE_OPENAI_CHATGPT_DEPLOYMENT` | `gpt-4.1` | **Must match actual deployment** |
-| `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | `text-embedding-3-large` | Embedding model deployment |
-| `AZURE_SEARCH_ENDPOINT` | `https://my-search.search.windows.net` | Azure AI Search endpoint |
-| `DOCUMENT_INTEL_ENDPOINT` | `https://my-formrec.cognitiveservices.azure.com` | Document Intelligence endpoint |
-| `DOCUMENT_INTEL_KEY` | `YOUR-DOC-INTEL-KEY` | Document Intelligence API key |
+### 🚀 Quick Setup
+```bash
+cp .env.example .env
+# Edit .env with your Azure service credentials
+```
 
-### SharePoint Configuration
-| Key | Example value | Description |
-|-----|---------------|-------------|
-| `SHAREPOINT_TENANT_ID` | `00000000-0000-0000-0000-000000000000` | SharePoint tenant ID |
-| `SHAREPOINT_CLIENT_ID` | `00000000-0000-0000-0000-000000000000` | App registration client ID |
-| `SHAREPOINT_CLIENT_SECRET` | `YOUR-SECRET` | App registration client secret |
-| `SHAREPOINT_SITE_DOMAIN` | `mytenant.sharepoint.com` | SharePoint site domain |
-| `SHAREPOINT_SITE_NAME` | `mysite` | SharePoint site name (blank for root) |
-| `SHAREPOINT_SITE_FOLDER` | `/Documents` | SharePoint folder path |
-| `SHAREPOINT_CONNECTOR_ENABLED` | `true` | Enable SharePoint connector |
+### 📋 Environment Variables Reference
 
-### Azure Key Vault (Optional)
-| Key | Example value | Description |
-|-----|---------------|-------------|
-| `AZURE_KEY_VAULT_NAME` | `my-keyvault` | Azure Key Vault name |
-| `AZURE_KEY_VAULT_ENDPOINT` | `https://my-keyvault.vault.azure.net/` | Key Vault endpoint |
-| `SHAREPOINT_CLIENT_SECRET_NAME` | `sharepointClientSecret` | Secret name in Key Vault |
+Below is a comprehensive guide to all environment variables used by this application, organized by service category:
 
-### Multimodal Processing
-| Key | Example value | Description |
-|-----|---------------|-------------|
-| `MULTIMODAL` | `true` | Enable multimodal processing |
-| `AZURE_STORAGE_CONNECTION_STRING` | `DefaultEndpointsProtocol=https;...` | Storage for images |
-| `AZURE_STORAGE_CONTAINER` | `images` | Storage container name |
+---
 
-### Function Configuration
-| Key | Example value | Description |
-|-----|---------------|-------------|
-| `AGENT_FUNC_KEY` | `YOUR-FUNCTION-KEY` | Azure Function host key |
-| `PROJECT_ENDPOINT` | `https://my-project.services.ai.azure.com/...` | AI Studio project endpoint |
-| `API_VERSION` | `2025-05-01-preview` | API version for search runtime |
-| `MAX_OUTPUT_SIZE` | `16000` | Max output token size |
-| `TOP_K` | `5` | Default number of top results |
+#### 🤖 Azure OpenAI Configuration
+Core Azure OpenAI service settings for chat completions and embeddings.
 
-### SharePoint Functions
-| Key | Example value | Description |
-|-----|---------------|-------------|
-| `SHAREPOINT_INDEXER_FUNCTION_APP` | `sharepoint-indexer` | Indexer function app name |
-| `SHAREPOINT_PURGER_FUNCTION_APP` | `sharepoint-purger` | Purger function app name |
-| `SP_INDEXER_SCHEDULE` | `0 */15 * * * *` | Indexer schedule (every 15 min) |
-| `SP_PURGER_SCHEDULE` | `0 0 2 * * *` | Purger schedule (daily at 2 AM) |
-| `SHAREPOINT_FILES_FORMAT` | `pdf,docx,pptx,xlsx,txt,md,json` | Supported file formats |
+| Variable | Example | Purpose | Required |
+|----------|---------|---------|----------|
+| `AZURE_OPENAI_ENDPOINT` | `https://your-openai.openai.azure.com/` | Primary OpenAI service endpoint | ✅ **Yes** |
+| `AZURE_OPENAI_API_VERSION` | `2025-01-01-preview` | OpenAI API version | ✅ **Yes** |
+| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4.1` | Chat model deployment name | ✅ **Yes** |
+| `AZURE_OPENAI_SERVICE_NAME` | `your-openai-resource` | Service name (extracted from endpoint) | ✅ **Yes** |
+| `AZURE_OPENAI_ENDPOINT_41` | `https://your-openai.openai.azure.com/` | _41 suffix endpoint (auto-populated) | ✅ **Yes** |
+| `AZURE_OPENAI_API_VERSION_41` | `2025-01-01-preview` | _41 suffix API version (auto-populated) | ✅ **Yes** |
+| `AZURE_OPENAI_DEPLOYMENT_41` | `gpt-4.1` | _41 suffix deployment (auto-populated) | ✅ **Yes** |
+| `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | `text-embedding-3-large` | Embedding model deployment | ✅ **Yes** |
+| `AZURE_OPENAI_EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model name | ✅ **Yes** |
+| `AZURE_OPENAI_CHATGPT_DEPLOYMENT` | `gpt-4.1` | Chat deployment (must match actual deployment) | ✅ **Yes** |
 
-> Fill these once in `.env`. The **Function Config** tab can push them to Azure Functions automatically.
+> **🔒 Authentication**: When using **Managed Identity** (recommended), comment out or remove any `AZURE_OPENAI_KEY*` variables.
+
+---
+
+#### 📄 Document Intelligence Configuration  
+Azure Document Intelligence (Form Recognizer) for advanced document processing.
+
+| Variable | Example | Purpose | Required |
+|----------|---------|---------|----------|
+| `DOCUMENT_INTEL_ENDPOINT` | `https://your-doc-intelligence.cognitiveservices.azure.com/` | Primary Document Intelligence endpoint | ✅ **Yes** |
+| `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` | `https://your-doc-intelligence.cognitiveservices.azure.com/` | Alias for MultimodalProcessor compatibility | ✅ **Yes** |
+| `AZURE_FORMREC_ENDPOINT` | `https://your-doc-intelligence.cognitiveservices.azure.com/` | Backward compatibility alias | ✅ **Yes** |
+| `AZURE_FORMREC_SERVICE` | `https://your-doc-intelligence.cognitiveservices.azure.com/` | Backward compatibility service alias | ✅ **Yes** |
+
+> **📝 Note**: All variables should point to the same Document Intelligence service. Multiple aliases ensure compatibility across different code modules.
+
+---
+
+#### 💾 Azure Storage Configuration
+Blob storage for images and multimodal processing.
+
+| Variable | Example | Purpose | Required |
+|----------|---------|---------|----------|
+| `AZURE_STORAGE_CONTAINER` | `images` | Container name for storing images | ✅ **Yes** |
+| `AZURE_STORAGE_ACCOUNT_NAME` | `yourstorageaccount` | Storage account name (for Managed Identity) | ✅ **Yes** |
+| `AZURE_STORAGE_ACCOUNT_URL` | `https://yourstorageaccount.blob.core.windows.net` | Storage account URL (for Managed Identity) | ✅ **Yes** |
+| `AZURE_STORAGE_CONNECTION_STRING` | `DefaultEndpointsProtocol=https;...` | Connection string (use only if not using Managed Identity) | 🔶 **Optional** |
+
+> **🔒 Security**: Use **Managed Identity** configuration (`ACCOUNT_NAME` + `ACCOUNT_URL`) instead of connection strings for better security.
+
+---
+
+#### 🔍 Azure AI Search Configuration
+Azure AI Search service for vector and hybrid search capabilities.
+
+| Variable | Example | Purpose | Required |
+|----------|---------|---------|----------|
+| `AZURE_SEARCH_ENDPOINT` | `https://your-search-service.search.windows.net` | AI Search service endpoint | ✅ **Yes** |
+| `AZURE_SEARCH_SERVICE` | `your-search-service` | AI Search service name | ✅ **Yes** |
+
+---
+
+#### 🎯 Embedding Configuration
+Dedicated Azure OpenAI resource for embeddings (can be same as main OpenAI service).
+
+| Variable | Example | Purpose | Required |
+|----------|---------|---------|----------|
+| `AZURE_OPENAI_EMBEDDING_ENDPOINT` | `https://your-openai.openai.azure.com/` | Dedicated embedding service endpoint | ✅ **Yes** |
+| `AZURE_OPENAI_EMBEDDING_API_VERSION` | `2023-05-15` | Embedding API version | ✅ **Yes** |
+| `AZURE_OPENAI_EMBEDDING_SERVICE_NAME` | `your-openai-resource` | Embedding service name | ✅ **Yes** |
+
+---
+
+#### ⚡ Function App Configuration
+Azure Functions for automated document processing and agent management.
+
+| Variable | Example | Purpose | Required |
+|----------|---------|---------|----------|
+| `AGENT_FUNC_KEY` | `c97SS6I7odGq...` | Azure Function host key | 🔶 **Optional** |
+| `MODEL_DEPLOYMENT_NAME` | `gpt-4.1` | Model deployment for functions | ✅ **Yes** |
+| `API_VERSION` | `2025-05-01-preview` | Function API version | ✅ **Yes** |
+| `debug` | `false` | Enable debug mode | 🔶 **Optional** |
+| `includesrc` | `true` | Include source in responses | 🔶 **Optional** |
+| `MAX_OUTPUT_SIZE` | `16000` | Maximum output token size | 🔶 **Optional** |
+| `RERANKER_THRESHOLD` | `1` | Reranking threshold | 🔶 **Optional** |
+| `TOP_K` | `5` | Number of top search results | 🔶 **Optional** |
+
+---
+
+#### 🔐 SharePoint Authentication
+Authentication settings for SharePoint integration.
+
+| Variable | Example | Purpose | Required |
+|----------|---------|---------|----------|
+| `AZURE_TENANT_ID` | `5aa7c6e1-452d-4ddb-b6b5-85675861b60a` | Azure AD tenant ID | 🔶 **SharePoint** |
+| `SHAREPOINT_CLIENT_ID` | `53a49e2d-001f-477d-af20-2485ad0c5888` | SharePoint app client ID | 🔶 **SharePoint** |
+| `SHAREPOINT_CLIENT_SECRET` | `your-client-secret` | SharePoint app client secret | 🔶 **SharePoint** |
+| `AGENTIC_APP_SPN_CERT_PATH` | `/path/to/certificate.pfx` | Certificate file path (alternative to secret) | 🔶 **SharePoint** |
+| `AGENTIC_APP_SPN_CERT_PASSWORD` | `your-cert-password` | Certificate password | 🔶 **SharePoint** |
+
+---
+
+#### 📍 SharePoint Location Configuration
+SharePoint site and folder settings.
+
+| Variable | Example | Purpose | Required |
+|----------|---------|---------|----------|
+| `SHAREPOINT_SITE_DOMAIN` | `yourtenant.sharepoint.com` | SharePoint site domain | 🔶 **SharePoint** |
+| `SHAREPOINT_SITE_NAME` | ` ` | Site name (blank for root site) | 🔶 **SharePoint** |
+| `SHAREPOINT_DRIVE_NAME` | `Documents` | SharePoint drive/library name | 🔶 **SharePoint** |
+| `SHAREPOINT_SITE_FOLDER` | `/your-folder-path` | Specific folder to index | 🔶 **SharePoint** |
+
+---
+
+#### 🔑 Azure Key Vault Configuration
+Optional Key Vault integration for secure secret management.
+
+| Variable | Example | Purpose | Required |
+|----------|---------|---------|----------|
+| `AZURE_KEY_VAULT_ENDPOINT` | `https://your-keyvault.vault.azure.net/` | Key Vault endpoint | 🔶 **Optional** |
+| `AZURE_KEY_VAULT_NAME` | `your-keyvault-name` | Key Vault name | 🔶 **Optional** |
+| `SHAREPOINT_CLIENT_SECRET_NAME` | `sharepointClientSecret` | Secret name in Key Vault | 🔶 **Optional** |
+
+---
+
+#### ⚙️ SharePoint Connector Configuration
+SharePoint integration behavior settings.
+
+| Variable | Example | Purpose | Required |
+|----------|---------|---------|----------|
+| `SHAREPOINT_CONNECTOR_ENABLED` | `true` | Enable SharePoint connector | 🔶 **SharePoint** |
+| `SHAREPOINT_INDEX_DIRECT` | `true` | Enable direct indexing | 🔶 **SharePoint** |
+| `SHAREPOINT_OPTIMIZATION_ENABLED` | `true` | Enable processing optimizations | 🔶 **SharePoint** |
+
+---
+
+#### 🎨 Multimodal Configuration
+Settings for advanced image and multimodal document processing.
+
+| Variable | Example | Purpose | Required |
+|----------|---------|---------|----------|
+| `MULTIMODAL` | `true` | Enable multimodal processing | 🔶 **Optional** |
+| `CHUNK_OVERLAP` | `200` | Character overlap between chunks | 🔶 **Optional** |
+
+---
+
+### 🔒 Authentication Methods
+
+The application supports multiple authentication methods:
+
+#### 1. **Managed Identity (Recommended)**
+- **Best for**: Production deployments with Azure VMs or Container Apps
+- **Security**: No secrets in environment variables
+- **Setup**: Assign appropriate RBAC roles to your managed identity
+- **Required Roles**:
+  - `Cognitive Services OpenAI User` (Azure OpenAI)
+  - `Search Index Data Reader` + `Search Service Contributor` (AI Search)
+  - `Storage Blob Data Reader` (Storage)
+  - `Key Vault Secrets User` (Key Vault, if used)
+
+#### 2. **API Keys**
+- **Best for**: Development and testing
+- **Security**: Store keys securely, never commit to version control
+- **Setup**: Add `*_KEY` variables to `.env` file
+
+#### 3. **Certificate Authentication (SharePoint)**
+- **Best for**: SharePoint integration with enhanced security
+- **Setup**: Upload certificate to Azure AD app registration
+- **Variables**: Use `CERT_PATH` and `CERT_PASSWORD` instead of `CLIENT_SECRET`
+
+---
+
+### 🎯 Environment Variable Categories
+
+| **Category** | **Status** | **Description** |
+|-------------|------------|-----------------|
+| **🤖 Azure OpenAI** | ✅ **Required** | Core AI capabilities for chat and embeddings |
+| **📄 Document Intelligence** | ✅ **Required** | Advanced document processing and OCR |
+| **🔍 Azure Search** | ✅ **Required** | Vector and hybrid search capabilities |
+| **💾 Azure Storage** | ✅ **Required** | Blob storage for images and assets |
+| **⚡ Function App** | 🔶 **Optional** | Automated processing and workflows |
+| **🔐 SharePoint** | 🔶 **Optional** | Document sync and collaboration |
+| **🔑 Key Vault** | 🔶 **Optional** | Enhanced secret management |
+| **🎨 Multimodal** | 🔶 **Optional** | Advanced image processing |
+
+---
+
+### 🚀 Quick Configuration Examples
+
+#### **Minimal Configuration (Core Services Only)**
+```bash
+# Azure OpenAI
+AZURE_OPENAI_ENDPOINT=https://your-openai.openai.azure.com/
+AZURE_OPENAI_API_VERSION=2025-01-01-preview
+AZURE_OPENAI_DEPLOYMENT=gpt-4.1
+AZURE_OPENAI_SERVICE_NAME=your-openai-resource
+
+# Document Intelligence  
+DOCUMENT_INTEL_ENDPOINT=https://your-doc-intelligence.cognitiveservices.azure.com/
+
+# Azure Search
+AZURE_SEARCH_ENDPOINT=https://your-search-service.search.windows.net
+AZURE_SEARCH_SERVICE=your-search-service
+
+# Azure Storage
+AZURE_STORAGE_ACCOUNT_NAME=yourstorageaccount
+AZURE_STORAGE_ACCOUNT_URL=https://yourstorageaccount.blob.core.windows.net
+AZURE_STORAGE_CONTAINER=images
+```
+
+#### **Full Configuration (All Features)**
+```bash
+# Use .env.example as template - includes all variables with placeholder values
+cp .env.example .env
+# Edit .env with your actual service credentials
+```
 
 ---
 
