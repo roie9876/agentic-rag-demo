@@ -194,12 +194,15 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your Azure service credentials
 
-# Deploy with private endpoints (one-click)
+# Method 1: Universal deployment script (Recommended)
+./deploy-ai-foundry.sh your-resource-group [subscription-id]
+
+# Method 2: Manual deployment with relative paths
 cd 15-private-network-standard-agent-setup
 az deployment group create \
   --resource-group your-rg \
   --template-file main.json \
-  --parameters @main.json.parameters
+  --parameters @azuredeploy.parameters.json
 
 # Start the application
 cd ..

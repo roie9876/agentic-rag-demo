@@ -109,8 +109,44 @@ class AIFoundryHubDeploymentService:
         """Initialize the deployment service."""
         self.credential = None
         self.cli_credential = None
-        self.template_path = "/home/azureuser/agentic-rag-demo/15-private-network-standard-agent-setup"
+        # Dynamic path detection - works on any machine with any user
+        self.template_path = self._get_template_path()
         # Lazy credential initialization - only when needed
+    
+    def _get_template_path(self) -> str:
+        """Get the template path dynamically, works on any machine."""
+        import os
+        
+        # Try to find project root by looking for agentic-rag-demo.py
+        current_file = os.path.abspath(__file__)
+        current_dir = os.path.dirname(current_file)
+        
+        # Go up directories until we find the project root
+        search_dir = current_dir
+        max_levels = 10  # Prevent infinite loops
+        
+        for _ in range(max_levels):
+            # Check if this is the project root
+            if os.path.exists(os.path.join(search_dir, "agentic-rag-demo.py")):
+                template_path = os.path.join(search_dir, "15-private-network-standard-agent-setup")
+                logger.info(f"Found template path: {template_path}")
+                return template_path
+            
+            parent_dir = os.path.dirname(search_dir)
+            if parent_dir == search_dir:  # Reached filesystem root
+                break
+            search_dir = parent_dir
+        
+        # Fallback: try relative path from current working directory
+        cwd_template_path = os.path.join(os.getcwd(), "15-private-network-standard-agent-setup")
+        if os.path.exists(cwd_template_path):
+            logger.info(f"Using fallback template path: {cwd_template_path}")
+            return cwd_template_path
+        
+        # Last resort: use original path (will fail on different machines but maintains backward compatibility)
+        fallback_path = "/home/azureuser/agentic-rag-demo/15-private-network-standard-agent-setup"
+        logger.warning(f"Could not find template path dynamically, using fallback: {fallback_path}")
+        return fallback_path
     
     def _initialize_credentials(self):
         """Initialize Azure credentials lazily."""
