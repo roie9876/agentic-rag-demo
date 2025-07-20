@@ -1,6 +1,10 @@
 # Agentic RAG Demo
 
-A comprehensive demonstration of Agentic Retrieval-Augmented Generation on Azure using Azure OpenAI, Azure AI Search, and SharePoint integration with advanced document processing capabilities.
+A comprehensive demonstration of Agentic Retrieval-Augmented Generati### 🖥️ Main Application Interface
+
+![Main Application UI](media/main-app.png)
+
+*The Streamlit-based user interface showing all available tabs and functionality for comprehensive RAG deployment management* Azure using Azure OpenAI, Azure AI Search, and SharePoint integration with advanced document processing capabilities.
 
 ## ✨ Key Features
 
