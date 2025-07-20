@@ -150,17 +150,18 @@ class AIFoundryHubDeploymentService:
                 for sub in subscriptions_data:
                     subscription_info = {
                         "subscription_id": sub.get("id", ""),
-                        "display_name": sub.get("name", "Unknown"),
+                        "subscription_name": sub.get("name", "Unknown"),  # Use subscription_name for consistency
+                        "display_name": sub.get("name", "Unknown"),  # Keep for backward compatibility
                         "state": sub.get("state", "Unknown"),
                         "tenantId": sub.get("tenantId", ""),
                         "isDefault": sub.get("isDefault", False),
                         "user": sub.get("user", {})
                     }
                     subscriptions.append(subscription_info)
-                    logger.debug(f"Subscription: {subscription_info['display_name']} ({subscription_info['subscription_id']})")
+                    logger.debug(f"Subscription: {subscription_info['subscription_name']} ({subscription_info['subscription_id']})")
                 
                 # Sort subscriptions: default first, then alphabetically
-                subscriptions.sort(key=lambda x: (not x.get("isDefault", False), x.get("display_name", "")))
+                subscriptions.sort(key=lambda x: (not x.get("isDefault", False), x.get("subscription_name", "")))
                 
                 return subscriptions
                 
@@ -180,37 +181,18 @@ class AIFoundryHubDeploymentService:
     def get_current_subscription_info(self) -> Optional[Dict[str, str]]:
         """Get information about the current default subscription."""
         try:
-            from azure.identity import DefaultAzureCredential
-            from azure.mgmt.subscription import SubscriptionClient
-            import os
+            # Use the comprehensive context method for consistency
+            context_info = self.get_subscription_context_info()
             
-            # Try to get from environment first
-            current_sub_id = os.getenv('AZURE_SUBSCRIPTION_ID')
-            if not current_sub_id:
-                # Try Azure CLI
-                try:
-                    import subprocess
-                    result = subprocess.run(
-                        ['az', 'account', 'show', '--query', 'id', '-o', 'tsv'],
-                        capture_output=True, text=True, check=True
-                    )
-                    current_sub_id = result.stdout.strip()
-                except:
-                    return None
-            
-            if current_sub_id:
-                credential = DefaultAzureCredential()
-                subscription_client = SubscriptionClient(credential)
-                
-                try:
-                    sub = subscription_client.subscriptions.get(current_sub_id)
-                    return {
-                        "subscription_id": sub.subscription_id,
-                        "display_name": sub.display_name,
-                        "state": sub.state
-                    }
-                except:
-                    return None
+            if context_info and context_info.get('subscription_id') not in ['Not logged in', 'Error']:
+                return {
+                    "subscription_id": context_info.get('subscription_id'),
+                    "subscription_name": context_info.get('subscription_name'),
+                    "display_name": context_info.get('subscription_name'),  # For backward compatibility
+                    "state": context_info.get('state'),
+                    "tenant_id": context_info.get('tenant_id'),
+                    "user_name": context_info.get('user_name')
+                }
             
             return None
         except Exception as e:
@@ -235,19 +217,33 @@ class AIFoundryHubDeploymentService:
             return self.get_available_subscriptions()
     
     def get_resource_groups_for_subscription(self, subscription_id: str) -> List[str]:
-        """Get list of resource groups for a specific subscription."""
+        """Get list of resource groups for a specific subscription using Azure CLI."""
         try:
-            from azure.identity import DefaultAzureCredential
-            from azure.mgmt.resource import ResourceManagementClient
+            # Check if Azure CLI is logged in
+            logged_in, error = check_azure_cli_login()
+            if not logged_in:
+                logger.error(f"Azure CLI not logged in: {error}")
+                return []
+
+            # Use Azure CLI which is more reliable than SDK for cross-subscription queries
+            cmd = ["az", "group", "list", "--subscription", subscription_id, "--query", "[].name", "--output", "json"]
             
-            credential = DefaultAzureCredential()
-            resource_client = ResourceManagementClient(credential, subscription_id)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
             
-            resource_groups = []
-            for rg in resource_client.resource_groups.list():
-                resource_groups.append(rg.name)
-            
-            return resource_groups
+            if result.returncode == 0:
+                resource_groups = json.loads(result.stdout)
+                return sorted(resource_groups)
+            else:
+                logger.error(f"Failed to get resource groups for subscription {subscription_id}: {result.stderr}")
+                return []
+        except subprocess.TimeoutExpired:
+            logger.error(f"Timeout getting resource groups for subscription {subscription_id}")
+            return []
         except Exception as e:
             logger.error(f"Failed to get resource groups for subscription {subscription_id}: {e}")
             return []
@@ -255,7 +251,13 @@ class AIFoundryHubDeploymentService:
     def suggest_dns_zone_resource_groups(self, subscription_id: str) -> List[str]:
         """Get resource groups with common DNS zone naming patterns prioritized."""
         try:
+            logger.info(f"Getting resource groups for DNS zone subscription: {subscription_id}")
             all_rgs = self.get_resource_groups_for_subscription(subscription_id)
+            logger.info(f"Found {len(all_rgs)} resource groups in subscription {subscription_id}")
+            
+            if not all_rgs:
+                logger.warning(f"No resource groups found in subscription {subscription_id}")
+                return []
             
             # Common patterns for DNS zone resource groups
             dns_patterns = [
@@ -283,21 +285,21 @@ class AIFoundryHubDeploymentService:
             
             prioritized_rgs.sort(key=sort_key)
             
-            return prioritized_rgs + remaining_rgs
+            result = prioritized_rgs + remaining_rgs
+            logger.info(f"Returning {len(result)} resource groups, {len(prioritized_rgs)} prioritized")
+            return result
             
         except Exception as e:
             logger.error(f"Failed to suggest DNS zone resource groups: {e}")
-            return self.get_resource_groups_for_subscription(subscription_id)
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Fallback to basic resource group listing
+            fallback_rgs = self.get_resource_groups_for_subscription(subscription_id)
+            logger.info(f"Fallback returned {len(fallback_rgs)} resource groups")
+            return fallback_rgs
 
     def validate_dns_zones_exist(self, subscription_id: str, resource_group_name: str) -> Dict[str, bool]:
-        """Validate that required private DNS zones exist in the specified location."""
+        """Validate that required private DNS zones exist in the specified location using Azure CLI."""
         try:
-            from azure.identity import DefaultAzureCredential
-            from azure.mgmt.privatedns import PrivateDnsManagementClient
-            
-            credential = DefaultAzureCredential()
-            dns_client = PrivateDnsManagementClient(credential, subscription_id)
-            
             required_zones = [
                 "privatelink.services.ai.azure.com",
                 "privatelink.openai.azure.com",
@@ -307,17 +309,56 @@ class AIFoundryHubDeploymentService:
                 "privatelink.documents.azure.com"
             ]
             
-            zone_status = {}
-            for zone_name in required_zones:
-                try:
-                    dns_client.private_zones.get(resource_group_name, zone_name)
-                    zone_status[zone_name] = True
-                except Exception:
-                    zone_status[zone_name] = False
+            logger.info(f"🔍 Validating DNS zones in subscription {subscription_id[:8]}..., resource group: {resource_group_name}")
             
-            return zone_status
+            # Use Azure CLI to list private DNS zones in the resource group
+            cmd = [
+                "az", "network", "private-dns", "zone", "list",
+                "--subscription", subscription_id,
+                "--resource-group", resource_group_name
+            ]
+            
+            logger.debug(f"Running DNS zone discovery command: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode != 0:
+                logger.error(f"❌ Failed to list private DNS zones: {result.stderr}")
+                logger.error(f"Command: {' '.join(cmd)}")
+                return {}
+            
+            # Parse the JSON response
+            try:
+                zones_data = json.loads(result.stdout)
+                existing_zones = [zone.get('name', '') for zone in zones_data if zone.get('name')]
+                
+                logger.info(f"📍 Found {len(existing_zones)} private DNS zones in {resource_group_name}")
+                logger.debug(f"Existing zones: {existing_zones}")
+                
+                # Check each required zone
+                zone_status = {}
+                for zone_name in required_zones:
+                    exists = zone_name in existing_zones
+                    zone_status[zone_name] = exists
+                    status_emoji = "✅" if exists else "❌"
+                    logger.debug(f"{status_emoji} {zone_name}: {'Found' if exists else 'Not found'}")
+                
+                found_count = sum(zone_status.values())
+                logger.info(f"🎯 DNS Zone validation complete: {found_count}/{len(required_zones)} required zones found")
+                
+                return zone_status
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ Failed to parse DNS zones JSON response: {e}")
+                logger.debug(f"Raw output: {result.stdout[:500]}...")
+                return {}
+            
+        except subprocess.TimeoutExpired:
+            logger.error(f"❌ Timeout validating DNS zones in {resource_group_name}")
+            return {}
         except Exception as e:
-            logger.error(f"Failed to validate DNS zones: {e}")
+            logger.error(f"❌ Unexpected error validating DNS zones: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
             return {}
 
     def validate_template_path(self) -> Tuple[bool, str]:
@@ -2361,7 +2402,8 @@ class AIFoundryHubDeploymentService:
             for sub in subscription_client.subscriptions.list():
                 subscriptions.append({
                     "subscription_id": sub.subscription_id,
-                    "display_name": sub.display_name,
+                    "subscription_name": sub.display_name,  # Use subscription_name for consistency
+                    "display_name": sub.display_name,  # Keep for backward compatibility
                     "state": sub.state,
                     "tenantId": getattr(sub, 'tenant_id', ''),
                     "isDefault": False,  # SDK doesn't provide default info

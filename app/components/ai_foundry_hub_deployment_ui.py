@@ -486,9 +486,13 @@ class AIFoundryHubDeploymentUI:
                         # Resource group selection with intelligent suggestions
                         if config.dns_zone_subscription_id:
                             st.markdown("#### 📁 DNS Zone Resource Group Selection")
-                            resource_groups = self.service.suggest_dns_zone_resource_groups(config.dns_zone_subscription_id)
+                            
+                            with st.spinner(f"Loading resource groups from subscription {config.dns_zone_subscription_id[:8]}..."):
+                                resource_groups = self.service.suggest_dns_zone_resource_groups(config.dns_zone_subscription_id)
                             
                             if resource_groups:
+                                st.info(f"✅ Found {len(resource_groups)} resource groups in subscription")
+                                
                                 # Format resource group options with hints
                                 rg_options = []
                                 for rg in resource_groups:
@@ -522,6 +526,12 @@ class AIFoundryHubDeploymentUI:
                                     key="dns_zone_rg_selector",
                                     on_change=on_dns_rg_change
                                 )
+                                
+                                # Add refresh button
+                                col_rg1, col_rg2 = st.columns([4, 1])
+                                with col_rg2:
+                                    if st.button("🔄 Refresh", key="refresh_dns_rgs", help="Refresh resource group list"):
+                                        st.rerun()
                                 
                                 # Update session state and config
                                 st.session_state[dns_rg_key] = selected_rg
@@ -569,8 +579,131 @@ class AIFoundryHubDeploymentUI:
                                             st.info("💡 **Auto-Creation Enabled**: Missing DNS zones will be created during deployment")
                                         else:
                                             st.warning("⚠️ **Action Required**: Please create the missing DNS zones or enable auto-creation")
+                                    else:
+                                        st.error("❌ Unable to validate DNS zones")
+                                        
+                                    # DNS Zone Debug Section
+                                    st.markdown("---")
+                                    col_debug1, col_debug2, col_debug3 = st.columns([2, 2, 1])
+                                    
+                                    with col_debug1:
+                                        if st.button("🔄 Re-check DNS Zones", key="recheck_dns_zones"):
+                                            st.rerun()
+                                    
+                                    with col_debug2:
+                                        if st.button("🐛 Debug DNS Discovery", key="debug_dns_discovery"):
+                                            st.markdown("**🔍 DNS Zone Discovery Debug:**")
+                                            
+                                            with st.spinner("Testing DNS zone discovery..."):
+                                                try:
+                                                    import subprocess
+                                                    import json
+                                                    
+                                                    # Test DNS zone listing with Azure CLI
+                                                    cmd = [
+                                                        "az", "network", "private-dns", "zone", "list",
+                                                        "--subscription", config.dns_zone_subscription_id,
+                                                        "--resource-group", config.dns_zone_resource_group_name
+                                                    ]
+                                                    
+                                                    st.code(" ".join(cmd))
+                                                    
+                                                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                                                    
+                                                    if result.returncode == 0:
+                                                        try:
+                                                            zones_data = json.loads(result.stdout)
+                                                            zone_names = [zone.get('name', 'Unknown') for zone in zones_data]
+                                                            
+                                                            st.success(f"✅ Found {len(zone_names)} private DNS zones")
+                                                            if zone_names:
+                                                                st.markdown("**Existing DNS Zones:**")
+                                                                for i, zone in enumerate(zone_names[:10], 1):  # Show first 10
+                                                                    st.write(f"{i}. {zone}")
+                                                                if len(zone_names) > 10:
+                                                                    st.info(f"... and {len(zone_names) - 10} more zones")
+                                                                
+                                                                # Check which required zones exist
+                                                                required_zones = [
+                                                                    "privatelink.services.ai.azure.com",
+                                                                    "privatelink.openai.azure.com", 
+                                                                    "privatelink.cognitiveservices.azure.com",
+                                                                    "privatelink.search.windows.net",
+                                                                    "privatelink.blob.core.windows.net",
+                                                                    "privatelink.documents.azure.com"
+                                                                ]
+                                                                
+                                                                st.markdown("**Required Zone Check:**")
+                                                                for req_zone in required_zones:
+                                                                    if req_zone in zone_names:
+                                                                        st.success(f"✅ {req_zone}")
+                                                                    else:
+                                                                        st.error(f"❌ {req_zone}")
+                                                            else:
+                                                                st.warning("No private DNS zones found in the resource group")
+                                                                
+                                                        except json.JSONDecodeError as e:
+                                                            st.error(f"❌ Failed to parse zones JSON: {e}")
+                                                            st.text("Raw output:")
+                                                            st.code(result.stdout[:1000])
+                                                    else:
+                                                        st.error(f"❌ Failed to list DNS zones")
+                                                        st.error(f"Error: {result.stderr}")
+                                                        st.markdown("**Possible causes:**")
+                                                        st.markdown("- Resource group doesn't exist")  
+                                                        st.markdown("- No permissions to list private DNS zones")
+                                                        st.markdown("- Azure CLI authentication issue")
+                                                        
+                                                except subprocess.TimeoutExpired:
+                                                    st.error("❌ Timeout - DNS zone discovery took too long")
+                                                except Exception as e:
+                                                    st.error(f"❌ Debug failed: {e}")
+                                                    
+                                    with col_debug3:
+                                        st.markdown("")  # Spacer
                             else:
-                                st.error("❌ No resource groups found in selected subscription")
+                                st.error(f"❌ No resource groups found in selected subscription")
+                                st.markdown("**🔍 Troubleshooting:**")
+                                st.markdown(f"- **Subscription ID**: `{config.dns_zone_subscription_id}`")
+                                st.markdown("- **Possible causes:**")
+                                st.markdown("  - No resource groups exist in this subscription")
+                                st.markdown("  - Access permissions issue")
+                                st.markdown("  - Azure CLI not logged in or expired")
+                                
+                                # Debug button
+                                if st.button("🐛 Test Subscription Access", key="test_dns_sub_access"):
+                                    with st.spinner("Testing subscription access..."):
+                                        try:
+                                            # Test Azure CLI access
+                                            import subprocess
+                                            result = subprocess.run(
+                                                ["az", "account", "show", "--subscription", config.dns_zone_subscription_id],
+                                                capture_output=True,
+                                                text=True,
+                                                timeout=10
+                                            )
+                                            
+                                            if result.returncode == 0:
+                                                st.success("✅ Azure CLI can access the subscription")
+                                                # Try to list resource groups again with debug
+                                                result2 = subprocess.run(
+                                                    ["az", "group", "list", "--subscription", config.dns_zone_subscription_id],
+                                                    capture_output=True,
+                                                    text=True,
+                                                    timeout=15
+                                                )
+                                                if result2.returncode == 0:
+                                                    import json
+                                                    rgs = json.loads(result2.stdout)
+                                                    st.info(f"✅ Found {len(rgs)} resource groups via direct Azure CLI call")
+                                                    if rgs:
+                                                        st.json([rg['name'] for rg in rgs[:5]])  # Show first 5
+                                                else:
+                                                    st.error(f"❌ Azure CLI list groups failed: {result2.stderr}")
+                                            else:
+                                                st.error(f"❌ Cannot access subscription: {result.stderr}")
+                                        except Exception as e:
+                                            st.error(f"❌ Debug test failed: {e}")
                     else:
                         st.error("❌ No enabled subscriptions found")
                 else:
@@ -630,6 +763,9 @@ class AIFoundryHubDeploymentUI:
             ) == "Create New VNet"
             
             if config.network_config.create_new_vnet:
+                # New VNet will be created in the deployment subscription - no selection needed
+                st.info("🏗️ **New VNet**: Will be created in the deployment subscription")
+                
                 # New VNet settings
                 col1, col2 = st.columns(2)
                 
@@ -674,79 +810,141 @@ class AIFoundryHubDeploymentUI:
                     )
             
             else:
-                # Existing VNet settings
+                # Existing VNet settings with subscription selection
+                st.markdown("**🔄 VNet Location Subscription**")
+                self._render_subscription_selector("vnet", "Virtual Network", for_new_resource=False)
+                
                 st.markdown("**Select Existing VNet:**")
                 
-                # Get available VNets
-                vnets = self.service.get_subscription_resources("Microsoft.Network/virtualNetworks")
+                # Get the selected subscription for VNet
+                vnet_subscription_id = st.session_state.get("vnet_subscription_id")
                 
-                if vnets:
-                    vnet_options = {f"{vnet['name']} ({vnet['resourceGroup']})": vnet['id'] for vnet in vnets}
+                if vnet_subscription_id:
+                    # Cache key for VNets in this subscription
+                    vnet_cache_key = f"vnet_resources_{vnet_subscription_id}"
                     
-                    # Find the current selection index based on saved configuration
-                    current_index = 0
-                    if config.network_config.existing_vnet_resource_id:
-                        for i, (option_text, vnet_id) in enumerate(vnet_options.items()):
-                            if vnet_id == config.network_config.existing_vnet_resource_id:
-                                current_index = i
-                                break
-                    
-                    selected_vnet = st.selectbox(
-                        "Select VNet",
-                        list(vnet_options.keys()),
-                        index=current_index,
-                        key="vnet_selector",
-                        help="Select an existing Virtual Network"
-                    )
-                    
-                    if selected_vnet:
-                        config.network_config.existing_vnet_resource_id = vnet_options[selected_vnet]
-                        
-                        # Show selected VNet details
-                        selected_vnet_info = next(v for v in vnets if v['id'] == config.network_config.existing_vnet_resource_id)
-                        st.info(f"Selected VNet: {selected_vnet_info['name']} in {selected_vnet_info['location']}")
-                        
-                        # Get subnets for the selected VNet
-                        st.markdown("**Subnet Configuration:**")
-                        subnets = self.service.get_vnet_subnets(config.network_config.existing_vnet_resource_id)
-                        
-                        if subnets:
-                            # Show subnet usage option
-                            subnet_choice = st.radio(
-                                "How would you like to configure subnets?",
-                                ["Use existing subnets", "Create new subnets"],
-                                index=0 if hasattr(config.network_config, 'existing_agent_subnet_id') and config.network_config.existing_agent_subnet_id else 1,
-                                help="Choose whether to use existing subnets or create new ones in the VNet"
-                            )
+                    # Get available VNets from the target subscription
+                    if vnet_cache_key not in st.session_state:
+                        with st.spinner("Loading VNets from selected subscription..."):
+                            # Temporarily switch context if needed
+                            current_sub = self.service.get_current_subscription_info()
+                            current_sub_id = current_sub['subscription_id'] if current_sub else None
                             
-                            if subnet_choice == "Use existing subnets":
-                                # Clear new subnet fields when switching to existing
-                                if not hasattr(config.network_config, 'existing_agent_subnet_id'):
-                                    config.network_config.existing_agent_subnet_id = ""
-                                    config.network_config.existing_pe_subnet_id = ""
-                                
-                                subnet_options = {f"{subnet['name']} ({subnet['addressPrefix']})": subnet['id'] for subnet in subnets}
-                                
-                                col1, col2 = st.columns(2)
-                                
-                                with col1:
-                                    st.markdown("**Agent Subnet:**")
+                            if vnet_subscription_id != current_sub_id:
+                                switch_success, _ = self.service.switch_subscription_context(vnet_subscription_id)
+                                if not switch_success:
+                                    st.error("❌ Failed to switch to VNet subscription")
+                                    return
+                            
+                            # Get VNets
+                            vnets = self.service.get_subscription_resources("Microsoft.Network/virtualNetworks")
+                            st.session_state[vnet_cache_key] = vnets
+                            
+                            # Switch back if needed
+                            if vnet_subscription_id != current_sub_id and current_sub_id:
+                                self.service.switch_subscription_context(current_sub_id)
+                    
+                    vnets = st.session_state.get(vnet_cache_key, [])
+                    
+                    if vnets:
+                        vnet_options = {f"{vnet['name']} ({vnet['resourceGroup']})": vnet['id'] for vnet in vnets}
+                        
+                        # Find the current selection index based on saved configuration
+                        current_index = 0
+                        if config.network_config.existing_vnet_resource_id:
+                            for i, (option_text, vnet_id) in enumerate(vnet_options.items()):
+                                if vnet_id == config.network_config.existing_vnet_resource_id:
+                                    current_index = i
+                                    break
+                        
+                        selected_vnet = st.selectbox(
+                            "Select VNet",
+                            list(vnet_options.keys()),
+                            index=current_index,
+                            key="vnet_selector",
+                            help="Select an existing Virtual Network from the chosen subscription"
+                        )
+                        
+                        # Add refresh button for VNets
+                        if st.button("🔄 Refresh VNet List", key="refresh_vnet_list"):
+                            if vnet_cache_key in st.session_state:
+                                del st.session_state[vnet_cache_key]
+                            st.rerun()
+                        
+                        if selected_vnet:
+                            config.network_config.existing_vnet_resource_id = vnet_options[selected_vnet]
+                            
+                            # Show selected VNet details
+                            selected_vnet_info = next(v for v in vnets if v['id'] == config.network_config.existing_vnet_resource_id)
+                            st.info(f"Selected VNet: {selected_vnet_info['name']} in {selected_vnet_info['location']}")
+                            
+                            # Show cross-subscription info if applicable
+                            current_sub = self.service.get_current_subscription_info()
+                            current_sub_id = current_sub['subscription_id'] if current_sub else None
+                            if vnet_subscription_id != current_sub_id:
+                                st.info(f"🔄 VNet will be accessed from subscription: {vnet_subscription_id}")
+                            
+                            # Get subnets for the selected VNet
+                            st.markdown("**Subnet Configuration:**")
+                            
+                            # Get subnets (may need to switch context again)
+                            subnet_cache_key = f"subnets_{config.network_config.existing_vnet_resource_id.replace('/', '_')}"
+                            
+                            if subnet_cache_key not in st.session_state:
+                                with st.spinner("Loading subnets..."):
+                                    # Switch context if needed for subnet query
+                                    if vnet_subscription_id != current_sub_id:
+                                        switch_success, _ = self.service.switch_subscription_context(vnet_subscription_id)
+                                        if not switch_success:
+                                            st.error("❌ Failed to switch to VNet subscription for subnet query")
+                                            return
                                     
-                                    # Find current agent subnet index
-                                    agent_subnet_index = 0
-                                    if config.network_config.existing_agent_subnet_id:
-                                        for i, (option_text, subnet_id) in enumerate(subnet_options.items()):
-                                            if subnet_id == config.network_config.existing_agent_subnet_id:
-                                                agent_subnet_index = i
-                                                break
+                                    subnets = self.service.get_vnet_subnets(config.network_config.existing_vnet_resource_id)
+                                    st.session_state[subnet_cache_key] = subnets
                                     
-                                    selected_agent_subnet = st.selectbox(
-                                        "Select Agent Subnet",
-                                        list(subnet_options.keys()),
-                                        index=agent_subnet_index,
-                                        key="agent_subnet_selector",
-                                        help="Subnet for AI Foundry agents and compute resources"
-                                    )
+                                    # Switch back if needed
+                                    if vnet_subscription_id != current_sub_id and current_sub_id:
+                                        self.service.switch_subscription_context(current_sub_id)
+                            
+                            subnets = st.session_state.get(subnet_cache_key, [])
+                            
+                            if subnets:
+                                # Show subnet usage option
+                                subnet_choice = st.radio(
+                                    "How would you like to configure subnets?",
+                                    ["Use existing subnets", "Create new subnets"],
+                                    index=0 if hasattr(config.network_config, 'existing_agent_subnet_id') and config.network_config.existing_agent_subnet_id else 1,
+                                    help="Choose whether to use existing subnets or create new ones in the VNet"
+                                )
+                                
+                                if subnet_choice == "Use existing subnets":
+                                    # Clear new subnet fields when switching to existing
+                                    if not hasattr(config.network_config, 'existing_agent_subnet_id'):
+                                        config.network_config.existing_agent_subnet_id = ""
+                                        config.network_config.existing_pe_subnet_id = ""
+                                    
+                                    subnet_options = {f"{subnet['name']} ({subnet['addressPrefix']})": subnet['id'] for subnet in subnets}
+                                    
+                                    col1, col2 = st.columns(2)
+                                    
+                                    with col1:
+                                        st.markdown("**Agent Subnet:**")
+                                        
+                                        # Find current agent subnet index
+                                        agent_subnet_index = 0
+                                        if config.network_config.existing_agent_subnet_id:
+                                            for i, (option_text, subnet_id) in enumerate(subnet_options.items()):
+                                                if subnet_id == config.network_config.existing_agent_subnet_id:
+                                                    agent_subnet_index = i
+                                                    break
+                                        
+                                        selected_agent_subnet = st.selectbox(
+                                            "Select Agent Subnet",
+                                            list(subnet_options.keys()),
+                                            index=agent_subnet_index,
+                                            key="agent_subnet_selector",
+                                            help="Subnet for AI Foundry agents and compute resources"
+                                        )
                                     
                                     if selected_agent_subnet:
                                         config.network_config.existing_agent_subnet_id = subnet_options[selected_agent_subnet]
@@ -926,34 +1124,37 @@ class AIFoundryHubDeploymentUI:
         """Render resource configuration section."""
         with st.expander("📦 Resource Configuration", expanded=True):
             st.markdown("### Configure Dependencies")
-            st.info("Choose whether to create new resources or use existing ones for each dependency.")
+            st.info("Choose whether to create new resources or use existing ones for each dependency. You can also select different subscriptions for each resource.")
             
             # Cosmos DB Configuration
-            self._render_resource_section(
+            self._render_resource_section_with_subscription(
                 "🌌 Cosmos DB",
                 config.cosmos_db,
                 "Microsoft.DocumentDB/databaseAccounts",
-                "Azure Cosmos DB for NoSQL database for storing agent conversations and metadata"
+                "Azure Cosmos DB for NoSQL database for storing agent conversations and metadata",
+                "cosmos_db"
             )
             
             # AI Search Configuration
-            self._render_resource_section(
+            self._render_resource_section_with_subscription(
                 "🔍 AI Search",
                 config.ai_search,
                 "Microsoft.Search/searchServices",
-                "Azure AI Search service for vector search and document indexing"
+                "Azure AI Search service for vector search and document indexing",
+                "ai_search"
             )
             
             # Storage Account Configuration
-            self._render_resource_section(
+            self._render_resource_section_with_subscription(
                 "💾 Storage Account",
                 config.storage_account,
                 "Microsoft.Storage/storageAccounts",
-                "Azure Storage account for storing documents and artifacts"
+                "Azure Storage account for storing documents and artifacts",
+                "storage_account"
             )
     
-    def _render_resource_section(self, title: str, resource: DeploymentResource, resource_type: str, description: str) -> None:
-        """Render a single resource configuration section."""
+    def _render_resource_section_with_subscription(self, title: str, resource: DeploymentResource, resource_type: str, description: str, resource_key: str) -> None:
+        """Render a single resource configuration section with subscription selection."""
         with st.container():
             st.markdown(f"#### {title}")
             st.caption(description)
@@ -977,20 +1178,166 @@ class AIFoundryHubDeploymentUI:
                 if deployment_option == "Skip Deployment":
                     st.info(f"ℹ️ {title} deployment will be skipped. You can configure it later if needed.")
                 elif deployment_option == "Use Existing":
-                    self._render_existing_resource_config(resource, resource_type, title)
+                    # Add subscription selection for existing resources
+                    self._render_subscription_selector(resource_key, title)
+                    self._render_existing_resource_config_with_subscription(resource, resource_type, title, resource_key)
+                elif deployment_option == "Create New":
+                    # Add subscription selection for new resources as well
+                    self._render_subscription_selector(resource_key, title, for_new_resource=True)
             
             st.divider()
     
-    def _render_existing_resource_config(self, resource: DeploymentResource, resource_type: str, title: str) -> None:
-        """Render configuration for existing resources."""
-        # Get available resources
-        resources = self.service.get_subscription_resources(resource_type)
+    def _render_subscription_selector(self, resource_key: str, resource_title: str, for_new_resource: bool = False) -> None:
+        """Render subscription selector for a specific resource."""
+        st.markdown("**🔄 Subscription Selection**")
+        
+        # Get available subscriptions
+        subscriptions = self.service.get_prioritized_subscriptions()
+        current_sub_info = self.service.get_current_subscription_info()
+        current_sub_id = current_sub_info['subscription_id'] if current_sub_info else None
+        
+        if not subscriptions:
+            st.error("❌ No subscriptions available")
+            return
+        
+        # Create subscription options with enhanced labeling
+        subscription_options = {}
+        for sub in subscriptions:
+            if sub['state'] == 'Enabled':
+                label = f"{sub['display_name']} ({sub['subscription_id']})"
+                if sub['subscription_id'] == current_sub_id:
+                    label = f"🌟 {label} (Current)"
+                subscription_options[label] = sub['subscription_id']
+        
+        if not subscription_options:
+            st.error("❌ No enabled subscriptions found")
+            return
+        
+        # Session state key for this resource's subscription
+        subscription_state_key = f"{resource_key}_subscription_id"
+        
+        # Initialize with current subscription if not set
+        if subscription_state_key not in st.session_state:
+            st.session_state[subscription_state_key] = current_sub_id or list(subscription_options.values())[0]
+        
+        # Find current selection index
+        selected_subscription_id = st.session_state[subscription_state_key]
+        subscription_index = 0
+        subscription_list = list(subscription_options.items())
+        for i, (label, sub_id) in enumerate(subscription_list):
+            if sub_id == selected_subscription_id:
+                subscription_index = i
+                break
+        
+        # Callback for subscription change
+        def on_subscription_change():
+            selected_key = st.session_state[f"{resource_key}_subscription_selector"]
+            if selected_key in subscription_options:
+                new_subscription_id = subscription_options[selected_key]
+                old_subscription_id = st.session_state.get(subscription_state_key)
+                
+                # Only switch if the subscription actually changed
+                if new_subscription_id != old_subscription_id:
+                    st.session_state[subscription_state_key] = new_subscription_id
+                    
+                    # Clear any cached resources for this subscription
+                    cache_key = f"{resource_key}_resources_{new_subscription_id}"
+                    if cache_key in st.session_state:
+                        del st.session_state[cache_key]
+                    
+                    # Show success message
+                    st.success(f"✅ Switched to subscription: {selected_key}")
+        
+        # Subscription selector
+        action_text = "deploy to" if for_new_resource else "select from"
+        selected_subscription = st.selectbox(
+            f"Select subscription to {action_text} for {resource_title}",
+            options=list(subscription_options.keys()),
+            index=subscription_index,
+            help=f"🌟 = Current subscription. Choose which subscription to {action_text} for {resource_title}",
+            key=f"{resource_key}_subscription_selector",
+            on_change=on_subscription_change
+        )
+        
+        # Show current selection status
+        selected_sub_id = st.session_state[subscription_state_key]
+        is_current = selected_sub_id == current_sub_id
+        
+        if is_current:
+            st.success(f"✅ **{resource_title} Subscription**: Same as deployment subscription")
+        else:
+            st.info(f"🔄 **{resource_title} Subscription**: Cross-subscription configuration")
+            
+            # Add authentication button for different subscription
+            col_auth1, col_auth2 = st.columns([3, 1])
+            with col_auth1:
+                st.caption(f"Target: `{selected_sub_id}`")
+            with col_auth2:
+                if st.button(
+                    "🔐 Switch", 
+                    help=f"Switch Azure CLI context to {resource_title} subscription",
+                    key=f"switch_to_{resource_key}_subscription",
+                    type="secondary"
+                ):
+                    with st.spinner(f"Switching to {resource_title} subscription..."):
+                        success, message = self.service.switch_subscription_context(selected_sub_id)
+                        if success:
+                            st.success(message)
+                        else:
+                            st.error(message)
+    
+    def _render_existing_resource_config_with_subscription(self, resource: DeploymentResource, resource_type: str, title: str, resource_key: str) -> None:
+        """Render configuration for existing resources with subscription awareness."""
+        # Get the selected subscription for this resource
+        subscription_state_key = f"{resource_key}_subscription_id"
+        target_subscription_id = st.session_state.get(subscription_state_key)
+        
+        if not target_subscription_id:
+            st.warning(f"Please select a subscription for {title} first")
+            return
+        
+        # Cache key for resources in this subscription
+        cache_key = f"{resource_key}_resources_{target_subscription_id}"
+        
+        # Get available resources from the target subscription
+        if cache_key not in st.session_state:
+            with st.spinner(f"Loading {title} resources from selected subscription..."):
+                # Temporarily switch context if needed to get resources
+                current_sub = self.service.get_current_subscription_info()
+                current_sub_id = current_sub['subscription_id'] if current_sub else None
+                
+                if target_subscription_id != current_sub_id:
+                    # Switch to target subscription
+                    switch_success, _ = self.service.switch_subscription_context(target_subscription_id)
+                    if not switch_success:
+                        st.error(f"❌ Failed to switch to target subscription for {title}")
+                        return
+                
+                # Get resources
+                resources = self.service.get_subscription_resources(resource_type)
+                st.session_state[cache_key] = resources
+                
+                # Switch back to original subscription if needed
+                if target_subscription_id != current_sub_id and current_sub_id:
+                    self.service.switch_subscription_context(current_sub_id)
+        
+        resources = st.session_state.get(cache_key, [])
         
         if resources:
             resource_options = {f"{res['name']} ({res['resourceGroup']})": res['id'] for res in resources}
+            
+            # Find current selection if any
+            current_selection = 0
+            if resource.existing_resource_id:
+                for i, (display_name, resource_id) in enumerate(resource_options.items()):
+                    if resource_id == resource.existing_resource_id:
+                        current_selection = i
+                        break
+            
             selected_resource = st.selectbox(
                 f"Select {title}",
                 list(resource_options.keys()),
+                index=current_selection,
                 key=f"{resource_type}_selector"
             )
             
@@ -1000,14 +1347,24 @@ class AIFoundryHubDeploymentUI:
                 # Show selected resource details
                 selected_resource_info = next(r for r in resources if r['id'] == resource.existing_resource_id)
                 st.success(f"✅ Selected: {selected_resource_info['name']} in {selected_resource_info['location']}")
+                
+                # Show subscription info
+                if target_subscription_id != self.service.get_current_subscription_info().get('subscription_id'):
+                    st.info(f"🔄 Resource will be accessed from subscription: {target_subscription_id}")
         else:
-            st.warning(f"No {title} resources found in the subscription")
+            st.warning(f"No {title} resources found in the selected subscription")
             resource.existing_resource_id = st.text_input(
                 f"{title} Resource ID",
                 value=resource.existing_resource_id,
-                help=f"Enter the full resource ID of the existing {title.lower()}",
+                help=f"Enter the full resource ID of the existing {title.lower()} from the selected subscription",
                 key=f"{resource_type}_manual"
             )
+        
+        # Add refresh button for resources
+        if st.button(f"🔄 Refresh {title} List", key=f"refresh_{resource_key}_resources"):
+            if cache_key in st.session_state:
+                del st.session_state[cache_key]
+            st.rerun()
         
         # Enhanced Private Endpoint and DNS Configuration for existing resources
         st.markdown("**Network Configuration:**")
