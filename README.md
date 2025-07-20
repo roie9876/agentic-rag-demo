@@ -87,7 +87,49 @@ This section provides a comprehensive step-by-step visual guide for deploying th
 
 *Complete architecture overview showing the Agentic RAG ingest pipeline with Azure AI Foundry, Copilot Studio, private networks, and M365 integration*
 
-### 📋 Complete Deployment Process
+### �️ Main Application Interface
+
+![Main Application UI](main-app.png)
+
+*The Streamlit-based user interface showing all available tabs and functionality for comprehensive RAG deployment management*
+
+## 🎯 What This Code Does
+
+This application serves as a **comprehensive orchestration platform** that bridges all the different components in the overall architecture. Here's what you need to know:
+
+### 🔗 **Integration & Orchestration**
+- **Connects All Architecture Components**: The code acts as a central hub that integrates Azure AI Search, OpenAI services, Document Intelligence, SharePoint, and AI Foundry components
+- **Unified Management Interface**: Provides a single Streamlit-based interface to manage the entire RAG pipeline from document ingestion to query processing
+
+### ☁️ **Resource Management**
+- **Does NOT Create Cloud Resources**: This application doesn't provision Azure resources - you must create them separately using Azure Portal, CLI, or ARM templates
+- **Configuration & Setup Assistant**: Helps you configure existing Azure resources and verify their connectivity and settings
+- **Environment Validation**: Provides comprehensive health checks to ensure all components are properly configured
+
+### 🛡️ **Security & Access Control**
+- **RBAC Configuration Helper**: Assists in setting up Role-Based Access Control (RBAC) permissions across Azure services
+- **Authentication Management**: Handles various authentication methods including service principals, managed identities, and API keys
+- **Private Network Support**: Validates and configures private endpoint connections and VNet integration
+
+### 📄 **Document Processing Pipeline**
+- **Multi-Format Document Ingestion**: Processes PDF, DOCX, PPTX, XLSX, CSV, TXT, MD, and JSON files
+- **Intelligent Indexing**: Uploads and indexes documents into Azure AI Search with smart chunking and metadata extraction
+- **SharePoint Integration**: Automated synchronization and indexing of documents from SharePoint Online libraries
+
+### 🔍 **Query & Retrieval**
+- **Agentic RAG Testing**: Provides testing capabilities for the complete retrieval-augmented generation pipeline
+- **Real-time Query Processing**: Test and validate your RAG system with live queries and response analysis
+- **Performance Monitoring**: Track indexing progress, query performance, and system health
+
+### 💡 **Key Benefits**
+- **Rapid Prototyping**: Quickly test and validate your RAG architecture without complex setup
+- **Configuration Validation**: Ensure all Azure services are properly connected and configured
+- **Document Management**: Streamlined workflow for ingesting and managing large document collections
+- **Development & Testing**: Comprehensive testing tools for both document processing and query retrieval
+
+**Think of this as your RAG deployment companion** - it doesn't replace Azure infrastructure setup but makes working with your existing Azure resources much easier and more efficient.
+
+### �📋 Complete Deployment Process
 
 #### Step 1: Deploy AI Foundry Account
 ![Step 1 - Deploy AI Account](media/step%20(1)%20Deploy%20AI%20Account%20.png)

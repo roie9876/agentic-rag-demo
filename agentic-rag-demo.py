@@ -675,7 +675,7 @@ def run_streamlit_ui() -> None:
         st.info("Index management features may not work. Check the Public Health Check tab for details.")
         root_index_client = None
     
-    tab_ai, tab_private_health, tab_create, tab_manage, tab_test, tab_sharepoint, tab_cfg, tab_studio2foundry = st.tabs([
+    tab_ai, tab_private_health, tab_create, tab_manage, tab_test, tab_sharepoint, tab_cfg, tab_studio2foundry, tab_studio_subnet = st.tabs([
         "🏭 (1) AI Foundry Account",
         "🔒 (2) Private Health Check", 
         "📋 (3) Create Index",
@@ -683,7 +683,8 @@ def run_streamlit_ui() -> None:
         "🧪 (5) Test Retrieval",
         "📁 (6) SharePoint Index",
         "⚙️ (7) Function Config",
-        "🏭 (8) Studio2Foundry"
+        "🏭 (8) Studio2Foundry",
+        "🌐 (9) Studio Subnet Delegation"
     ])
 
     # ─────────────────── Tab (1) – AI Foundry Account ────────────────────────────
@@ -1849,6 +1850,13 @@ def run_streamlit_ui() -> None:
         # Use the enhanced Studio2Foundry tab with AI Foundry integration
         from app.tabs.enhanced_studio2foundry_tab import render_enhanced_studio2foundry_tab
         render_enhanced_studio2foundry_tab(
+            session_state=st.session_state
+        )
+
+    # ── Tab (9) – Studio Subnet Delegation ──────────────────────────────────────
+    with tab_studio_subnet:
+        from app.tabs.studio_subnet_delegation_tab import render_studio_subnet_delegation_tab
+        render_studio_subnet_delegation_tab(
             session_state=st.session_state
         )
 
