@@ -29,11 +29,8 @@ from typing import List, Tuple, Dict
 
 import pandas as pd           # ← ADD THIS LINE
 
-# Import SharePoint components
-from ui_sharepoint import SharePointIndexUI
-from sharepoint_scheduler import SharePointScheduler
-from sharepoint_index_manager import SharePointIndexManager
-from sharepoint_reports import SharePointReports
+# SharePoint components will be imported dynamically when needed to avoid
+# authentication errors in environments without SharePoint configuration
 
 # ---------------------------------------------------------------------------
 # Streamlit Data‑Editor helper (works on both old & new versions)
@@ -49,7 +46,7 @@ from test_retrieval import render_test_retrieval_tab
 from services.optimized_document_processor import OptimizedDocumentProcessor, OptimizationConfig
 
 # Studio2Foundry module will be imported dynamically in the tab
-from app.ui.sharepoint_reports_tab import render_sharepoint_reports_tab, render_sharepoint_purge_section
+# SharePoint reports will be imported dynamically when needed
 
 # Import enhanced AI Foundry components
 from app.tabs.enhanced_ai_foundry_tab import render_enhanced_ai_foundry_tab
@@ -1800,16 +1797,22 @@ def run_streamlit_ui() -> None:
                                 st.error(f"❌ Scheduler error: {str(e)}")
                         
                         with reports_tab:
-                            render_sharepoint_reports_tab(
-                                session_state=st.session_state,
-                                target_index=target_index
-                            )
-                        
-                        # Render the purge section
-                        render_sharepoint_purge_section(
-                            session_state=st.session_state,
-                            target_index=target_index
-                        )
+                            try:
+                                from app.ui.sharepoint_reports_tab import render_sharepoint_reports_tab, render_sharepoint_purge_section
+                                render_sharepoint_reports_tab(
+                                    session_state=st.session_state,
+                                    target_index=target_index
+                                )
+                                
+                                # Render the purge section
+                                render_sharepoint_purge_section(
+                                    session_state=st.session_state,
+                                    target_index=target_index
+                                )
+                            except ImportError:
+                                st.error("❌ SharePoint reports module not available")
+                            except Exception as e:
+                                st.error(f"❌ SharePoint reports error: {str(e)}")
         except ImportError:
             st.error("❌ SharePoint connector not available. Please install required dependencies.")
             st.markdown("""

@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 
-from connectors.sharepoint.sharepoint_files_indexer import PerformanceLogger
+from utils.performance_logger import PerformanceLogger
 from core.document_processor import pdf_to_documents, plainfile_to_docs, chunk_to_docs, tabular_to_docs
 from core.azure_clients import init_openai, init_search_client
 

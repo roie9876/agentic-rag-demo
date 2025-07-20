@@ -19,7 +19,7 @@ from pathlib import Path
 import time
 
 from services.optimized_document_processor import OptimizedDocumentProcessor, OptimizationConfig
-from connectors.sharepoint.sharepoint_files_indexer import PerformanceLogger
+from utils.performance_logger import PerformanceLogger
 
 
 class SharePointOptimizationService:

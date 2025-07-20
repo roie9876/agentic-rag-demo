@@ -21,7 +21,7 @@ except ImportError as e:
 
 # Import PerformanceLogger for performance tracking
 try:
-    from connectors.sharepoint.sharepoint_files_indexer import PerformanceLogger
+    from utils.performance_logger import PerformanceLogger
 except ImportError:
     # Fallback in case of import issues
     class PerformanceLogger:
