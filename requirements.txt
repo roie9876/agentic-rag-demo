@@ -37,3 +37,5 @@ httpx>=0.27.0
 pandas
 PyMuPDF 
 azure-mgmt-subscription
+azure-mgmt-cognitiveservices
+azure-mgmt-resource
