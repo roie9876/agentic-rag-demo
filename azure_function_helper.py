@@ -98,7 +98,7 @@ def list_function_apps(subscription_id: str) -> Tuple[List[str], Dict[str, Tuple
         subprocess.run(["az", "account", "set", "--subscription", subscription_id], 
                       capture_output=True, timeout=10)
         
-        # Try using Azure SDK with CLI credential
+        # Use Azure CLI credential to match the same authentication context as discovery service
         wcli = WebSiteManagementClient(AzureCliCredential(), subscription_id)
         for site in wcli.web_apps.list():
             # Filter only Function Apps (kind contains "functionapp")

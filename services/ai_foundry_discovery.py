@@ -28,7 +28,15 @@ class AIFoundryDiscoveryService:
     def _ensure_credential_initialized(self) -> None:
         """Initialize Azure credential if not already done."""
         if self.credential is None:
-            self.credential = DefaultAzureCredential()
+            # Use AzureCliCredential to match Azure CLI context exactly
+            from azure.identity import AzureCliCredential, DefaultAzureCredential
+            try:
+                # First try to use Azure CLI credentials to match CLI context
+                self.credential = AzureCliCredential()
+                logger.info("Using Azure CLI credentials (matches `az login` context)")
+            except Exception as e:
+                logger.warning(f"Azure CLI credential failed: {e}, falling back to DefaultAzureCredential")
+                self.credential = DefaultAzureCredential()
     
     def set_subscription(self, subscription_id: str) -> None:
         """Set the subscription ID (clients initialized lazily when needed)."""
@@ -48,9 +56,85 @@ class AIFoundryDiscoveryService:
                 self.credential, self._subscription_id
             )
     
+    @property
+    def resource_client(self) -> ResourceManagementClient:
+        """Get the resource management client, initializing if necessary."""
+        self._ensure_clients_initialized()
+        return self._resource_client
+    
+    @property
+    def cognitive_services_client(self) -> CognitiveServicesManagementClient:
+        """Get the cognitive services client, initializing if necessary."""
+        self._ensure_clients_initialized()
+        return self._cognitive_services_client
+    
     def get_subscription_id(self) -> Optional[str]:
         """Get the current subscription ID."""
         return self._subscription_id
+    
+    def get_current_subscription_from_cli(self) -> Optional[Dict[str, Any]]:
+        """Get current subscription info from Azure CLI."""
+        try:
+            import subprocess
+            import json
+            
+            # Get current subscription from Azure CLI
+            result = subprocess.run(
+                ['az', 'account', 'show', '--output', 'json'],
+                capture_output=True, text=True, timeout=30
+            )
+            
+            if result.returncode == 0:
+                subscription_info = json.loads(result.stdout)
+                return {
+                    'id': subscription_info.get('id'),
+                    'name': subscription_info.get('name'),
+                    'state': subscription_info.get('state', 'Enabled'),
+                    'isDefault': subscription_info.get('isDefault', True),
+                    'tenantId': subscription_info.get('tenantId'),
+                    'user': subscription_info.get('user', {})
+                }
+            else:
+                logger.warning(f"Azure CLI command failed: {result.stderr}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting current subscription from CLI: {e}")
+            return None
+    
+    def ensure_subscription_set(self) -> bool:
+        """Ensure subscription is set, auto-discovering if needed."""
+        # If already set, return True
+        if self._subscription_id:
+            return True
+        
+        # First try to get from environment
+        env_subscription = os.getenv('AZURE_SUBSCRIPTION_ID')
+        if env_subscription:
+            logger.info(f"Using subscription from environment: {env_subscription[:8]}...")
+            self.set_subscription(env_subscription)
+            return True
+        
+        # Try to get current subscription from Azure CLI
+        current_sub = self.get_current_subscription_from_cli()
+        if current_sub and current_sub['id']:
+            logger.info(f"Auto-discovered current subscription: {current_sub['name']} ({current_sub['id'][:8]}...)")
+            self.set_subscription(current_sub['id'])
+            return True
+        
+        # Last resort: try to get first available subscription
+        try:
+            subscriptions = self.list_subscriptions()
+            if subscriptions:
+                first_sub = subscriptions[0]
+                logger.info(f"Using first available subscription: {first_sub['name']} ({first_sub['id'][:8]}...)")
+                self.set_subscription(first_sub['id'])
+                return True
+        except Exception as e:
+            logger.error(f"Failed to list subscriptions for auto-discovery: {e}")
+        
+        logger.error("No subscription could be determined")
+        return False
     
     def list_subscriptions(self) -> List[Dict[str, Any]]:
         """List available Azure subscriptions."""
@@ -92,8 +176,14 @@ class AIFoundryDiscoveryService:
     
     def discover_ai_foundry_accounts(self) -> List[Dict[str, Any]]:
         """Discover AI Foundry accounts in the current subscription."""
+        # Ensure subscription is set (auto-discover if needed)
+        if not self.ensure_subscription_set():
+            logger.error("Cannot discover accounts: No subscription available")
+            return []
+        
         self._ensure_clients_initialized()
         if not self._cognitive_services_client:
+            logger.error("Cannot discover accounts: Cognitive services client not available")
             return []
         
         try:
@@ -102,39 +192,29 @@ class AIFoundryDiscoveryService:
             # Get Cognitive Services accounts
             for account in self._cognitive_services_client.accounts.list():
                 # Check if it's an AI Services account (multi-service)
-                if account.kind in ['AIServices', 'CognitiveServices']:
-                    # Get the endpoint - AI Foundry accounts have specific endpoint patterns
+                # AI Foundry requires AIServices kind specifically
+                if account.kind == 'AIServices':
+                    # Get the endpoint 
                     endpoint = account.properties.endpoint if hasattr(account.properties, 'endpoint') else None
                     
-                    # AI Foundry accounts typically have .services.ai.azure.com domains
-                    is_ai_foundry = (
-                        endpoint and 
-                        ('.services.ai.azure.com' in endpoint or 
-                         'aiservices' in account.name.lower() or
-                         'aifoundry' in account.name.lower() or
-                         'foundry' in account.name.lower() or
-                         'agentic' in account.name.lower())
-                    )
+                    # Transform the endpoint for AI Foundry API format
+                    ai_foundry_endpoint = self._transform_to_ai_foundry_endpoint(endpoint, account.name)
                     
-                    if is_ai_foundry or account.kind == 'AIServices':
-                        # Transform the endpoint for AI Foundry API format
-                        ai_foundry_endpoint = self._transform_to_ai_foundry_endpoint(endpoint, account.name)
-                        
-                        account_info = {
-                            'name': account.name,
-                            'resource_group': account.id.split('/')[4],
-                            'location': account.location,
-                            'kind': account.kind,
-                            'sku': account.sku.name if account.sku else 'Unknown',
-                            'endpoint': ai_foundry_endpoint,
-                            'original_endpoint': endpoint,
-                            'type': 'AI Foundry Account',
-                            'resource_type': 'Microsoft.CognitiveServices/accounts',
-                            'id': account.id,
-                            'subscription_id': self._subscription_id,
-                            'status': 'Available'
-                        }
-                        accounts.append(account_info)
+                    account_info = {
+                        'name': account.name,
+                        'resource_group': account.id.split('/')[4],
+                        'location': account.location,
+                        'kind': account.kind,
+                        'sku': account.sku.name if account.sku else 'Unknown',
+                        'endpoint': ai_foundry_endpoint,
+                        'original_endpoint': endpoint,
+                        'type': 'AI Foundry Account',
+                        'resource_type': 'Microsoft.CognitiveServices/accounts',
+                        'id': account.id,
+                        'subscription_id': self._subscription_id,
+                        'status': 'Available'
+                    }
+                    accounts.append(account_info)
             
             logger.info(f"Discovered {len(accounts)} AI Foundry accounts")
             return accounts
