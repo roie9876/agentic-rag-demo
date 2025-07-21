@@ -46,14 +46,22 @@ A comprehensive demonstration of Agentic Retrieval-Augmented Generati### 🖥️
 
 Comprehensive documentation is now organized in the `/docs/` folder:
 
+### Core Documentation
 - **[📚 Complete Documentation Hub](docs/)** - All project documentation and guides
 - **[🏗️ Project Structure Guide](docs/PROJECT_STRUCTURE.md)** - Detailed codebase overview
-- **[⚡ Performance Optimizations](docs/ULTRA_FAST_UI_PERFORMANCE_FINAL.md)** - Ultra-fast UI implementation
-- **[🌐 AI Foundry Implementation](docs/AI_FOUNDRY_FINAL_IMPLEMENTATION_SUMMARY.md)** - AI Foundry Account deployment guide
 - **[🔧 Modular Development](docs/MODULAR_DEVELOPMENT_WORKFLOW.md)** - Development guidelines and architecture
+
+### Feature Implementation Guides
+- **[⚡ Performance Optimizations](docs/ULTRA_FAST_UI_PERFORMANCE_FINAL.md)** - Ultra-fast UI implementation (30x faster)
 - **[🎯 Hebrew RAG Fix](docs/status/hebrew_rag_retrieval_accuracy_fix.md)** - Critical accuracy fix for Hebrew question answering
 - **[🧠 Smart Chunking Implementation](docs/status/page_extraction_smart_chunking_implementation_complete.md)** - Advanced document processing improvements
 - **[📊 SharePoint Integration](docs/technical/sharepoint_indexing_flow_complete.md)** - Complete SharePoint indexing workflow
+
+### Deployment & Infrastructure
+- **[🌐 AI Foundry Implementation](docs/AI_FOUNDRY_FINAL_IMPLEMENTATION_SUMMARY.md)** - AI Foundry Account deployment guide
+- **[🔐 Private Network Deployment](docs/PRIVATE_NETWORK_DEPLOYMENT_GUIDE.md)** - Enterprise-grade network security setup
+- **[🚀 Azure Functions Deployment](docs/AZURE_FUNCTIONS_DEPLOYMENT_GUIDE.md)** - Complete serverless function deployment
+- **[🔒 Security & Compliance](docs/SECURITY_COMPLIANCE_GUIDE.md)** - Enterprise security framework and compliance
 
 ## 🔍 Document Processing & Verification
 
