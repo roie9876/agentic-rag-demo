@@ -1354,186 +1354,220 @@ def run_streamlit_ui() -> None:
         health_block()
         st.header("📁 SharePoint Index Management")
         
-        try:
-            from sharepoint_index_manager import SharePointIndexManager
-            sp_manager = SharePointIndexManager()
+        # Check if SharePoint credentials are available before attempting authentication
+        sharepoint_configured = (
+            os.getenv("AZURE_TENANT_ID") or os.getenv("SHAREPOINT_TENANT_ID")
+        ) and (
+            os.getenv("SHAREPOINT_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
+        ) and (
+            os.getenv("SHAREPOINT_CLIENT_SECRET") or 
+            os.getenv("SHAREPOINT_CLIENT_SECRET_VALUE") or 
+            os.getenv("SHAREPOINT_CLIENT_SECRET_NAME") or
+            os.getenv("AGENTIC_APP_SPN_CERT_PATH")  # Certificate-based auth
+        )
+        
+        if not sharepoint_configured:
+            st.warning("⚠️ SharePoint Configuration Missing")
+            st.markdown("""
+            **SharePoint functionality is not available because required credentials are not configured.**
             
-            # Check SharePoint authentication
-            auth_status = sp_manager.get_sharepoint_auth_status()
+            **To enable SharePoint features, add these to your `.env` file:**
+            ```
+            AZURE_TENANT_ID=your-tenant-id
+            SHAREPOINT_CLIENT_ID=your-client-id  
+            SHAREPOINT_CLIENT_SECRET=your-client-secret
+            ```
             
-            if not auth_status['authenticated']:
-                st.error(f"❌ SharePoint Authentication Failed: {auth_status['error']}")
-                st.markdown("""
-                **To fix this, please ensure:**
-                1. Your `.env` file contains the required SharePoint credentials:
-                   - `SHAREPOINT_TENANT_ID`
-                   - `SHAREPOINT_CLIENT_ID`
-                   - `SHAREPOINT_CLIENT_SECRET`
-                2. The SharePoint app has proper permissions
-                3. The credentials are valid and not expired
-                """)
-                st.stop()
+            **Or for certificate-based authentication:**
+            ```
+            AZURE_TENANT_ID=your-tenant-id
+            SHAREPOINT_CLIENT_ID=your-client-id
+            AGENTIC_APP_SPN_CERT_PATH=/path/to/certificate.pfx
+            AGENTIC_APP_SPN_CERT_PASSWORD=certificate-password
+            ```
             
-            st.success("✅ SharePoint Authentication Successful")
-            st.caption(f"Tenant ID: {auth_status['tenant_id']}")
-            
-            # SharePoint Configuration
-            st.subheader("🔧 SharePoint Configuration")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                site_domain = st.text_input(
-                    "Site Domain", 
-                    value=os.getenv("SHAREPOINT_SITE_DOMAIN", ""),
-                    placeholder="e.g., contoso.sharepoint.com"
-                )
-                site_name = st.text_input(
-                    "Site Name", 
-                    value=os.getenv("SHAREPOINT_SITE_NAME", ""),
-                    placeholder="e.g., MyTeamSite"
-                )
-            
-            with col2:
-                drive_name = st.text_input(
-                    "Drive/Library Name", 
-                    value=os.getenv("SHAREPOINT_DRIVE_NAME", ""),
-                    placeholder="e.g., Documents (leave blank for default)"
-                )
-                file_types = st.text_input(
-                    "File Types (comma-separated)",
-                    value="pdf,docx,pptx,xlsx",
-                    placeholder="pdf,docx,pptx,xlsx"
-                )
-            
-            # Target Index Selection (SharePoint-specific)
-            st.subheader("🎯 Target Index Selection")
-            
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                # Get available indexes for SharePoint
-                if "sp_available_indexes" not in st.session_state:
-                    st.session_state.sp_available_indexes = []
+            **Other tabs will work normally without SharePoint configuration.**
+            """)
+        else:
+            try:
+                from sharepoint_index_manager import SharePointIndexManager
+                sp_manager = SharePointIndexManager()
                 
-                try:
-                    # Get available indexes from session state (populated in main initialization)
-                    indexes_list = st.session_state.get('available_indexes', [])
-                    st.session_state.sp_available_indexes = indexes_list
-                    
-                    # Index selection dropdown
-                    index_options = ["Select an index..."] + indexes_list
-                    
-                    # Get current selection (prioritize SharePoint-specific selection over global)
-                    current_sp_index = getattr(st.session_state, 'sp_target_index', None)
-                    if not current_sp_index:
-                        current_sp_index = st.session_state.get('selected_index', None)
-                    
-                    # Find current index in options
-                    current_index = 0
-                    if current_sp_index and current_sp_index in indexes_list:
-                        current_index = indexes_list.index(current_sp_index) + 1
-                    
-                    selected_index_display = st.selectbox(
-                        "Select Target Index for SharePoint",
-                        options=index_options,
-                        index=current_index,
-                        help="Choose the search index where SharePoint documents will be stored"
-                    )
-                    
-                    # Update SharePoint-specific index selection
-                    if selected_index_display != "Select an index...":
-                        st.session_state.sp_target_index = selected_index_display
-                        # Also update global selection if not set
-                        if not st.session_state.selected_index:
-                            st.session_state.selected_index = selected_index_display
-                    else:
-                        st.session_state.sp_target_index = None
-                    
-                except Exception as e:
-                    st.error(f"Error loading indexes: {str(e)}")
-                    st.session_state.sp_target_index = None
-            
-            with col2:
-                # Index status and actions
-                if hasattr(st.session_state, 'sp_target_index') and st.session_state.sp_target_index:
-                    st.success(f"✅ Target Index")
-                    st.caption(f"**{st.session_state.sp_target_index}**")
-                    
-                    # Quick action to sync with global selection
-                    if st.button("🔄 Set as Global Index", help="Make this the global selected index for all tabs"):
-                        st.session_state.selected_index = st.session_state.sp_target_index
-                        st.success(f"Global index updated to: {st.session_state.sp_target_index}")
-                        st.rerun()
-                else:
-                    st.warning("⚠️ No Index Selected")
-                    if st.session_state.selected_index:
-                        st.caption(f"Global: {st.session_state.selected_index}")
-                        if st.button("📥 Use Global Index", help="Use the globally selected index for SharePoint"):
-                            st.session_state.sp_target_index = st.session_state.selected_index
-                            st.rerun()
-            
-            if not site_domain:
-                st.warning("Please enter Site Domain to continue.")
-                st.stop()
-            
-            # Note: site_name can be empty for root site
-            
-            # Get available drives
-            st.subheader("📂 Available Document Libraries")
-            drives = sp_manager.get_sharepoint_drives(site_domain, site_name)
-            
-            if not drives:
-                st.error("No drives/libraries found. Please check your site configuration.")
-                st.stop()
-            
-            # Display drives
-            drive_options = [""] + [f"{drive['name']} ({drive['driveType']})" for drive in drives]
-            selected_drive_display = st.selectbox("Select Document Library", drive_options)
-            
-            if selected_drive_display:
-                selected_drive = selected_drive_display.split(" (")[0]
-            else:
-                selected_drive = drive_name
-            
-            # Folder Tree Selection
-            if selected_drive:
-                st.subheader("📁 Select Folders to Index")
+                # Check SharePoint authentication
+                auth_status = sp_manager.get_sharepoint_auth_status()
                 
-                # Performance controls
-                col1, col2, col3 = st.columns([2, 1, 1])
-                with col1:
-                    st.markdown("*Click 📁 to expand folders, ☑️ to select for indexing*")
-                with col2:
-                    if st.button("🔄 Refresh Cache", help="Clear cache and reload folder structure"):
-                        sp_manager.clear_cache()
-                        # Clear session state
-                        for key in list(st.session_state.keys()):
-                            if key.startswith("sp_folders_loaded_") or key.startswith("sp_expanded_"):
-                                del st.session_state[key]
-                        st.rerun()
-                with col3:
-                    cache_stats = sp_manager.get_cache_stats()
-                    st.caption(f"Cache: {cache_stats['cached_folders']} folders")
-                
-                # Initialize selected folders in session state
-                if "sp_selected_folders" not in st.session_state:
-                    st.session_state.sp_selected_folders = []
-                
-                # Add performance tips
-                with st.expander("💡 Performance Tips", expanded=False):
+                if not auth_status['authenticated']:
+                    st.error(f"❌ SharePoint Authentication Failed: {auth_status['error']}")
                     st.markdown("""
-                    - **Lazy Loading**: Folders load only when expanded to improve speed
-                    - **Caching**: Folder structures are cached to reduce API calls
-                    - **Depth Limit**: Deep folder structures are limited to prevent slowdown
-                    - **Click 📁/📂**: Click folder icons to expand/collapse subfolders
-                    - **Batch Selection**: Select multiple folders for efficient indexing
-                    - **Refresh Cache**: Use the refresh button if folders don't appear up-to-date
+                    **To fix this, please ensure:**
+                    1. Your `.env` file contains the required SharePoint credentials:
+                       - `SHAREPOINT_TENANT_ID`
+                       - `SHAREPOINT_CLIENT_ID`
+                       - `SHAREPOINT_CLIENT_SECRET`
+                    2. The SharePoint app has proper permissions
+                    3. The credentials are valid and not expired
                     """)
+                else:
+                    st.success("✅ SharePoint Authentication Successful")
+                    st.caption(f"Tenant ID: {auth_status['tenant_id']}")
+                    
+                # SharePoint Configuration
+                st.subheader("🔧 SharePoint Configuration")
                 
-                # Render folder tree with loading indicator
-                with st.container():
-                    st.markdown("**Available Folders:**")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    site_domain = st.text_input(
+                        "Site Domain", 
+                        value=os.getenv("SHAREPOINT_SITE_DOMAIN", ""),
+                        placeholder="e.g., contoso.sharepoint.com"
+                    )
+                    site_name = st.text_input(
+                        "Site Name", 
+                        value=os.getenv("SHAREPOINT_SITE_NAME", ""),
+                        placeholder="e.g., MyTeamSite"
+                    )
+                
+                with col2:
+                    drive_name = st.text_input(
+                        "Drive/Library Name", 
+                        value=os.getenv("SHAREPOINT_DRIVE_NAME", ""),
+                        placeholder="e.g., Documents (leave blank for default)"
+                    )
+                    file_types = st.text_input(
+                        "File Types (comma-separated)",
+                        value="pdf,docx,pptx,xlsx",
+                        placeholder="pdf,docx,pptx,xlsx"
+                    )
+                
+                # Target Index Selection (SharePoint-specific)
+                st.subheader("🎯 Target Index Selection")
+                
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    # Get available indexes for SharePoint
+                    if "sp_available_indexes" not in st.session_state:
+                        st.session_state.sp_available_indexes = []
+                    
+                    try:
+                        # Get available indexes from session state (populated in main initialization)
+                        indexes_list = st.session_state.get('available_indexes', [])
+                        st.session_state.sp_available_indexes = indexes_list
+                        
+                        # Index selection dropdown
+                        index_options = ["Select an index..."] + indexes_list
+                        
+                        # Get current selection (prioritize SharePoint-specific selection over global)
+                        current_sp_index = getattr(st.session_state, 'sp_target_index', None)
+                        if not current_sp_index:
+                            current_sp_index = st.session_state.get('selected_index', None)
+                        
+                        # Find current index in options
+                        current_index = 0
+                        if current_sp_index and current_sp_index in indexes_list:
+                            current_index = indexes_list.index(current_sp_index) + 1
+                        
+                        selected_index_display = st.selectbox(
+                            "Select Target Index for SharePoint",
+                            options=index_options,
+                            index=current_index,
+                            help="Choose the search index where SharePoint documents will be stored"
+                        )
+                        
+                        # Update SharePoint-specific index selection
+                        if selected_index_display != "Select an index...":
+                            st.session_state.sp_target_index = selected_index_display
+                            # Also update global selection if not set
+                            if not st.session_state.selected_index:
+                                st.session_state.selected_index = selected_index_display
+                        else:
+                            st.session_state.sp_target_index = None
+                        
+                    except Exception as e:
+                        st.error(f"Error loading indexes: {str(e)}")
+                        st.session_state.sp_target_index = None
+                
+                with col2:
+                    # Index status and actions
+                    if hasattr(st.session_state, 'sp_target_index') and st.session_state.sp_target_index:
+                        st.success(f"✅ Target Index")
+                        st.caption(f"**{st.session_state.sp_target_index}**")
+                        
+                        # Quick action to sync with global selection
+                        if st.button("🔄 Set as Global Index", help="Make this the global selected index for all tabs"):
+                            st.session_state.selected_index = st.session_state.sp_target_index
+                            st.success(f"Global index updated to: {st.session_state.sp_target_index}")
+                            st.rerun()
+                    else:
+                        st.warning("⚠️ No Index Selected")
+                        if st.session_state.selected_index:
+                            st.caption(f"Global: {st.session_state.selected_index}")
+                            if st.button("📥 Use Global Index", help="Use the globally selected index for SharePoint"):
+                                st.session_state.sp_target_index = st.session_state.selected_index
+                                st.rerun()
+                
+                if not site_domain:
+                    st.warning("Please enter Site Domain to continue.")
+                    st.stop()
+                
+                # Note: site_name can be empty for root site
+                
+                # Get available drives
+                st.subheader("📂 Available Document Libraries")
+                drives = sp_manager.get_sharepoint_drives(site_domain, site_name)
+                
+                if not drives:
+                    st.error("No drives/libraries found. Please check your site configuration.")
+                    st.stop()
+                
+                # Display drives
+                drive_options = [""] + [f"{drive['name']} ({drive['driveType']})" for drive in drives]
+                selected_drive_display = st.selectbox("Select Document Library", drive_options)
+                
+                if selected_drive_display:
+                    selected_drive = selected_drive_display.split(" (")[0]
+                else:
+                    selected_drive = drive_name
+                
+                # Folder Tree Selection
+                if selected_drive:
+                    st.subheader("📁 Select Folders to Index")
+                    
+                    # Performance controls
+                    col1, col2, col3 = st.columns([2, 1, 1])
+                    with col1:
+                        st.markdown("*Click 📁 to expand folders, ☑️ to select for indexing*")
+                    with col2:
+                        if st.button("🔄 Refresh Cache", help="Clear cache and reload folder structure"):
+                            sp_manager.clear_cache()
+                            # Clear session state
+                            for key in list(st.session_state.keys()):
+                                if key.startswith("sp_folders_loaded_") or key.startswith("sp_expanded_"):
+                                    del st.session_state[key]
+                            st.rerun()
+                    with col3:
+                        cache_stats = sp_manager.get_cache_stats()
+                        st.caption(f"Cache: {cache_stats['cached_folders']} folders")
+                    
+                    # Initialize selected folders in session state
+                    if "sp_selected_folders" not in st.session_state:
+                        st.session_state.sp_selected_folders = []
+                    
+                    # Add performance tips
+                    with st.expander("💡 Performance Tips", expanded=False):
+                        st.markdown("""
+                        - **Lazy Loading**: Folders load only when expanded to improve speed
+                        - **Caching**: Folder structures are cached to reduce API calls
+                        - **Depth Limit**: Deep folder structures are limited to prevent slowdown
+                        - **Click 📁/📂**: Click folder icons to expand/collapse subfolders
+                        - **Batch Selection**: Select multiple folders for efficient indexing
+                        - **Refresh Cache**: Use the refresh button if folders don't appear up-to-date
+                        """)
+                    
+                    # Render folder tree with loading indicator
+                    with st.container():
+                        st.markdown("**Available Folders:**")
                     
                     # Show loading spinner for initial load
                     if f"sp_folders_loaded_{selected_drive}" not in st.session_state:
@@ -1813,19 +1847,23 @@ def run_streamlit_ui() -> None:
                                 st.error("❌ SharePoint reports module not available")
                             except Exception as e:
                                 st.error(f"❌ SharePoint reports error: {str(e)}")
-        except ImportError:
-            st.error("❌ SharePoint connector not available. Please install required dependencies.")
-            st.markdown("""
-            **Missing Dependencies:**
-            - SharePoint Index Manager
-            - SharePoint Data Reader
-            - SharePoint Deleted Files Purger
-            
-            **To install:**
-            ```bash
-            pip install -r requirements.txt
-            ```
-            """)
+                                
+            except ImportError:
+                st.error("❌ SharePoint connector not available. Please install required dependencies.")
+                st.markdown("""
+                **Missing Dependencies:**
+                - SharePoint Index Manager
+                - SharePoint Data Reader
+                - SharePoint Deleted Files Purger
+                
+                **To install:**
+                ```bash
+                pip install -r requirements.txt
+                ```
+                """)
+            except Exception as e:
+                st.error(f"❌ SharePoint initialization error: {str(e)}")
+                st.markdown("**This may be due to missing or invalid SharePoint credentials.**")
 
     # ─────────────────── Tab (5) – Test Retrieval ──────────────────────────
     with tab_test:
