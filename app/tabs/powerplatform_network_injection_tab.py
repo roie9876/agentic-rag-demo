@@ -1,5 +1,5 @@
 """
-Module: app/tabs/studio_subnet_delegation_tab.py
+Module: app/tabs/powerplatform_network_injection_tab.py
 Purpose: Handles PowerPlatform Network Injection operations with Azure private endpoints
 Dependencies: streamlit, azure cli, subprocess
 """
@@ -13,18 +13,18 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 
 
-def render_studio_subnet_delegation_tab(
+def render_powerplatform_network_injection_tab(
     session_state: Dict[str, Any],
     **kwargs
 ) -> None:
     """
-    Render the PowerPlatform Network tab with PowerPlatform Network Injection functionality.
+    Render the PowerPlatform Network Injection tab with dynamic parameter collection.
     
     Args:
         session_state: Streamlit session state dictionary
         **kwargs: Additional keyword arguments
     """
-    st.header("⚡ PowerPlatform Network Injection")
+    st.header("🌐 PowerPlatform Network Injection")
     
     st.markdown("""
     **🎯 Purpose**: Configure PowerPlatform subnet injection to connect to Azure with private endpoints.
@@ -223,15 +223,13 @@ def render_network_configuration_section(subscription_id: str) -> Optional[Dict[
                 key="pp_secondary_vnet"
             )
         
-        # Subnet Selection - Initialize subnet_name to avoid UnboundLocalError
-        subnet_name = ""
-        
+        # Subnet Selection
         if primary_vnet:
             st.markdown("**Subnet Configuration**")
             col1, col2 = st.columns([2, 1])
             
             with col1:
-                if st.button("� Load Subnets"):
+                if st.button("🔄 Load Subnets"):
                     with st.spinner(f"Loading subnets in {primary_vnet}..."):
                         try:
                             result = subprocess.run([
@@ -319,7 +317,7 @@ def render_script_operations_section(
     powerplatform_config: Dict[str, str]
 ) -> None:
     """Render script operations section with Apply, Remove, and Verify functionality."""
-    st.subheader("� Step 4: Script Operations")
+    st.subheader("🚀 Step 4: Script Operations")
     
     if not network_config or not powerplatform_config.get('env_id'):
         st.warning("⚠️ Please complete the network and PowerPlatform configuration above.")
@@ -348,7 +346,7 @@ def render_apply_injection_section(
     st.info("This will create the enterprise policy, configure subnet delegations, and link your PowerPlatform environment.")
     
     # Show configuration summary
-    with st.expander("� Configuration Summary", expanded=False):
+    with st.expander("📋 Configuration Summary", expanded=False):
         config_data = {
             "Parameter": [
                 "Subscription ID", "Resource Group", "Primary VNet", "Secondary VNet", 
@@ -370,11 +368,8 @@ def render_apply_injection_section(
         st.caption("This will run the working_apply_powerplatform_injection.sh script")
     
     with col2:
-        apply_clicked = st.button("🚀 Apply Injection", type="primary", use_container_width=True)
-    
-    # Execute script outside of columns for full width
-    if apply_clicked:
-        run_powerplatform_script("apply", subscription_id, network_config, powerplatform_config)
+        if st.button("🚀 Apply Injection", type="primary", use_container_width=True):
+            run_powerplatform_script("apply", subscription_id, network_config, powerplatform_config)
 
 
 def render_remove_injection_section(
@@ -393,11 +388,8 @@ def render_remove_injection_section(
         st.caption("This will run the working_remove_powerplatform_injection.sh script")
     
     with col2:
-        remove_clicked = st.button("🗑️ Remove Injection", type="secondary", use_container_width=True)
-    
-    # Execute script outside of columns for full width
-    if remove_clicked:
-        run_powerplatform_script("remove", subscription_id, network_config, powerplatform_config)
+        if st.button("🗑️ Remove Injection", type="secondary", use_container_width=True):
+            run_powerplatform_script("remove", subscription_id, network_config, powerplatform_config)
 
 
 def render_verify_injection_section(
@@ -416,11 +408,8 @@ def render_verify_injection_section(
         st.caption("This will run the working_verify_powerplatform_injection.sh script")
     
     with col2:
-        verify_clicked = st.button("🔍 Verify Status", use_container_width=True)
-    
-    # Execute script outside of columns for full width
-    if verify_clicked:
-        run_powerplatform_script("verify", subscription_id, network_config, powerplatform_config)
+        if st.button("🔍 Verify Status", use_container_width=True):
+            run_powerplatform_script("verify", subscription_id, network_config, powerplatform_config)
 
 
 def run_powerplatform_script(
@@ -499,9 +488,9 @@ def run_powerplatform_script(
                 universal_newlines=True
             )
             
-            # Create output container with full width
-            st.markdown("### 📋 Script Output")
-            output_placeholder = st.empty()
+            # Create output container
+            output_container = st.container()
+            output_placeholder = output_container.empty()
             
             # Stream output in real-time
             output_lines = []
@@ -513,22 +502,14 @@ def run_powerplatform_script(
                     output_lines.append(line.rstrip())
                     # Update display every few lines to avoid too many updates
                     if len(output_lines) % 3 == 0:
-                        # Use expander for better width control
-                        with output_placeholder.container():
-                            with st.expander("📄 Live Script Output", expanded=True):
-                                st.code('\n'.join(output_lines[-50:]), language='bash')
+                        output_placeholder.code('\n'.join(output_lines[-50:]), language='bash')
             
             # Wait for process to complete
             return_code = process.wait()
             
-            # Final output display with full width
+            # Final output display
             full_output = '\n'.join(output_lines)
-            output_placeholder.empty()  # Clear the live output
-            
-            # Display final result with better formatting
-            st.markdown("### 📄 Complete Script Output")
-            with st.expander("📋 Full Output", expanded=True):
-                st.code(full_output, language='bash')
+            output_placeholder.code(full_output, language='bash')
             
             # Store output in session state
             st.session_state.pp_script_output = full_output

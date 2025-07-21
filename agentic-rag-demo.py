@@ -681,7 +681,7 @@ def run_streamlit_ui() -> None:
         "📁 (6) SharePoint Index",
         "⚙️ (7) Function Config",
         "🏭 (8) Studio2Foundry",
-        "🌐 (9) Studio Subnet Delegation"
+        "⚡ (9) PowerPlatform Network"
     ])
 
     # ─────────────────── Tab (1) – AI Foundry Account ────────────────────────────
@@ -1894,7 +1894,7 @@ def run_streamlit_ui() -> None:
             session_state=st.session_state
         )
 
-    # ── Tab (9) – Studio Subnet Delegation ──────────────────────────────────────
+    # ── Tab (9) – PowerPlatform Network Injection ──────────────────────────────────────
     with tab_studio_subnet:
         from app.tabs.studio_subnet_delegation_tab import render_studio_subnet_delegation_tab
         render_studio_subnet_delegation_tab(
