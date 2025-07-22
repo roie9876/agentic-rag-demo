@@ -19,24 +19,23 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview
   scope: resourceGroup()
 }
 
-// Reference existing database
+// Reference existing database and containers (they will be created by cosmos-database-containers.bicep)
 resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' existing = {
   parent: cosmosAccount
   name: 'enterprise_memory'
 }
 
+// Reference the containers that were created by cosmos-database-containers.bicep
 resource containerUserMessageStore  'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' existing = {
   parent: database
   name: userThreadName
 }
 
-#disable-next-line BCP081
 resource containerSystemMessageStore 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' existing = {
   parent: database
   name: systemThreadName
 }
 
-#disable-next-line BCP081
 resource containerEntityStore 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' existing = {
   parent: database
   name: entityStoreName

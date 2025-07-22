@@ -1,0 +1,208 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.36.1.42791",
+      "templateHash": "2708222024296957160"
+    }
+  },
+  "parameters": {
+    "cosmosAccountName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the Cosmos DB account"
+      }
+    },
+    "projectWorkspaceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Project workspace ID for container naming"
+      }
+    }
+  },
+  "variables": {
+    "userThreadName": "[format('{0}-thread-message-store', parameters('projectWorkspaceId'))]",
+    "systemThreadName": "[format('{0}-system-thread-message-store', parameters('projectWorkspaceId'))]",
+    "entityStoreName": "[format('{0}-agent-entity-store', parameters('projectWorkspaceId'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+      "apiVersion": "2024-12-01-preview",
+      "name": "[format('{0}/{1}', parameters('cosmosAccountName'), 'enterprise_memory')]",
+      "properties": {
+        "resource": {
+          "id": "enterprise_memory"
+        },
+        "options": {
+          "throughput": 400
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2024-12-01-preview",
+      "name": "[format('{0}/{1}/{2}', parameters('cosmosAccountName'), 'enterprise_memory', variables('userThreadName'))]",
+      "properties": {
+        "resource": {
+          "id": "[variables('userThreadName')]",
+          "partitionKey": {
+            "paths": [
+              "/id"
+            ],
+            "kind": "Hash"
+          },
+          "indexingPolicy": {
+            "indexingMode": "consistent",
+            "automatic": true,
+            "includedPaths": [
+              {
+                "path": "/*"
+              }
+            ],
+            "excludedPaths": [
+              {
+                "path": "/\"_etag\"/?"
+              }
+            ]
+          }
+        },
+        "options": {
+          "throughput": 400
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('cosmosAccountName'), 'enterprise_memory')]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2024-12-01-preview",
+      "name": "[format('{0}/{1}/{2}', parameters('cosmosAccountName'), 'enterprise_memory', variables('systemThreadName'))]",
+      "properties": {
+        "resource": {
+          "id": "[variables('systemThreadName')]",
+          "partitionKey": {
+            "paths": [
+              "/id"
+            ],
+            "kind": "Hash"
+          },
+          "indexingPolicy": {
+            "indexingMode": "consistent",
+            "automatic": true,
+            "includedPaths": [
+              {
+                "path": "/*"
+              }
+            ],
+            "excludedPaths": [
+              {
+                "path": "/\"_etag\"/?"
+              }
+            ]
+          }
+        },
+        "options": {
+          "throughput": 400
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('cosmosAccountName'), 'enterprise_memory')]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2024-12-01-preview",
+      "name": "[format('{0}/{1}/{2}', parameters('cosmosAccountName'), 'enterprise_memory', variables('entityStoreName'))]",
+      "properties": {
+        "resource": {
+          "id": "[variables('entityStoreName')]",
+          "partitionKey": {
+            "paths": [
+              "/id"
+            ],
+            "kind": "Hash"
+          },
+          "indexingPolicy": {
+            "indexingMode": "consistent",
+            "automatic": true,
+            "includedPaths": [
+              {
+                "path": "/*"
+              }
+            ],
+            "excludedPaths": [
+              {
+                "path": "/\"_etag\"/?"
+              }
+            ]
+          }
+        },
+        "options": {
+          "throughput": 400
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('cosmosAccountName'), 'enterprise_memory')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "databaseName": {
+      "type": "string",
+      "value": "enterprise_memory"
+    },
+    "databaseId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('cosmosAccountName'), 'enterprise_memory')]"
+    },
+    "userThreadContainerName": {
+      "type": "string",
+      "value": "[variables('userThreadName')]"
+    },
+    "userThreadContainerId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('cosmosAccountName'), 'enterprise_memory', variables('userThreadName'))]"
+    },
+    "systemThreadContainerName": {
+      "type": "string",
+      "value": "[variables('systemThreadName')]"
+    },
+    "systemThreadContainerId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('cosmosAccountName'), 'enterprise_memory', variables('systemThreadName'))]"
+    },
+    "entityStoreContainerName": {
+      "type": "string",
+      "value": "[variables('entityStoreName')]"
+    },
+    "entityStoreContainerId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('cosmosAccountName'), 'enterprise_memory', variables('entityStoreName'))]"
+    },
+    "userThreadContainerReference": {
+      "type": "object",
+      "value": {
+        "id": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('cosmosAccountName'), 'enterprise_memory', variables('userThreadName'))]",
+        "name": "[variables('userThreadName')]"
+      }
+    },
+    "systemThreadContainerReference": {
+      "type": "object",
+      "value": {
+        "id": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('cosmosAccountName'), 'enterprise_memory', variables('systemThreadName'))]",
+        "name": "[variables('systemThreadName')]"
+      }
+    },
+    "entityStoreContainerReference": {
+      "type": "object",
+      "value": {
+        "id": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', parameters('cosmosAccountName'), 'enterprise_memory', variables('entityStoreName'))]",
+        "name": "[variables('entityStoreName')]"
+      }
+    }
+  }
+}

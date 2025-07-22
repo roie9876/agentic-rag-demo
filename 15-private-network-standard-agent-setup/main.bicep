@@ -126,7 +126,8 @@ param createDnsZonesIfNotExist bool = false
 var projectName = toLower('${firstProjectName}${uniqueSuffix}')
 var cosmosDBName = toLower('${aiServices}${uniqueSuffix}cosmosdb')
 var aiSearchName = toLower('${aiServices}${uniqueSuffix}search')
-var azureStorageName = toLower('${aiServices}${uniqueSuffix}storage')
+// Fix storage account naming to comply with Azure requirements (3-24 chars, no hyphens, lowercase)
+var azureStorageName = toLower('st${uniqueSuffix}${substring(uniqueString(resourceGroup().id), 0, 6)}')
 
 // Check if existing resources have been passed in or should be skipped
 var storagePassedIn = azureStorageAccountResourceId != '' && !skipStorageAccountDeployment
@@ -413,7 +414,22 @@ module storageContainersRoleAssignment 'modules-network-secured/blob-storage-con
   ]
 }
 
-// The Cosmos Built-In Data Contributor role must be assigned after the caphost is created
+// Create the enterprise_memory database and containers in Cosmos DB
+// This module MUST run after the Cosmos DB account is created but BEFORE role assignments
+module cosmosDatabaseContainers 'modules-network-secured/cosmos-database-containers.bicep' = if (!skipCosmosDBDeployment && !skipOpenAIDeployment) {
+  name: 'cosmos-db-containers-${uniqueSuffix}-deployment'
+  scope: resourceGroup(cosmosDBSubscriptionId, cosmosDBResourceGroupName)
+  params: {
+    cosmosAccountName: aiDependencies.outputs.cosmosDBName
+    projectWorkspaceId: formatProjectWorkspaceId.outputs.projectWorkspaceIdGuid
+  }
+  dependsOn: [
+    aiDependencies  // Ensure Cosmos DB account exists first
+    formatProjectWorkspaceId  // Ensure project workspace ID is formatted
+  ]
+}
+
+// The Cosmos Built-In Data Contributor role must be assigned after the database/containers are created
 module cosmosContainerRoleAssignments 'modules-network-secured/cosmos-container-role-assignments.bicep' = if (!skipOpenAIDeployment && !skipCosmosDBDeployment) {
   name: 'cosmos-ra-${uniqueSuffix}-deployment'
   scope: resourceGroup(cosmosDBSubscriptionId, cosmosDBResourceGroupName)
@@ -424,8 +440,8 @@ module cosmosContainerRoleAssignments 'modules-network-secured/cosmos-container-
 
   }
 dependsOn: [
-  // Cosmos container role assignment can proceed without explicit dependency on capability host
-  // since it's only deployed when cosmos is available  
+  // Cosmos container role assignment MUST wait for database and containers to be created
+  cosmosDatabaseContainers  // This ensures enterprise_memory database and containers exist
   storageContainersRoleAssignment
   ]
 }
