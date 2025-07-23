@@ -1251,9 +1251,6 @@
           },
           "skipCosmosDBDeployment": {
             "value": "[parameters('skipCosmosDBDeployment')]"
-          },
-          "projectWorkspaceId": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', format('format-project-workspace-id-{0}-deployment', variables('uniqueSuffix'))), '2022-09-01').outputs.projectWorkspaceIdGuid.value]"
           }
         },
         "template": {
@@ -1349,12 +1346,6 @@
             "sku": {
               "type": "object",
               "defaultValue": "[if(contains(parameters('noZRSRegions'), parameters('location')), createObject('name', 'Standard_GRS'), createObject('name', 'Standard_ZRS'))]"
-            },
-            "projectWorkspaceId": {
-              "type": "string",
-              "metadata": {
-                "description": "Project workspace ID (GUID) for container naming"
-              }
             }
           },
           "variables": {
@@ -1415,10 +1406,10 @@
               "condition": "[and(not(parameters('cosmosDBExists')), not(parameters('skipCosmosDBDeployment')))]",
               "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
               "apiVersion": "2024-11-15",
-              "name": "[format('{0}/{1}/{2}', parameters('cosmosDBName'), 'enterprise_memory', format('{0}-thread-message-store', parameters('projectWorkspaceId')))]",
+              "name": "[format('{0}/{1}/{2}', parameters('cosmosDBName'), 'enterprise_memory', 'placeholder-thread-message-store')]",
               "properties": {
                 "resource": {
-                  "id": "[format('{0}-thread-message-store', parameters('projectWorkspaceId'))]",
+                  "id": "placeholder-thread-message-store",
                   "partitionKey": {
                     "paths": [
                       "/id"
@@ -1452,10 +1443,10 @@
               "condition": "[and(not(parameters('cosmosDBExists')), not(parameters('skipCosmosDBDeployment')))]",
               "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
               "apiVersion": "2024-11-15",
-              "name": "[format('{0}/{1}/{2}', parameters('cosmosDBName'), 'enterprise_memory', format('{0}-system-thread-message-store', parameters('projectWorkspaceId')))]",
+              "name": "[format('{0}/{1}/{2}', parameters('cosmosDBName'), 'enterprise_memory', 'placeholder-system-thread-message-store')]",
               "properties": {
                 "resource": {
-                  "id": "[format('{0}-system-thread-message-store', parameters('projectWorkspaceId'))]",
+                  "id": "placeholder-system-thread-message-store",
                   "partitionKey": {
                     "paths": [
                       "/id"
@@ -1489,10 +1480,10 @@
               "condition": "[and(not(parameters('cosmosDBExists')), not(parameters('skipCosmosDBDeployment')))]",
               "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
               "apiVersion": "2024-11-15",
-              "name": "[format('{0}/{1}/{2}', parameters('cosmosDBName'), 'enterprise_memory', format('{0}-agent-entity-store', parameters('projectWorkspaceId')))]",
+              "name": "[format('{0}/{1}/{2}', parameters('cosmosDBName'), 'enterprise_memory', 'placeholder-agent-entity-store')]",
               "properties": {
                 "resource": {
-                  "id": "[format('{0}-agent-entity-store', parameters('projectWorkspaceId'))]",
+                  "id": "placeholder-agent-entity-store",
                   "partitionKey": {
                     "paths": [
                       "/id"
@@ -2512,7 +2503,9 @@
           "azureStorageResourceGroupName": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix'))), '2022-09-01').outputs.azureStorageResourceGroupName.value]"
           },
-          "accountName": "[if(parameters('skipOpenAIDeployment'), createObject('value', ''), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix'))), '2022-09-01').outputs.accountName.value))]"
+          "accountName": {
+            "value": "[variables('accountName')]"
+          }
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -2678,9 +2671,7 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('{0}-private-endpoint', variables('uniqueSuffix')))]"
+        "[resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix')))]"
       ]
     },
     {
@@ -2789,8 +2780,7 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('{0}-private-endpoint', variables('uniqueSuffix')))]"
+        "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix')))]"
       ]
     },
     {
@@ -2854,8 +2844,7 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('{0}-private-endpoint', variables('uniqueSuffix')))]"
+        "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix')))]"
       ]
     },
     {
@@ -2930,8 +2919,7 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.Resources/deployments', format('dependencies-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('{0}-private-endpoint', variables('uniqueSuffix')))]"
+        "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix')))]"
       ]
     },
     {
@@ -2946,10 +2934,10 @@
         "mode": "Incremental",
         "parameters": {
           "accountName": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix'))), '2022-09-01').outputs.accountName.value]"
+            "value": "[variables('accountName')]"
           },
           "projectName": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix'))), '2022-09-01').outputs.projectName.value]"
+            "value": "[variables('projectName')]"
           },
           "cosmosDBConnection": "[if(parameters('skipCosmosDBDeployment'), createObject('value', ''), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix'))), '2022-09-01').outputs.cosmosDBConnection.value))]",
           "azureStorageConnection": "[if(parameters('skipStorageAccountDeployment'), createObject('value', ''), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix'))), '2022-09-01').outputs.azureStorageConnection.value))]",
@@ -3017,9 +3005,7 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('accountName'), variables('uniqueSuffix')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('{0}-private-endpoint', variables('uniqueSuffix')))]"
+        "[resourceId('Microsoft.Resources/deployments', format('ai-{0}-{1}-deployment', variables('projectName'), variables('uniqueSuffix')))]"
       ]
     },
     {
