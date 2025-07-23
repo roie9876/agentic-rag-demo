@@ -114,7 +114,9 @@ This application serves as a **comprehensive orchestration platform** that bridg
 - **Unified Management Interface**: Provides a single Streamlit-based interface to manage the entire RAG pipeline from document ingestion to query processing
 
 ### ☁️ **Resource Management**
-- **Does NOT Create Cloud Resources**: This application doesn't provision Azure resources - you must create them separately using Azure Portal, CLI, or ARM templates
+- **Does NOT Create all Cloud Resources**: This application provision the following Azure resources - AI Search, Blob, CosmosDB, AI Foundry.
+Other resource need to deploy by you manualy.
+you must create them separately using Azure Portal, CLI, or ARM templates
 - **Configuration & Setup Assistant**: Helps you configure existing Azure resources and verify their connectivity and settings
 - **Environment Validation**: Provides comprehensive health checks to ensure all components are properly configured
 
