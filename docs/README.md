@@ -22,7 +22,8 @@ This directory contains comprehensive documentation for the Agentic RAG Demo pro
 
 ## 🧠 Advanced Features
 
-### Document Processing
+### Document Processing & Chunking
+- **[CHUNKING_BEST_PRACTICES_GUIDE.md](CHUNKING_BEST_PRACTICES_GUIDE.md)** - ⭐ **COMPREHENSIVE** - Complete chunking strategy guide, best practices, and configuration
 - **[status/page_extraction_smart_chunking_implementation_complete.md](status/page_extraction_smart_chunking_implementation_complete.md)** - Smart page-aware chunking implementation
 - **[status/hebrew_rag_retrieval_accuracy_fix.md](status/hebrew_rag_retrieval_accuracy_fix.md)** - Critical Hebrew RAG accuracy improvements
 - **[technical/sharepoint_indexing_flow_complete.md](technical/sharepoint_indexing_flow_complete.md)** - Complete SharePoint indexing workflow
